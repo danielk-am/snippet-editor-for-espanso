@@ -89,11 +89,19 @@ test('text is shown once, whether it was streamed, came whole, or both', () => {
 	assert.equal(textOf(run([init(), assistant('m1', [{ type: 'text', text: 'OK' }, { type: 'text', text: 'OK' }]), success('OK')])), 'OK\n\nOK');
 });
 
+test('text written after a tool was used starts a new paragraph, however it arrives', () => {
+	const use = { type: 'tool_use', id: 't1', name: 'mcp__snippets__snippets_search', input: {} };
+	const used = [assistant('m1', [use]), { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] }, parent_tool_use_id: null }];
+	assert.equal(textOf(run([init(), start('m1'), delta('Before.'), ...used, start('m2'), delta('After.'), success('After.')])), 'Before.\n\nAfter.');
+	assert.equal(textOf(run([init(), ...used, start('m2'), delta('After.'), success('After.')])), 'After.');
+});
+
 test('thinking, empty text and a sub-agent\'s messages are not shown', () => {
 	const events = run([
 		init(),
 		start('m1'),
 		{ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hidden' } }, parent_tool_use_id: null },
+		{ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', text: 'hidden too' } }, parent_tool_use_id: null },
 		delta(''),
 		{ ...delta('from a sub-agent'), parent_tool_use_id: 'toolu_9' },
 		assistant('m9', [{ type: 'text', text: 'from a sub-agent' }], { parent_tool_use_id: 'toolu_9' }),
@@ -145,6 +153,8 @@ test('if Claude Code starts with any tool the app did not give it, or without th
 	assert.deepEqual(run([init({ tools: [], mcp_servers: [{ name: 'snippets', status: 'failed' }] })]), [{ type: 'error', code: 'NO_TOOLS', message: 'Claude Code could not start the snippet tools.' }]);
 	assert.deepEqual(run([init({ tools: [], mcp_servers: [] })]), [{ type: 'error', code: 'NO_TOOLS', message: 'Claude Code could not start the snippet tools.' }]);
 	assert.deepEqual(run([init({ tools: 'odd', mcp_servers: null })])[0].code, 'NO_TOOLS');
+	// The server says it is there, and no tool came with it.
+	assert.deepEqual(run([init({ tools: [] })])[0].code, 'NO_TOOLS');
 	// After such an error nothing else is passed on.
 	assert.deepEqual(run([init({ tools: ['Bash'] }), delta('text'), success('text')]).length, 1);
 });
