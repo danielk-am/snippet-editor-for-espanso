@@ -1,6 +1,6 @@
 # Chat assistant: design
 
-Status: waiting for Daniel's approval. Written 2026-10-07. No code exists yet.
+Status: approved by Daniel on 2026-10-07, with the panel built in this app's own Preact and about ten real Codex calls allowed for checking.
 
 This is the fourth piece. It builds on the local API, team snippets and the MCP server, all three merged.
 
@@ -16,12 +16,12 @@ A chat panel on the right of the window. You ask in plain words, and the assista
 | How may it change snippets? | It proposes, you apply. Each change is a card. Nothing is written until Apply, and Apply also needs the "Let AI tools change snippets" switch on. |
 | How should it look and behave? | Like the chat in your other apps. I read the shared chat component's contract and follow it (see "The panel"). |
 
-## Decisions I am asking for
+## Decided with this design
 
-| Question | My recommendation |
+| Question | Daniel's answer, 2026-10-07 |
 | --- | --- |
-| Build the panel in this app's own Preact, following the shared component's look and behaviour, or load the shared component's bundle? | Own panel. Reasons under "Two ways to build the panel". |
-| May I make a few small real calls with Codex, on your ChatGPT sign-in, to check the work end to end? | Yes. About ten short calls. Without them, two things about Codex stay unproven (see "What is not proven yet"). |
+| Build the panel in this app's own Preact, following the shared component's look and behaviour, or load the shared component's bundle? | Own panel, same look. Reasons under "Two ways to build the panel". |
+| May a few small real calls be made with Codex, on Daniel's ChatGPT sign-in, to check the work end to end? | Yes, about ten, against a throwaway snippet folder. |
 
 ## What I checked on this Mac
 
