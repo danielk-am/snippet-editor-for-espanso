@@ -74,7 +74,16 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		watch();
 	}
 
-	const teamFor = (address) => createTeam({ dataDir: userDataDir, address, git, installed: teamPackages });
+	const teamFor = (address) => createTeam({ dataDir: userDataDir, address, git, installed: () => teamPackages });
+
+	// Connecting and disconnecting run one at a time. A second Connect while
+	// the first is still copying waits, then finds the work done.
+	let connecting = Promise.resolve();
+	const inTurn = (work) => {
+		const result = connecting.then(work);
+		connecting = result.catch(() => {});
+		return result;
+	};
 
 	await configure();
 	// Not waited for: the window opens whether or not the repository answers.
@@ -112,22 +121,27 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		},
 		// The copy is made first. If that fails, the settings and any earlier
 		// connection are left as they were.
+		// async, so that a refused address rejects like every other failure.
 		async connectTeam(input) {
 			const address = parseRepositoryAddress(input, { allowLocal: allowLocalRepositories });
-			const next = teamFor(address);
-			await next.connect();
-			if (team && team.address.url !== address.url) await team.disconnect();
-			settings = await writeSettings(settingsFile, { teamRepository: address.url });
-			team = next;
-			teamProblem = '';
-			return team.status();
+			return inTurn(async () => {
+				const next = team?.address.url === address.url ? team : teamFor(address);
+				await next.connect();
+				if (team && team !== next) await team.disconnect();
+				settings = await writeSettings(settingsFile, { teamRepository: address.url });
+				team = next;
+				teamProblem = '';
+				return team.status();
+			});
 		},
-		async disconnectTeam() {
-			await team?.disconnect();
-			settings = await writeSettings(settingsFile, { teamRepository: null });
-			team = null;
-			teamProblem = '';
-			return this.teamStatus();
+		disconnectTeam() {
+			return inTurn(async () => {
+				await team?.disconnect();
+				settings = await writeSettings(settingsFile, { teamRepository: null });
+				team = null;
+				teamProblem = '';
+				return this.teamStatus();
+			});
 		},
 		async setMatchDir(dir) {
 			await writeSettings(settingsFile, { matchDirOverride: dir });
@@ -136,6 +150,8 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		dispose() {
 			clearTimeout(timer);
 			watcher?.close();
+			// A clone or a push still running would otherwise outlive the app.
+			git.stopAll?.();
 		},
 	};
 }

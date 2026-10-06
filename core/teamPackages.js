@@ -37,7 +37,8 @@ export function createTeamPackages({ matchDir, now = () => new Date() }) {
 		if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) throw fail('INVALID', 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
 	};
 
-	// null: no folder. false: a folder (or a link) that is not the app's.
+	// null: no folder, or an empty one, which is nobody's. false: a folder (or
+	// a link) that is not the app's.
 	async function markerOf(name) {
 		let stat;
 		try {
@@ -50,7 +51,9 @@ export function createTeamPackages({ matchDir, now = () => new Date() }) {
 		try {
 			text = await fs.readFile(path.join(folder(name), MARKER), 'utf8');
 		} catch {
-			return false;
+			// An install that failed before its first write leaves an empty
+			// folder behind. That must not block the next one.
+			return (await fs.readdir(folder(name)).catch(() => [''])).length === 0 ? null : false;
 		}
 		let data = null;
 		try {

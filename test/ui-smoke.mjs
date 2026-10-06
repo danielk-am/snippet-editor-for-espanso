@@ -367,6 +367,10 @@ async function run() {
 		await js(`window.__ui.click('Connect')`);
 		await waitFor(`[...document.querySelectorAll('.copy-row code')].some((el) => el.textContent === ${JSON.stringify(remote.url)})`, 'Settings to show the connected repository');
 		await shot('09e-settings-team');
+		// The test repository is a folder, which has no web pages. Give it the
+		// web address a GitHub repository would have, so the link to the pull
+		// request page can be followed through to the browser stand-in.
+		backend.service.team().address.webUrl = 'https://github.com/acme/team-snippets';
 
 		// Browse and install.
 		await js(`window.__ui.click('Team packages', '.nav-item__label')`);
@@ -425,11 +429,17 @@ async function run() {
 		check(remote.show(proposals[0], 'packages/goodbyes/dates.yml') + '\n' === onDisk('dates.yml'), 'the proposed file is not the file on disk');
 		check(await js(`document.querySelector('.dialog code')?.textContent === ${JSON.stringify(proposals[0])}`), 'the dialog does not name the branch');
 		await shot('18b-proposal-sent');
+		await js(`window.__ui.click('Open pull request page')`);
+		await waitFor(`true`, 'a moment');
+		await sleep(200);
+		check(opened.length === 1 && opened[0] === `https://github.com/acme/team-snippets/compare/main...${proposals[0]}?expand=1`, `the pull request page opened was ${JSON.stringify(opened)}`);
 		await js(`window.__ui.click('Close')`);
 
-		// Only a link on the connected repository's host can be opened.
-		const refused = await js(`window.snippetEditor.invoke('team:openLink', 'https://evil.example/acme/team/compare/main...x').then(JSON.stringify)`);
-		check(JSON.parse(refused).ok === false && opened.length === 0, `a link elsewhere was opened: ${refused} ${opened}`);
+		// Only a link inside the connected repository can be opened.
+		for (const link of ['https://evil.example/acme/team-snippets/compare/main...x', 'https://github.com/evil/other/compare/main...x', 'file:///etc/hosts']) {
+			const refused = await js(`window.snippetEditor.invoke('team:openLink', ${JSON.stringify(link)}).then(JSON.stringify)`);
+			check(JSON.parse(refused).ok === false && opened.length === 1, `a link elsewhere was opened: ${link} ${refused}`);
+		}
 	});
 
 	await step('external change is picked up', async () => {

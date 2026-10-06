@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../core/apiRouter.js';
 import { createGit } from '../core/git.js';
 import { createService } from '../core/service.js';
+import { createTeam } from '../core/team.js';
+import { parseRepositoryAddress } from '../core/teamAddress.js';
+import { createTeamPackages } from '../core/teamPackages.js';
 import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/match', import.meta.url));
@@ -220,7 +223,6 @@ test('a start with the repository out of reach still opens, and says what went w
 	await context.service.connectTeam(context.remote.url);
 	await context.call('PUT', '/team/packages/goodbyes/installed', { body: {} });
 	cpSync(context.remote.url, `${context.remote.url}.moved`, { recursive: true });
-	const { rmSync } = await import('node:fs');
 	rmSync(context.remote.url, { recursive: true, force: true });
 
 	const again = await context.start(join(context.root, 'data'));
@@ -261,4 +263,124 @@ test('a settings file with an address the app would refuse is not acted on', asy
 	await context.service.teamFetched();
 	const { body } = await context.call('GET', '/team');
 	assert.deepEqual([body.connected, body.problem], [false, 'The saved team repository address is not one the app accepts. Connect it again in Settings.']);
+});
+
+// --- added after review -----------------------------------------------------------
+
+test('the state the window reads says whether a repository is connected', async (t) => {
+	const { service, call, remote, root } = await setup(t);
+	assert.equal((await call('GET', '/state')).body.teamConnected, false);
+	await service.connectTeam(remote.url);
+	assert.equal((await call('GET', '/state')).body.teamConnected, true);
+	const [copy] = readdirSync(join(root, 'data', 'team'));
+	assert.ok(existsSync(join(root, 'data', 'team', copy, 'repo.git')));
+	await service.disconnectTeam();
+	assert.equal((await call('GET', '/state')).body.teamConnected, false);
+	assert.deepEqual(readdirSync(join(root, 'data', 'team')), []);
+});
+
+test('when git stops working, the status still answers, and the repository can still be disconnected', async (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
+	const remote = seeded();
+	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	let broken = false;
+	const git = (args, options) => (broken ? Promise.reject(Object.assign(new Error('Git is not installed on this computer.'), { code: 'GIT_FAILED', kind: 'missing' })) : real(args, options));
+	git.stopAll = () => {};
+	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git, allowLocalRepositories: true });
+	t.after(() => service.dispose());
+	const handle = createRouter({ service, log: () => {} });
+	await service.connectTeam(remote.url);
+
+	broken = true;
+	const reply = await handle({ method: 'GET', path: '/api/v1/team' });
+	assert.deepEqual([reply.status, reply.body.connected, reply.body.repository, reply.body.problem, reply.body.packages], [200, true, remote.url, 'Git is not installed on this computer.', []]);
+	assert.deepEqual(code(await handle({ method: 'POST', path: '/api/v1/team/refresh' })), [502, 'GIT_FAILED']);
+	const after = await service.disconnectTeam();
+	assert.deepEqual([after.connected, service.settings().teamRepository], [false, null]);
+});
+
+test('a repository that connects but cannot be listed is still connected, says why, and can be left', async (t) => {
+	const remote = seeded();
+	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	const git = (args, options) => (args.includes('ls-tree') ? Promise.reject(Object.assign(new Error('Git sent more than the app can read.'), { code: 'GIT_FAILED', kind: 'too-large' })) : real(args, options));
+	git.stopAll = () => {};
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
+	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git, allowLocalRepositories: true });
+	t.after(() => service.dispose());
+	const status = await service.connectTeam(remote.url);
+	assert.deepEqual([status.connected, status.problem, status.packages], [true, 'Git sent more than the app can read.', []]);
+	assert.equal((await service.disconnectTeam()).connected, false);
+});
+
+test('"check for updates" copies the repository again if the copy has gone', async (t) => {
+	const { service, call, remote, root } = await setup(t);
+	await service.connectTeam(remote.url);
+	rmSync(join(root, 'data', 'team'), { recursive: true, force: true });
+	const refreshed = await call('POST', '/team/refresh');
+	assert.deepEqual([refreshed.status, refreshed.body.commit, refreshed.body.packages.length], [200, remote.head(), 2]);
+});
+
+test('an install that was cut short shows as needing an update, even though nothing changed in the repository', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	await service.connectTeam(remote.url);
+	await call('PUT', '/team/packages/goodbyes/installed', { body: {} });
+	const markerFile = join(matchDir, 'team', 'goodbyes', '.snippet-editor.json');
+	const marker = JSON.parse(readFileSync(markerFile, 'utf8'));
+	writeFileSync(markerFile, JSON.stringify({ ...marker, state: 'installing' }));
+	assert.deepEqual(named((await call('GET', '/team')).body.packages).goodbyes.updateAvailable, true);
+	const repaired = await call('PUT', '/team/packages/goodbyes/installed', { body: {} });
+	assert.equal(named(repaired.body.packages).goodbyes.updateAvailable, false);
+});
+
+test('a package the app did not read cannot be installed, because it was not checked for commands', async (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
+	const remote = seeded();
+	const team = createTeam({
+		dataDir: join(root, 'data'),
+		address: parseRepositoryAddress(remote.url, { allowLocal: true }),
+		git: createGit({ allowLocal: true, env: gitEnv(remote.root) }),
+		installed: () => createTeamPackages({ matchDir: join(root, 'match') }),
+		// Room to read the first package, manifest and all, but not the second.
+		limits: { totalBytes: 260 },
+	});
+	await team.connect();
+	const status = await team.status();
+	assert.deepEqual(status.packages.map((pkg) => [pkg.name, pkg.matchCount]), [['goodbyes', 2], ['support', null]]);
+	await fails(team.install('support'), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.match(error.message, /was not read/);
+	});
+	assert.equal(existsSync(join(root, 'match', 'team', 'support')), false);
+});
+
+test('connecting twice at once copies the repository once', async (t) => {
+	const { service, remote, root } = await setup(t);
+	const [first, second] = await Promise.all([service.connectTeam(remote.url), service.connectTeam(remote.url)]);
+	assert.deepEqual([first.connected, second.connected], [true, true]);
+	const [copy, ...others] = readdirSync(join(root, 'data', 'team'));
+	assert.deepEqual([others, readdirSync(join(root, 'data', 'team', copy)).sort()], [[], ['fetched-at', 'repo.git']]);
+});
+
+test('after the match folder changes, team packages are installed in the new folder', async (t) => {
+	const { service, call, remote, root } = await setup(t);
+	await service.connectTeam(remote.url);
+	const other = join(root, 'other-match');
+	mkdirSync(other);
+	await service.setMatchDir(other);
+	const reply = await call('PUT', '/team/packages/goodbyes/installed', { body: {} });
+	assert.equal(named(reply.body.packages).goodbyes.installed, true);
+	assert.equal(existsSync(join(other, 'team', 'goodbyes', 'package.yml')), true);
+	assert.equal(existsSync(join(root, 'match', 'team')), false);
+	assert.deepEqual((await call('GET', '/state')).body.team.map((pkg) => pkg.name), ['goodbyes']);
+});
+
+test('closing the app stops any git call still under way', async (t) => {
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
+	let stopped = 0;
+	const git = createGit({ allowLocal: true });
+	const watched = (args, options) => git(args, options);
+	watched.stopAll = () => (stopped += 1);
+	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git: watched });
+	service.dispose();
+	assert.equal(stopped, 1);
 });

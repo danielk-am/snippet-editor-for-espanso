@@ -23,6 +23,7 @@ export class GitError extends Error {
 const MESSAGES = {
 	missing: 'Git is not installed on this computer.',
 	timeout: 'Git did not finish in time.',
+	stopped: 'Git was stopped because the app is closing.',
 	'too-large': 'Git sent more than the app can read.',
 	auth: 'Git could not sign in to that repository. Check that "git ls-remote" works for its address in a terminal.',
 	unreachable: 'Git could not reach that repository. Check the address, and that "git ls-remote" works for it in a terminal.',
@@ -72,7 +73,11 @@ export function createGit({ program = 'git', allowLocal = false, env = process.e
 	// Its own process group, so git's helpers can be stopped along with it.
 	const grouped = process.platform !== 'win32';
 
-	return function git(args, { cwd, timeout = 15_000, input, binary = false, env: extra } = {}) {
+	// The calls under way, so they can all be stopped when the app closes.
+	// Git runs in a group of its own and would otherwise outlive the app.
+	const live = new Set();
+
+	function git(args, { cwd, timeout = 15_000, input, binary = false, env: extra } = {}) {
 		return new Promise((resolve, reject) => {
 			let child;
 			try {
@@ -97,8 +102,14 @@ export function createGit({ program = 'git', allowLocal = false, env = process.e
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
+				live.delete(abandon);
 				settle(value);
 			};
+			const abandon = () => {
+				stop();
+				finish(reject, new GitError('stopped', MESSAGES.stopped));
+			};
+			live.add(abandon);
 			const timer = setTimeout(() => {
 				stop();
 				finish(reject, new GitError('timeout', MESSAGES.timeout));
@@ -124,5 +135,10 @@ export function createGit({ program = 'git', allowLocal = false, env = process.e
 			child.stdin.on('error', () => {});
 			child.stdin.end(input ?? '');
 		});
+	}
+
+	git.stopAll = () => {
+		for (const abandon of [...live]) abandon();
 	};
+	return git;
 }

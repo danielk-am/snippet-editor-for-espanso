@@ -120,10 +120,10 @@ packages/
 
 - **Install.** The Team packages page lists every package. Installing one copies it to `match/team/<name>/`, where Espanso loads it. Installed team files are read-only in the app. You can copy a snippet into one of your own files to change it.
 - **Update.** The app checks the repository when it starts and when you press "Check for updates", and marks the packages that changed. Nothing is updated until you press Update.
-- **Runs commands.** An Espanso snippet can run a shell command or a script when you use it. A package that holds one is marked "Runs commands", and installing or updating it asks first.
+- **Runs commands.** An Espanso snippet can run a shell command or a script when you use it. A package that holds one is marked "Runs commands", and installing or updating it asks first. A package with a file the app cannot read is marked the same way, because it could not be checked.
 - **Propose.** "Propose to team", on one of your own files, pushes that file to a new branch named `snippet-editor/<package>-<date>-<time>`. The app then offers GitHub's page for opening a pull request from that branch. It never pushes to the main branch.
 
-What the app does with git: it keeps a bare copy of the repository in its data folder and reads packages straight from the commit, so a symbolic link or a submodule in the repository is skipped, not followed. Git is run without a shell, with a time limit, and can never stop to ask for a password. If git would have asked, the app says so and you check your access in a terminal.
+What the app does with git: it keeps a bare copy of the repository in its data folder and reads packages straight from the commit, so a symbolic link or a submodule in the repository is skipped, not followed. A proposal is built inside git too. No file from the repository is ever checked out on your computer. Git is run without a shell, with a time limit, and can never stop to ask for a password. If git would have asked, the app says so and you check your access in a terminal.
 
 Over the API, team snippets are under `/api/v1/team`:
 

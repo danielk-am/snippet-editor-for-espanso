@@ -62,7 +62,7 @@ No new dependency. The app needs `git` installed. Without it, the rest of the ap
 - **Address.** Accepted forms: `https://host/owner/repo`, with or without `.git`; `git@host:owner/repo.git`; `ssh://git@host/owner/repo.git`; and the short form `owner/repo`, which means `https://github.com/owner/repo.git`. Anything else is refused. So is an address that carries a user name and password, because saving it would put a secret in the settings file.
 - **Hosts.** GitHub and GitHub Enterprise. The pull request link is built in GitHub's format.
 - **One repository at a time.** Connecting another replaces the first. Disconnecting removes the app's copy of the repository. Either way, installed packages stay until you remove them.
-- **The copy.** A bare clone in the app's data folder, under `team/<12 characters from the address>/repo.git`. Nothing is checked out. Packages are read with `git ls-tree` and `git cat-file`, straight from the commit, so a symbolic link or a submodule in the repository is never followed. It is skipped and reported.
+- **The copy.** A bare clone in the app's data folder, under `team/<12 characters from the address>/repo.git`. Nothing is checked out, when reading and when proposing. Packages are read with `git ls-tree` and `git cat-file`, straight from the commit, so a symbolic link or a submodule in the repository is never followed. It is skipped and reported.
 - **Staying current.** The app fetches when it starts, in the background, and when you press "Check for updates". It never changes an installed package on its own.
 - **Limits.** 200 packages, 50 files in a package, 2 MB a file (the size the app opens). Beyond a limit, the package says what was left out.
 
@@ -187,6 +187,28 @@ Connecting and disconnecting a repository are settings. Like the match folder, t
 | The check for an unchanged file is made after the file is staged in git, not by comparing bytes first. | One check covers both an identical file and one that differs only in line endings git normalises. |
 
 Also fixed, though it was not part of this piece: dialogs sat left of centre when their text ran long. The proposal dialog names the repository, which made it plain.
+
+### After an independent review
+
+The review found two security defects and two faults in how the app follows a repository. All are fixed, each with a test that failed first.
+
+| Change | Why |
+| --- | --- |
+| A proposal is built inside git, with no files checked out. The steps above that mention a temporary working folder no longer apply. | On a disk that ignores capital letters, a link in the repository named `Base.yml` received what was written to `base.yml`. With nothing checked out, nothing in a repository is ever written to, or run on, this computer. |
+| A name that differs from an existing one only in capital letters is refused, for a package and for a file. | The two would be one file on many disks. |
+| The manifest is checked for commands too, and a file the app cannot read counts as one that may run commands. | A shell variable in a manifest that a match file imports, or in YAML this parser refuses but Espanso reads, installed with no question asked. |
+| A package the app did not read cannot be installed. | It was not checked for commands. |
+| The app asks the repository which branch is its main one at every fetch. | When a team renamed its main branch, the app reported an empty repository for good. |
+| The status always answers, with `problem` set, even when git or the copy fails. "Check for updates" copies the repository again if the copy has gone. | A repository that could be connected but not listed left the app connected with no card to disconnect from. |
+| A manifest over 64 KB is not read. Manifests count against what one listing reads. | Nine large manifests made a whole listing fail. |
+| Of two files in a package that differ only in capitals, one is offered and the other reported. | Only one could be installed on many disks. |
+| Reading the status and the packages does not wait behind a fetch. | On a stalled network the Team page waited up to a minute. |
+| Connecting and disconnecting run one at a time. Git calls still under way are stopped when the app closes. An empty folder in `match/team/` does not block an install. The port of an HTTPS address stays in its web address. The remote is always named `origin`. | Each was a small fault the review reproduced. |
+
+Left as they are:
+
+- A proposal's commit is not signed, even if your git signs commits. The commit is made with git's low-level command, which does not sign by default.
+- If asking for the team status fails for a reason other than git, the Settings card is not drawn.
 
 ## Not in this piece
 

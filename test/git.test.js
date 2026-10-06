@@ -127,3 +127,24 @@ test('the real git refuses a transport that could run a command', async () => {
 	await fails(createGit()(['ls-remote', '--', `ext::sh -c "touch ${marker}"`]), 'failed');
 	assert.equal(existsSync(marker), false);
 });
+
+test('every git call under way can be stopped at once, as when the app quits', posix, async () => {
+	const pidFile = join(dir(), 'helper.pid');
+	const git = createGit({ program: standIn('sleep 20 &\necho $! > "$PID_FILE"\nwait'), env: { PATH: process.env.PATH, PID_FILE: pidFile } });
+	const running = [git(['fetch'], { timeout: 30_000 }), git(['push'], { timeout: 30_000 })];
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	const started = Date.now();
+	git.stopAll();
+	for (const call of running) assert.equal((await fails(call, 'stopped')).message, 'Git was stopped because the app is closing.');
+	assert.ok(Date.now() - started < 3000);
+	const helper = Number(readFileSync(pidFile, 'utf8'));
+	for (let waited = 0; waited < 5000; waited += 50) {
+		try {
+			process.kill(helper, 0);
+		} catch {
+			return;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	assert.fail(`process ${helper} is still running`);
+});

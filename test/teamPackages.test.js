@@ -170,3 +170,15 @@ test('a file with the longest name a disk allows can be installed', async () => 
 	await packages.install({ name: 'goodbyes', files: [file(long, 'matches: []\n')], ...SOURCE });
 	assert.deepEqual(readdirSync(dir('goodbyes')).sort(), [MARKER, long]);
 });
+
+test('an empty folder left by an install that never started is not in the way', async () => {
+	const { packages, dir } = setup();
+	mkdirSync(dir('goodbyes'), { recursive: true });
+	assert.deepEqual([...(await packages.installed())], []);
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	assert.equal((await packages.installed()).get('goodbyes').state, 'installed');
+	// A folder holding anything at all, without the marker, is still someone else's.
+	mkdirSync(dir('support'), { recursive: true });
+	writeFileSync(join(dir('support'), 'notes.txt'), 'mine');
+	await rejectsWith(packages.install({ name: 'support', files: GOODBYES, ...SOURCE }), 'EXISTS');
+});

@@ -37,14 +37,16 @@ export function parseRepositoryAddress(input, { allowLocal = false } = {}) {
 		throw invalid('Remove the user name or password from the address. The app uses the sign-in git already has, and saves none of its own.');
 	}
 
-	const found = (host, owner, name, url) => {
+	// `webPort` is the port of an HTTPS address, which its web pages share.
+	// An SSH port says nothing about where the web pages are.
+	const found = (host, owner, name, url, webPort = '') => {
 		const repo = withoutGit(name);
-		return { url: url(repo), host, owner, repo, webUrl: `https://${host}/${owner}/${repo}` };
+		return { url: url(repo), host, owner, repo, webUrl: `https://${host}${webPort}/${owner}/${repo}` };
 	};
 
 	let match;
 	if ((match = SHORT.exec(text))) return found('github.com', match[1], match[2], (repo) => `https://github.com/${match[1]}/${repo}.git`);
-	if ((match = HTTPS.exec(text))) return found(match[1], match[3], match[4], (repo) => `https://${match[1]}${match[2] ?? ''}/${match[3]}/${repo}.git`);
+	if ((match = HTTPS.exec(text))) return found(match[1], match[3], match[4], (repo) => `https://${match[1]}${match[2] ?? ''}/${match[3]}/${repo}.git`, match[2] ?? '');
 	if ((match = SCP.exec(text))) return found(match[1], match[2], match[3], (repo) => `git@${match[1]}:${match[2]}/${repo}.git`);
 	if ((match = SSH.exec(text))) return found(match[1], match[3], match[4], (repo) => `ssh://git@${match[1]}${match[2] ?? ''}/${match[3]}/${repo}.git`);
 

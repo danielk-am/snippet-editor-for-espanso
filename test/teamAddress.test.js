@@ -138,3 +138,13 @@ test('only a link inside the connected repository on its own host may be opened'
 	}
 	assert.equal(isTeamLink('https://github.com/acme/team', null), false);
 });
+
+test('an HTTPS address with a port keeps that port in its web address', () => {
+	assert.deepEqual(parseRepositoryAddress('https://ghe.example.com:8443/acme/team'), {
+		url: 'https://ghe.example.com:8443/acme/team.git',
+		host: 'ghe.example.com',
+		owner: 'acme',
+		repo: 'team',
+		webUrl: 'https://ghe.example.com:8443/acme/team',
+	});
+});
