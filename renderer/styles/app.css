@@ -1333,6 +1333,109 @@ pre,
   width: 8.5rem;
 }
 
+.setting__team {
+  display: flex;
+  gap: 8px;
+}
+
+.setting__team .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* --- team packages -------------------------------------------------------- */
+
+.team-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+}
+
+.team-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-card);
+  box-shadow: var(--ui-shadow-sm);
+}
+
+.team-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-card__head h2 {
+  flex: 1;
+  min-width: 8ch;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.team-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.team-card__desc,
+.team-card__meta {
+  margin: 0;
+}
+
+.team-card__meta,
+.team-card__notes {
+  color: var(--ui-muted-foreground);
+  font-size: 12.5px;
+}
+
+.team-card__notes {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.team-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.team-leftovers {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.team-leftovers li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+}
+
 /* --- overlays ------------------------------------------------------------- */
 
 .overlay {
@@ -1349,7 +1452,10 @@ pre,
 }
 
 .dialog {
-  width: min(460px, 100%);
+  /* Sized from the window, not from its wrapper: the wrapper shrinks to fit
+     its contents, so a width in per cent of it would follow the longest
+     line of text and push the box off centre. */
+  width: min(460px, calc(100vw - 32px));
   border: 1px solid var(--ui-border);
   border-radius: 12px;
   background: var(--ui-popover);
@@ -1370,6 +1476,7 @@ pre,
 .dialog__head p {
   margin-top: 4px;
   color: var(--ui-muted-foreground);
+  overflow-wrap: anywhere;
 }
 
 .dialog__body {
@@ -1386,7 +1493,7 @@ pre,
 }
 
 .palette {
-  width: min(600px, 100%);
+  width: min(600px, calc(100vw - 32px));
   border: 1px solid var(--ui-border);
   border-radius: 12px;
   background: var(--ui-popover);

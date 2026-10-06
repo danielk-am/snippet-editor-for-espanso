@@ -1,6 +1,6 @@
 import { html, render, useCallback, useEffect, useRef, useState } from './vendor/preact-htm.js';
 import { matchTriggers } from '../shared/snippetModel.js';
-import { api, allFiles, findFile, platform } from './lib/api.js';
+import { api, allFiles, findFile, platform, sourceLabel } from './lib/api.js';
 import { Icon } from './lib/icons.js';
 import { toText } from '../shared/text.js';
 import { Button, ConfirmDialog, Empty, ErrorBoundary, IconButton, ToastProvider } from './lib/ui.js';
@@ -12,6 +12,7 @@ import { SearchResults } from './components/SearchResults.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { Sidebar } from './components/Sidebar.js';
 import { SnippetEditor } from './components/SnippetEditor.js';
+import { TeamPage } from './components/TeamPage.js';
 
 const NARROW = '(max-width: 900px)';
 const MOD = platform === 'darwin' ? '⌘' : 'Ctrl';
@@ -139,6 +140,7 @@ function App() {
 		{ icon: 'file', label: 'New file', hint: `${MOD} ⇧ N`, run: () => setNewFile({}) },
 		{ icon: 'overview', label: 'Go to Overview', run: () => navigate({ view: 'overview' }) },
 		{ icon: 'list', label: 'Go to All snippets', run: () => navigate({ view: 'all' }) },
+		{ icon: 'team', label: 'Go to Team packages', run: () => navigate({ view: 'team' }) },
 		{ icon: 'settings', label: 'Go to Settings', hint: `${MOD} ,`, run: () => navigate({ view: 'settings' }) },
 		{ icon: 'sun', label: 'Use the light theme', run: () => setTheme('light') },
 		{ icon: 'moon', label: 'Use the dark theme', run: () => setTheme('dark') },
@@ -197,9 +199,10 @@ function App() {
 	if (route.view === 'overview') crumbs = crumb('Overview');
 	else if (route.view === 'all') crumbs = crumb('All snippets');
 	else if (route.view === 'settings') crumbs = crumb('Settings');
+	else if (route.view === 'team') crumbs = crumb('Team packages');
 	else if (missingFile) crumbs = crumb('Not found');
 	else {
-		const group = routeFile.source === 'package' ? `Packages / ${routeFile.package}` : 'Local';
+		const group = routeFile.source === 'local' ? 'Local' : `${sourceLabel(routeFile)} / ${routeFile.package}`;
 		const match = route.index === 'new' ? null : routeFile.matches?.[route.index];
 		crumbs =
 			route.view === 'file'
@@ -221,7 +224,9 @@ function App() {
 	} else if (route.view === 'all') {
 		page = html`<${SearchResults} key=${route.query ?? ''} state=${state} query=${route.query} navigate=${navigate} onNewSnippet=${newSnippet} />`;
 	} else if (route.view === 'settings') {
-		page = html`<${SettingsPage} state=${state} theme=${theme} setTheme=${setTheme} refresh=${refresh} />`;
+		page = html`<${SettingsPage} state=${state} theme=${theme} setTheme=${setTheme} refresh=${refresh} navigate=${navigate} />`;
+	} else if (route.view === 'team') {
+		page = html`<${TeamPage} navigate=${navigate} refresh=${refresh} />`;
 	} else if (route.view === 'file') {
 		page = html`<${FileView}
 			key=${routeFile.id}

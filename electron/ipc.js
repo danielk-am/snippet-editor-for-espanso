@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises';
 import { clipboard as systemClipboard, dialog, shell } from 'electron';
+import { isTeamLink } from '../core/teamAddress.js';
 
 // One handler per channel in shared/channels.js. Failures travel back as
 // data, because Electron strips custom fields (the error code) from a thrown
 // error on its way to the renderer.
-// `clipboard` can be swapped for a stand-in, so a test can see what was
-// copied without touching the real clipboard.
-export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, clipboard = systemClipboard }) {
+// `clipboard` and `openExternal` can be swapped for stand-ins, so a test can
+// see what was copied or opened without touching the real clipboard or browser.
+export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, clipboard = systemClipboard, openExternal = shell.openExternal }) {
 	const handle = (channel, fn) =>
 		ipcMain.handle(channel, async (event, ...args) => {
 			try {
@@ -55,6 +56,18 @@ export function registerIpc({ ipcMain, service, router, listener, getWindow, isT
 
 	handle('clipboard:write', (text) => {
 		clipboard.writeText(String(text ?? ''));
+		return true;
+	});
+
+	// Which repository the app is connected to is a setting, so it is changed
+	// from the window only, like the match folder.
+	handle('team:connect', (address) => service.connectTeam(address));
+	handle('team:disconnect', () => service.disconnectTeam());
+	// The window may open the connected repository's own pages in the browser,
+	// such as the page that starts a pull request, and nothing else.
+	handle('team:openLink', async (url) => {
+		if (!isTeamLink(url, service.team()?.address.webUrl ?? null)) throw Object.assign(new Error('That link is not part of the connected repository.'), { code: 'INVALID' });
+		await openExternal(url);
 		return true;
 	});
 

@@ -1,7 +1,8 @@
 import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
 import { searchFiles } from '../../shared/search.js';
-import { api, refOf } from '../lib/api.js';
+import { api, groupOf, refOf } from '../lib/api.js';
 import { Alert, Badge, Button, ConfirmDialog, Empty, IconButton, useToast } from '../lib/ui.js';
+import { ProposeDialog } from './ProposeDialog.js';
 import { SnippetList, rowsOf } from './SnippetList.js';
 
 function RawEditor({ file, refresh, setDirty }) {
@@ -96,7 +97,8 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const broken = file.matches === null;
 	const activeTab = broken ? 'raw' : tab ?? 'snippets';
-	const pkg = file.source === 'package' ? state.packages.find((candidate) => candidate.name === file.package) : null;
+	const pkg = groupOf(state, file) ?? null;
+	const [proposing, setProposing] = useState(false);
 
 	const rows = filter.trim() ? searchFiles([file], filter).map((hit) => ({ file, index: hit.index, match: hit.match })) : rowsOf(file);
 
@@ -130,6 +132,8 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 			${!file.readOnly &&
 			html`<div class="page-head__actions">
 				<${IconButton} label="Delete file" icon="trash" variant="outline" onClick=${() => setConfirmDelete(true)} />
+				${state.teamConnected &&
+				html`<${Button} variant="outline" icon="pull-request" disabled=${broken || !file.matchCount} onClick=${() => setProposing(true)}>Propose to team<//>`}
 				<${Button} variant="outline" icon="pencil" disabled=${broken} onClick=${() => onEditDetails(file)}>Details<//>
 				<${Button} icon="plus" disabled=${broken} onClick=${() => onNewSnippet(file)}>New snippet<//>
 			</div>`}
@@ -173,6 +177,7 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 						: html`<p class="list-note">Nothing in this file matches “${filter}”.</p>`}
 				`)}
 
+		${proposing && html`<${ProposeDialog} file=${file} navigate=${navigate} onClose=${() => setProposing(false)} />`}
 		${confirmDelete &&
 		html`<${ConfirmDialog}
 			title=${`Delete ${file.name}?`}

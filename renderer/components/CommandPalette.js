@@ -20,7 +20,7 @@ export function CommandPalette({ state, actions, navigate, onClose }) {
 			groups.push({
 				label: 'Snippets',
 				items: hits.map((hit) => ({
-					icon: hit.source === 'package' ? 'package' : 'prompt',
+					icon: hit.source === 'local' ? 'prompt' : hit.source === 'team' ? 'team' : 'package',
 					label: matchTriggers(hit.match).join('  ') || 'No trigger',
 					mono: true,
 					hint: toText(hit.match.label) || previewText(hit.match, 60),
@@ -33,9 +33,9 @@ export function CommandPalette({ state, actions, navigate, onClose }) {
 			groups.push({
 				label: 'Files',
 				items: fileHits.map((file) => ({
-					icon: file.source === 'package' ? 'package' : 'file',
+					icon: file.source === 'local' ? 'file' : file.source === 'team' ? 'team' : 'package',
 					label: file.name,
-					hint: file.source === 'package' ? file.package : file.description,
+					hint: file.source === 'local' ? file.description : file.package,
 					run: () => navigate({ view: 'file', fileId: file.id }),
 				})),
 			});

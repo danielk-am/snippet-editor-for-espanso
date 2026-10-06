@@ -1,4 +1,4 @@
-import { html, useEffect, useState } from '../vendor/preact-htm.js';
+import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
 import { api, platform } from '../lib/api.js';
 import { Alert, Button, Card, ConfirmDialog, Field, IconButton, Segmented, Switch, useToast } from '../lib/ui.js';
 
@@ -121,7 +121,99 @@ function ApiCard() {
 	<//>`;
 }
 
-export function SettingsPage({ state, theme, setTheme, refresh }) {
+// Which GitHub repository the team's shared snippets come from. Connecting
+// is a setting, so it lives here; browsing and installing is on its own page.
+function TeamCard({ navigate, refresh }) {
+	const toast = useToast();
+	const [team, setTeam] = useState(null);
+	const [address, setAddress] = useState('');
+	const [error, setError] = useState('');
+	const [busy, setBusy] = useState('');
+	const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+	const working = useRef(false);
+
+	useEffect(() => {
+		api.team().then(setTeam, () => {});
+	}, []);
+
+	const act = async (label, work, done) => {
+		if (working.current) return;
+		working.current = true;
+		setBusy(label);
+		setError('');
+		try {
+			setTeam(await work());
+			await refresh();
+			if (done) toast({ title: done });
+		} catch (failure) {
+			setError(failure.message);
+		} finally {
+			working.current = false;
+			setBusy('');
+		}
+	};
+
+	if (!team) return null;
+
+	if (!team.connected) {
+		const connect = (event) => {
+			event.preventDefault();
+			if (!address.trim()) return setError('Enter the address of the repository.');
+			act('connect', () => api.connectTeam(address), 'Team repository connected');
+		};
+		return html`<${Card}
+			title="Team snippets"
+			description="Connect the GitHub repository your team keeps its shared snippets in. The app uses the git sign-in this computer already has, and saves no password or token."
+		>
+			<form class="setting" onSubmit=${connect}>
+				${team.problem && html`<${Alert} tone="warning" icon="alert" title=${team.problem} />`}
+				<${Field} label="Repository address" help="For example acme/team-snippets, or git@github.com:acme/team-snippets.git." error=${error}>
+					${(control) =>
+						html`<div class="setting__team">
+							<input class="input mono" value=${address} onInput=${(event) => setAddress(event.target.value)} spellcheck="false" ...${control} />
+							<${Button} type="submit" disabled=${Boolean(busy)}>${busy ? 'Connecting…' : 'Connect'}<//>
+						</div>`}
+				<//>
+				${team.installedOnly.length > 0 &&
+				html`<p class="field__help">
+					${team.installedOnly.length === 1 ? '1 team package is' : `${team.installedOnly.length} team packages are`} still installed.
+					<button type="button" class="link" onClick=${() => navigate({ view: 'team' })}>Manage them</button>
+				</p>`}
+			</form>
+		<//>`;
+	}
+
+	const checked = team.fetchedAt ? new Date(team.fetchedAt).toLocaleString() : '';
+	return html`<${Card} title="Team snippets" description="Packages from this repository are installed on the Team packages page. Nothing is installed or updated without you asking.">
+		<div class="setting">
+			<${PathRow} path=${team.repository} what="Address" />
+			<p class="field__help">${team.branch ? `Branch ${team.branch}.` : 'Not copied yet.'} ${checked && `Last checked ${checked}.`}</p>
+			${team.problem &&
+			html`<${Alert} tone="warning" icon="alert" title="The repository could not be reached"><p>${team.problem}</p><//>`}
+			${error && html`<${Alert} tone="danger" icon="alert" title=${error} />`}
+			<div class="setting__actions">
+				<${Button} variant="outline" icon="team" onClick=${() => navigate({ view: 'team' })}>Browse team packages<//>
+				<${Button} variant="outline" icon="refresh" disabled=${Boolean(busy)} onClick=${() => act('check', api.refreshTeam, 'Checked for updates')}>
+					${busy === 'check' ? 'Checking…' : 'Check for updates'}
+				<//>
+				<${Button} variant="ghost" disabled=${Boolean(busy)} onClick=${() => setConfirmDisconnect(true)}>Disconnect<//>
+			</div>
+		</div>
+		${confirmDisconnect &&
+		html`<${ConfirmDialog}
+			title="Disconnect this repository?"
+			description="The app forgets the repository and removes its copy of it. Team packages you installed stay until you remove them."
+			confirmLabel="Disconnect"
+			onClose=${() => setConfirmDisconnect(false)}
+			onConfirm=${() => {
+				setConfirmDisconnect(false);
+				act('disconnect', api.disconnectTeam, 'Repository disconnected');
+			}}
+		/>`}
+	<//>`;
+}
+
+export function SettingsPage({ state, theme, setTheme, refresh, navigate }) {
 	const toast = useToast();
 	const attempt = async (work) => {
 		try {
@@ -159,6 +251,7 @@ export function SettingsPage({ state, theme, setTheme, refresh }) {
 					</div>
 				</div>
 			<//>
+			<${TeamCard} navigate=${navigate} refresh=${refresh} />
 			<${ApiCard} />
 			<${Card} title="Appearance">
 				<${Segmented} label="Theme" options=${THEMES} value=${theme} onChange=${setTheme} />

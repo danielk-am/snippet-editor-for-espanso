@@ -206,7 +206,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 			<div class="page-head__text">
 				<h1 class="truncate">${title}</h1>
 				<div class="page-head__meta">
-					<${Badge} icon=${file.source === 'package' ? 'package' : 'file'}>${file.source === 'package' ? `${file.package} / ${file.name}` : file.name}<//>
+					<${Badge} icon=${file.source === 'local' ? 'file' : file.source === 'team' ? 'team' : 'package'}>${file.source === 'local' ? file.name : `${file.package} / ${file.name}`}<//>
 					${readOnly && html`<${Badge} icon="lock">Read-only<//>`} ${!readOnly && dirty && html`<${Badge} tone="accent">Unsaved changes<//>`}
 				</div>
 			</div>
@@ -221,11 +221,13 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 
 		<div class="stack">
 			${readOnly &&
-			html`<${Alert} icon="lock" title=${file.source === 'package' ? 'This snippet belongs to a package' : `${file.name} is write-protected`}>
+			html`<${Alert} icon="lock" title=${file.source === 'package' ? 'This snippet belongs to a package' : file.source === 'team' ? 'This snippet belongs to a team package' : `${file.name} is write-protected`}>
 				<p>
 					${file.source === 'package'
 						? 'Packages are read-only here. Copy the snippet into one of your own files to change it.'
-						: 'Change the permissions of the file to edit it here, or copy the snippet into another file.'}
+						: file.source === 'team'
+							? 'Team packages are read-only here. Copy the snippet into one of your own files to change it. You can then propose that file to the team.'
+							: 'Change the permissions of the file to edit it here, or copy the snippet into another file.'}
 				</p>
 				${localFiles.length > 0 &&
 				html`<div class="alert__actions">

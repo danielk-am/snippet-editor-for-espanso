@@ -95,7 +95,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		},
 		async state() {
 			if (!watcher) watch();
-			return { ...(await store.inventory()), matchDirSource: location.source, backupDir, maxBackups: settings.maxBackups };
+			return { ...(await store.inventory()), matchDirSource: location.source, backupDir, maxBackups: settings.maxBackups, teamConnected: team !== null };
 		},
 		// The connected team repository, or null.
 		team: () => team,

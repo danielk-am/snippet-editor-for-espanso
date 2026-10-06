@@ -34,8 +34,8 @@ export function SnippetList({ rows, showFile, onOpen }) {
 					<span class="snippet-row__meta">
 						${TYPE_LABELS[type] && html`<${Badge}>${TYPE_LABELS[type]}<//>`}
 						${Array.isArray(match.vars) && match.vars.length > 0 && html`<${Badge}>Variables<//>`}
-						${showFile && html`<${Badge} tone=${file.source === 'package' ? undefined : 'accent'} icon=${file.source === 'package' ? 'package' : 'file'}>
-							${file.source === 'package' ? file.package : file.name}
+						${showFile && html`<${Badge} tone=${file.source === 'local' ? 'accent' : undefined} icon=${file.source === 'local' ? 'file' : file.source === 'team' ? 'team' : 'package'}>
+							${file.source === 'local' ? file.name : file.package}
 						<//>`}
 					</span>
 				</button>

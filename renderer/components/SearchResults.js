@@ -15,6 +15,7 @@ export function SearchResults({ state, query, navigate, onNewSnippet }) {
 	const rows = active ? toRows(files, searchFiles(files, active, { limit: 500 })) : files.flatMap(rowsOf);
 	const local = rows.filter((row) => row.file.source === 'local');
 	const packaged = rows.filter((row) => row.file.source === 'package');
+	const shared = rows.filter((row) => row.file.source === 'team');
 	const open = (file, index) => navigate({ view: 'snippet', fileId: file.id, index });
 
 	return html`<div class="page">
@@ -43,5 +44,6 @@ export function SearchResults({ state, query, navigate, onNewSnippet }) {
 		<//>`}
 		${local.length > 0 && html`<h2 class="section-title">Local (${local.length})</h2><${SnippetList} rows=${local} showFile onOpen=${open} />`}
 		${packaged.length > 0 && html`<h2 class="section-title">Packages (${packaged.length})</h2><${SnippetList} rows=${packaged} showFile onOpen=${open} />`}
+		${shared.length > 0 && html`<h2 class="section-title">Team (${shared.length})</h2><${SnippetList} rows=${shared} showFile onOpen=${open} />`}
 	</div>`;
 }

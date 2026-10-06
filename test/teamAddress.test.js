@@ -107,3 +107,34 @@ test('a folder on this computer is an address only when the caller allows it', (
 	refused('relative/path/to/repo.git', { allowLocal: true });
 	assert.equal(parseRepositoryAddress('acme/team-snippets', { allowLocal: true }).host, 'github.com');
 });
+
+test('only a link inside the connected repository on its own host may be opened', async () => {
+	const { isTeamLink } = await import('../core/teamAddress.js');
+	const web = 'https://github.com/acme/team';
+	for (const url of [
+		'https://github.com/acme/team',
+		'https://github.com/acme/team/compare/main...snippet-editor/goodbyes-20261006-101500?expand=1',
+		'https://github.com/acme/team/tree/main/packages/goodbyes',
+	]) {
+		assert.equal(isTeamLink(url, web), true, url);
+	}
+	for (const url of [
+		'http://github.com/acme/team/compare/main...x',
+		'https://evil.example/acme/team/compare/main...x',
+		'https://github.com.evil.example/acme/team/compare/main...x',
+		'https://github.com@evil.example/acme/team',
+		'https://someone:secret@github.com/acme/team',
+		'https://github.com/evil/repo/compare/main...x',
+		'https://github.com/acme/team-evil/compare/main...x',
+		'https://github.com/acme/team/../../evil/repo',
+		'javascript:alert(1)',
+		'file:///etc/hosts',
+		'github.com/acme/team',
+		'',
+		42,
+		null,
+	]) {
+		assert.equal(isTeamLink(url, web), false, String(url));
+	}
+	assert.equal(isTeamLink('https://github.com/acme/team', null), false);
+});

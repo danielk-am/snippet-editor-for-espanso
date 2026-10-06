@@ -24,6 +24,7 @@ test('state names the folder, where it came from, and a backups folder inside th
 	assert.equal(state.matchDirSource, 'env');
 	assert.equal(state.files.length, 4);
 	assert.equal(state.maxBackups, 20);
+	assert.deepEqual([state.teamConnected, state.team], [false, []]);
 	assert.ok(state.backupDir.startsWith(join(root, 'data', 'backups')));
 });
 

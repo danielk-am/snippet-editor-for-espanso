@@ -56,3 +56,22 @@ export function parseRepositoryAddress(input, { allowLocal = false } = {}) {
 
 	throw invalid(`That is not a repository address. ${FORMS}`);
 }
+
+// Whether a link leads into the connected repository's own pages. The window
+// asks the app to open pull request pages in the browser, and nothing else
+// should be reachable through that request.
+export function isTeamLink(url, webUrl) {
+	if (typeof url !== 'string' || typeof webUrl !== 'string') return false;
+	let link;
+	let base;
+	try {
+		link = new URL(url);
+		base = new URL(webUrl);
+	} catch {
+		return false;
+	}
+	if (link.protocol !== 'https:' || link.username || link.password || link.origin !== base.origin) return false;
+	// Compared after the browser's own tidying of "..", so a path cannot
+	// climb out of the repository.
+	return link.pathname === base.pathname || link.pathname.startsWith(`${base.pathname}/`);
+}

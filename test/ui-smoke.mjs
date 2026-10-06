@@ -8,7 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, ipcMain } from 'electron';
+import { createGit } from '../core/git.js';
 import { startBackend } from '../electron/bootstrap.js';
+import { MANIFEST, MATCHES, gitEnv, seeded } from './helpers/teamRemote.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +73,10 @@ window.__ui = {
 			const el = document.querySelector(selector);
 			return el ? Number(getComputedStyle(el).zIndex) : null;
 		};
+		const box = document.querySelector('.overlay .dialog, .overlay .palette')?.getBoundingClientRect();
 		return {
+			// An open dialog sits in the middle of the window, whatever it says.
+			offCentre: Boolean(box) && Math.abs((box.left + box.right) / 2 - window.innerWidth / 2) > 2,
 			// A dialog asks a question; a passing notice must not sit on top of it.
 			buried: layer('.overlay') !== null && layer('.toasts') !== null && layer('.overlay') <= layer('.toasts'),
 			unnamed: controls.filter((el) => !named(el)).map(describe),
@@ -97,6 +102,14 @@ async function run() {
 	let win = null;
 	// What the app copies lands here, not on the real clipboard.
 	const copied = [];
+	// A team repository in the sandbox, reached with the real git. Links the
+	// app would open in a browser land in `opened` instead.
+	const remote = seeded(path.join(sandbox, 'team-remote'));
+	remote.commit({
+		'packages/tools/_manifest.yml': MANIFEST('tools'),
+		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
+	});
+	const opened = [];
 	const backend = await startBackend({
 		ipcMain,
 		userDataDir: app.getPath('userData'),
@@ -105,6 +118,9 @@ async function run() {
 		getWindow: () => win,
 		isTrustedSender,
 		clipboard: { writeText: (text) => copied.push(text) },
+		openExternal: async (url) => opened.push(url),
+		git: createGit({ allowLocal: true, env: gitEnv(remote.root) }),
+		allowLocalRepositories: true,
 	});
 	const services = backend.service;
 
@@ -145,6 +161,7 @@ async function run() {
 		check(audit.small.length === 0, `${name}: controls under 24px: ${audit.small.join(', ')}`);
 		check(!audit.overflow, `${name}: the page scrolls sideways`);
 		check(!audit.buried, `${name}: notices are drawn over the open dialog`);
+		check(!audit.offCentre, `${name}: the dialog is not in the middle of the window`);
 	};
 	const step = async (name, run) => {
 		try {
@@ -328,6 +345,91 @@ async function run() {
 		await js(`document.querySelector('[role="switch"][aria-checked="true"]').click()`);
 		await waitFor(`document.querySelector('[role="switch"][aria-checked="false"]') && !(${shown})`, 'Settings to show the API as off');
 		check((await reach({ Authorization: `Bearer ${token}` })) === 'closed', 'the API kept listening after it was switched off');
+	});
+
+	await step('team snippets', async () => {
+		const card = (title) => `[...document.querySelectorAll('.team-card')].find((el) => el.querySelector('h2').textContent === ${JSON.stringify(title)})`;
+		const inCard = (title, label) => `[...${card(title)}.querySelectorAll('button')].find((el) => el.textContent.trim() === ${JSON.stringify(label)})`;
+		const badge = (title, label) => `[...(${card(title)}?.querySelectorAll('.badge') ?? [])].some((el) => el.textContent.trim() === ${JSON.stringify(label)})`;
+		const teamFile = (...parts) => path.join(matchDir, 'team', ...parts);
+		// The page's buttons are off while one thing runs, as a person would
+		// find them. Wait for the button to be ready, then press it.
+		const press = async (button, label) => {
+			await waitFor(`(${button}) && !(${button}).disabled`, `${label} to be ready`);
+			await js(`(${button}).click()`);
+		};
+
+		// Connect, from Settings.
+		await js(`window.__ui.type('.setting__team input', 'ext::sh -c "touch /tmp/owned"')`);
+		await js(`window.__ui.click('Connect')`);
+		await waitFor(`document.querySelector('.setting__team + .field__error, .field__error')?.textContent.startsWith('That is not a repository address.')`, 'a bad address to be refused in the field');
+		await js(`window.__ui.type('.setting__team input', ${JSON.stringify(remote.url)})`);
+		await js(`window.__ui.click('Connect')`);
+		await waitFor(`[...document.querySelectorAll('.copy-row code')].some((el) => el.textContent === ${JSON.stringify(remote.url)})`, 'Settings to show the connected repository');
+		await shot('09e-settings-team');
+
+		// Browse and install.
+		await js(`window.__ui.click('Team packages', '.nav-item__label')`);
+		await waitFor(`document.querySelectorAll('.team-card').length === 3`, 'three team packages');
+		await shot('17-team');
+		await press(inCard('Support replies', 'Install'), 'Install on the support package');
+		await waitFor(badge('Support replies', 'Installed'), 'the support package to be installed');
+		check(fs.readFileSync(teamFile('support', 'replies.yml'), 'utf8') === MATCHES([':refund', 'Your refund is on its way.']), 'the installed file is not the file in the repository');
+		await waitFor(`window.__ui.byText('Support replies', '.nav-item__label')`, 'the package in the sidebar');
+		await js(`window.__ui.click('escalations.yml', '.nav-item__label')`);
+		await waitFor(`document.querySelectorAll('.snippet-row').length === 3`, 'the three snippets of a team file');
+		check(!(await js(`Boolean(window.__ui.byText('New snippet', '.page-head__actions button'))`)), 'a team file offered New snippet');
+		await js(`document.querySelector('.snippet-row__open').click()`);
+		await waitFor(`document.querySelector('.alert__title')?.textContent === 'This snippet belongs to a team package'`, 'the read-only notice for a team snippet');
+		check(await js(`document.querySelector('.editor textarea').disabled`), 'a team snippet was editable');
+		await shot('17b-team-snippet');
+
+		// A package that runs commands asks first.
+		await js(`window.__ui.click('Team packages', '.nav-item__label')`);
+		await waitFor(badge('Tools', 'Runs commands'), 'the warning on a package that runs commands');
+		await press(inCard('Tools', 'Install'), 'Install on the tools package');
+		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'This package runs commands'`, 'the question before installing it');
+		await shot('17c-team-runs-commands');
+		check(!fs.existsSync(teamFile('tools')), 'the package was installed before the answer');
+		await js(`[...document.querySelectorAll('.dialog__foot button')].at(-1).click()`);
+		await waitFor(badge('Tools', 'Installed'), 'the package to be installed once accepted');
+
+		// A change in the repository shows as an update, for that package only.
+		remote.commit({ 'packages/support/replies.yml': MATCHES([':refund', 'Refund sent today.']) });
+		await press(`window.__ui.byText('Check for updates')`, 'Check for updates');
+		await waitFor(badge('Support replies', 'Update available'), 'the update notice');
+		check(!(await js(badge('Tools', 'Update available'))), 'an unchanged package was marked for update');
+		await shot('17d-team-update');
+		await press(inCard('Support replies', 'Update'), 'Update on the support package');
+		await waitFor(`!(${badge('Support replies', 'Update available')})`, 'the update to finish');
+		check(fs.readFileSync(teamFile('support', 'replies.yml'), 'utf8') === MATCHES([':refund', 'Refund sent today.']), 'the update did not reach the installed file');
+
+		// Remove, with a question first.
+		await press(inCard('Tools', 'Remove'), 'Remove on the tools package');
+		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Remove Tools?'`, 'the question before removing');
+		await js(`[...document.querySelectorAll('.dialog__foot button')].at(-1).click()`);
+		await waitFor(`${inCard('Tools', 'Install')}`, 'the package to be removed');
+		check(!fs.existsSync(teamFile('tools')), 'the removed package is still on disk');
+
+		// Propose one of your own files.
+		await js(`window.__ui.click('dates.yml', '.nav-item__label')`);
+		await waitFor(`window.__ui.byText('Propose to team')`, 'the Propose button on a local file');
+		await js(`window.__ui.click('Propose to team')`);
+		await waitFor(`document.querySelector('.dialog select')`, 'the proposal dialog');
+		await js(`window.__ui.type('.dialog input[name=summary]', 'Share the date snippets')`);
+		await shot('18-propose');
+		await js(`{ const send = window.__ui.byText('Send proposal'); send.click(); send.click(); } true;`);
+		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Proposal sent'`, 'the proposal to be sent', 15000);
+		const proposals = remote.branches().filter((name) => name.startsWith('snippet-editor/'));
+		check(proposals.length === 1, `a double click on Send made ${proposals.length} branches`);
+		check(remote.show(proposals[0], 'packages/goodbyes/dates.yml') + '\n' === onDisk('dates.yml'), 'the proposed file is not the file on disk');
+		check(await js(`document.querySelector('.dialog code')?.textContent === ${JSON.stringify(proposals[0])}`), 'the dialog does not name the branch');
+		await shot('18b-proposal-sent');
+		await js(`window.__ui.click('Close')`);
+
+		// Only a link on the connected repository's host can be opened.
+		const refused = await js(`window.snippetEditor.invoke('team:openLink', 'https://evil.example/acme/team/compare/main...x').then(JSON.stringify)`);
+		check(JSON.parse(refused).ok === false && opened.length === 0, `a link elsewhere was opened: ${refused} ${opened}`);
 	});
 
 	await step('external change is picked up', async () => {

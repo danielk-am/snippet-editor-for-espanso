@@ -17,7 +17,7 @@ async function request(method, path, { query, body } = {}) {
 	throw Object.assign(new Error(reply.body.error.message), { code: reply.body.error.code });
 }
 
-const idOf = (ref) => (ref.source === 'local' ? `local:${ref.name}` : `package:${ref.package}:${ref.name}`);
+const idOf = (ref) => (ref.source === 'local' ? `local:${ref.name}` : `${ref.source}:${ref.package}:${ref.name}`);
 const file = (ref) => `/files/${encodeURIComponent(idOf(ref))}`;
 
 export const platform = bridge.platform;
@@ -36,6 +36,16 @@ export const api = {
 	parseYaml: async (text) => (await request('POST', '/yaml/parse', { body: { text } })).value,
 	stringifyYaml: async (value) => (await request('POST', '/yaml/stringify', { body: { value } })).yaml,
 
+	// Team snippets.
+	team: () => request('GET', '/team'),
+	refreshTeam: () => request('POST', '/team/refresh'),
+	installTeamPackage: (name, { acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { acceptCommands } }),
+	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`),
+	propose: (input) => request('POST', '/team/proposals', { body: input }),
+	connectTeam: (address) => call('team:connect', address),
+	disconnectTeam: () => call('team:disconnect'),
+	openTeamLink: (url) => call('team:openLink', url),
+
 	// Things only a window can ask for.
 	chooseMatchDir: () => call('settings:chooseMatchDir'),
 	resetMatchDir: () => call('settings:resetMatchDir'),
@@ -49,10 +59,14 @@ export const api = {
 };
 
 export function refOf(file) {
-	return file.source === 'local'
-		? { source: 'local', name: file.name }
-		: { source: 'package', package: file.package, name: file.name };
+	return file.source === 'local' ? { source: 'local', name: file.name } : { source: file.source, package: file.package, name: file.name };
 }
 
-export const allFiles = (state) => [...state.files, ...state.packages.flatMap((pkg) => pkg.files)];
+// Files come from three places: your own, packages Espanso installed, and
+// team packages this app installed. The last two are read-only.
+export const isLocal = (file) => file.source === 'local';
+export const sourceLabel = (file) => (file.source === 'team' ? 'Team' : file.source === 'package' ? 'Packages' : 'Local');
+// The package a file belongs to, or undefined for one of your own.
+export const groupOf = (state, file) => (file.source === 'team' ? state.team : file.source === 'package' ? state.packages : []).find((pkg) => pkg.name === file.package);
+export const allFiles = (state) => [...state.files, ...[...state.packages, ...state.team].flatMap((pkg) => pkg.files)];
 export const findFile = (state, id) => allFiles(state).find((file) => file.id === id);

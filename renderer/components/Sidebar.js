@@ -87,7 +87,7 @@ export function Sidebar({ state, route, navigate, theme, setTheme, width, setWid
 		</div>
 		<nav class="sidebar__scroll" aria-label="Main">
 			<ul>
-				${item('overview', 'overview', 'Overview')} ${item('all', 'list', 'All snippets', snippetCount)}
+				${item('overview', 'overview', 'Overview')} ${item('all', 'list', 'All snippets', snippetCount)} ${item('team', 'team', 'Team packages')}
 			</ul>
 			<${Section}
 				label="Local"
@@ -101,6 +101,10 @@ export function Sidebar({ state, route, navigate, theme, setTheme, width, setWid
 				${state.packages.map((pkg) => html`<${PackageItem} pkg=${pkg} route=${route} navigate=${navigate} />`)}
 				${!state.packages.length && html`<li class="nav-empty">No packages installed.</li>`}
 			<//>
+			${state.team.length > 0 &&
+			html`<${Section} label="Team" count=${state.team.length}>
+				${state.team.map((pkg) => html`<${PackageItem} pkg=${pkg} route=${route} navigate=${navigate} />`)}
+			<//>`}
 		</nav>
 		<div class="sidebar__footer">
 			<button class="nav-item" aria-current=${route.view === 'settings' ? 'page' : undefined} onClick=${() => navigate({ view: 'settings' })}>

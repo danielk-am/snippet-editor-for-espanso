@@ -56,6 +56,11 @@ const PATHS = {
 		/><path d="M8 16H3v5" />`,
 	enter: html`<path d="m9 10-5 5 5 5" /><path d="M20 4v7a4 4 0 0 1-4 4H4" />`,
 	prompt: html`<path d="m7 8 4 4-4 4" /><path d="M13 16h4" />`,
+	team: html`<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path
+			d="M16 3.13a4 4 0 0 1 0 7.75"
+		/>`,
+	download: html`<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" />`,
+	'pull-request': html`<circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M6 9v12" />`,
 };
 
 export function Icon({ name, class: cls }) {
