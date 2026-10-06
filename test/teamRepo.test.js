@@ -85,7 +85,8 @@ test('a web address is given for each package when the repository has one', asyn
 test('the files of a package come back as bytes, manifest included', async () => {
 	const { repo } = setup();
 	await repo.connect();
-	const files = await repo.packageFiles('support');
+	const { commit, package: described, files } = await repo.packageFiles('support');
+	assert.deepEqual([commit, described.name, described.matchCount], [(await repo.status()).commit, 'support', 4]);
 	assert.deepEqual(files.map((file) => file.name), ['_manifest.yml', 'escalations.yml', 'replies.yml']);
 	assert.equal(files[2].bytes.toString('utf8'), MATCHES([':refund', 'Your refund is on its way.']));
 	await rejectsWith(repo.packageFiles('nothing'), (error) => assert.equal(error.code, 'NOT_FOUND'));
@@ -199,7 +200,7 @@ test('what cannot be installed safely is left out and reported', async () => {
 		'vendored was left out: it is a submodule.',
 	]);
 	// Nothing left out is handed over for install either.
-	assert.deepEqual((await repo.packageFiles('mixed')).map((file) => file.name), ['_manifest.yml', 'broken.yml', 'package.yml']);
+	assert.deepEqual((await repo.packageFiles('mixed')).files.map((file) => file.name), ['_manifest.yml', 'broken.yml', 'package.yml']);
 });
 
 test('lists are cut at their limits, and say so', async () => {
@@ -269,7 +270,7 @@ test('work asked for at the same moment runs one piece at a time', async () => {
 	const { repo, remote } = setup();
 	await repo.connect();
 	remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'One at a time']) });
-	const [, listed, , files] = await Promise.all([repo.fetch(), repo.packages(), repo.fetch(), repo.packageFiles('goodbyes')]);
+	const [, listed, , { files }] = await Promise.all([repo.fetch(), repo.packages(), repo.fetch(), repo.packageFiles('goodbyes')]);
 	assert.equal(listed.packages.length, 2);
 	assert.equal(files[1].bytes.toString('utf8'), MATCHES([':bye', 'One at a time']));
 });

@@ -339,14 +339,15 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		status: () => inTurn(status),
 		packages: () => inTurn(async () => (({ packages, problems }) => ({ packages, problems }))(await listing())),
 
-		// The files of one package, as they are in the commit, for installing.
+		// One package with its files, as they are in one commit, for installing.
+		// Read in one turn, so a fetch cannot slip between the two.
 		packageFiles: (name) =>
 			inTurn(async () => {
-				const { files } = await listing();
+				const { commit, packages, files } = await listing();
 				const wanted = files.get(name);
 				if (!wanted) throw fail('NOT_FOUND', `The team repository has no package named ${name}.`);
 				const blobs = await readBlobs(wanted.map((file) => file.sha));
-				return wanted.map((file) => ({ name: file.name, bytes: blobs.get(file.sha) }));
+				return { commit, package: packages.find((pkg) => pkg.name === name), files: wanted.map((file) => ({ name: file.name, bytes: blobs.get(file.sha) })) };
 			}),
 
 		disconnect: () =>

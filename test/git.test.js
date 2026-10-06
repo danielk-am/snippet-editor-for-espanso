@@ -66,10 +66,19 @@ test('a command over its time limit is stopped, along with anything it started',
 	const error = await fails(createGit({ program, env: { PATH: process.env.PATH, PID_FILE: pidFile } })(['fetch'], { timeout: 300 }), 'timeout');
 	assert.equal(error.message, 'Git did not finish in time.');
 	assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
-	// The helper it started, as ssh would be, is gone too.
-	await new Promise((resolve) => setTimeout(resolve, 200));
+	// The helper it started, as ssh would be, is gone too. A busy computer can
+	// take a moment to clear a stopped process away, so look for a while.
 	const helper = Number(readFileSync(pidFile, 'utf8'));
-	assert.throws(() => process.kill(helper, 0), (failure) => failure.code === 'ESRCH');
+	const gone = () => {
+		try {
+			process.kill(helper, 0);
+			return false;
+		} catch (failure) {
+			return failure.code === 'ESRCH';
+		}
+	};
+	for (let waited = 0; waited < 5000 && !gone(); waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+	assert.equal(gone(), true, `process ${helper} is still running`);
 });
 
 test('output over the limit is refused', posix, async () => {

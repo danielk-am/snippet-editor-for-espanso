@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { loadSettings, saveSettings } from '../core/settings.js';
 
 const file = () => join(mkdtempSync(join(tmpdir(), 'snippet-editor-settings-')), 'nested', 'settings.json');
-const DEFAULTS = { matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187 };
+const DEFAULTS = { matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187, teamRepository: null };
 
 test('settings default to the Espanso folder, twenty backups and the API listener off', async () => {
 	assert.deepEqual(await loadSettings(file()), DEFAULTS);
@@ -35,7 +35,7 @@ test('a damaged settings file falls back to defaults instead of failing', async 
 
 test('values of the wrong shape are ignored', async () => {
 	const path = file();
-	await saveSettings(path, { matchDirOverride: 42, maxBackups: -3, apiEnabled: 'yes', apiPort: 80, surprise: true });
+	await saveSettings(path, { matchDirOverride: 42, maxBackups: -3, apiEnabled: 'yes', apiPort: 80, teamRepository: ['x'], surprise: true });
 	assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), DEFAULTS);
 });
 

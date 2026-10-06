@@ -19,9 +19,11 @@ const STATUS = {
 	METHOD_NOT_ALLOWED: 405,
 	CONFLICT: 409,
 	EXISTS: 409,
+	NOT_CONNECTED: 409,
 	TOO_LARGE: 413,
 	UNSUPPORTED_TYPE: 415,
 	PARSE_ERROR: 422,
+	GIT_FAILED: 502,
 };
 
 // Failures of the disk itself. They are nobody's bad input, so they answer
@@ -66,6 +68,12 @@ function optional(body, field, check, kind) {
 }
 
 const match = (body) => required(body, 'match', isPlainObject, 'a mapping of snippet keys');
+
+function connected(service) {
+	const team = service.team();
+	if (!team) throw fail('NOT_CONNECTED', 'No team repository is connected. Connect one in the app, under Settings.');
+	return team;
+}
 
 // Digits only. A number parser would also take "0x1", "1e2" and " 2 ".
 const isDigits = (text) => typeof text === 'string' && /^\d+$/.test(text);
@@ -139,6 +147,32 @@ const routes = [
 		index: position(params.index),
 		version: query.version,
 	})],
+
+	// --- team snippets ---------------------------------------------------------
+
+	['GET', 'team', ({ service }) => service.teamStatus()],
+
+	['POST', 'team/refresh', ({ service }) => connected(service).refresh()],
+
+	['PUT', 'team/packages/:name/installed', ({ service, params, body }) => connected(service).install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined })],
+
+	['DELETE', 'team/packages/:name/installed', ({ service, params }) => service.removeTeamPackage(params.name)],
+
+	['POST', 'team/proposals', async ({ service, body }) => {
+		const team = connected(service);
+		const ref = refFromId(required(body, 'fileId', isText, 'text'));
+		const input = {
+			package: required(body, 'package', isText, 'text'),
+			summary: required(body, 'summary', isText, 'text'),
+			title: optional(body, 'title', isText, 'text'),
+			description: optional(body, 'description', isText, 'text'),
+		};
+		if (ref.source !== 'local') throw invalid('Only one of your own files can be proposed. Copy the snippets into one first.');
+		const file = await service.store.readFile(ref);
+		if (file.matches === null) throw invalid(`${file.name} has YAML errors or could not be opened. Fix it before proposing it.`);
+		if (!file.matches.length) throw invalid(`${file.name} has no snippets to propose.`);
+		return team.propose({ ...input, fileName: file.name, text: file.text });
+	}, 201],
 
 	['POST', 'yaml/preview', ({ body }) => ({ yaml: written(() => stringifyMatch(match(body))) })],
 
