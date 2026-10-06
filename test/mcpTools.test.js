@@ -594,3 +594,127 @@ test('the two tools that wait on git are given longer than the rest', async () =
 	]);
 	assert.equal(calls.find(([, path]) => path.startsWith('/files/'))[2], undefined);
 });
+
+// --- in chat: a change is a proposal ----------------------------------------------------
+
+async function chatSetup(t, options = {}) {
+	const api = await startApi(t, options);
+	const client = createApiClient({ dataDir: api.dataDir });
+	const proposed = [];
+	const state = { answer: () => ({ id: `p${proposed.length}` }) };
+	const tools = createTools({
+		api: client,
+		propose: async (proposal) => {
+			proposed.push(proposal);
+			return state.answer(proposal);
+		},
+	});
+	const call = async (name, args = {}) => {
+		const result = await tools.call(name, args);
+		assert.ok(result, `unknown tool ${name}`);
+		if (result.isError) return { error: result.content[0].text };
+		assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+		return result.structuredContent;
+	};
+	const read = (name) => readFileSync(join(api.matchDir, name), 'utf8');
+	return { ...api, tools, plain: createTools({ api: client }), call, read, proposed, state };
+}
+
+const NOT_YET = 'Shown to the person as a card. Nothing has changed yet: it is written only if they press Apply. Say what you proposed and that it is waiting for them. Do not say it is done.';
+
+test('in chat, each of the seven tools that change something hands over a proposal and writes nothing, switch or no switch', async (t) => {
+	const { call, read, matchDir, proposed } = await chatSetup(t, { aiWrite: false });
+	const before = read('base.yml');
+	const v = (await call('snippets_get_file', { file_id: 'local:base.yml' })).version;
+	const attempts = {
+		snippets_add_snippet: { file_id: 'local:base.yml', snippet: { trigger: ';x', replace: 'X' }, version: v },
+		snippets_update_snippet: { file_id: 'local:base.yml', index: 0, snippet: { trigger: ';hello', replace: 'Changed' }, version: v },
+		snippets_delete_snippet: { file_id: 'local:base.yml', index: 0, version: v },
+		snippets_create_file: { name: 'new.yml' },
+		snippets_replace_file_yaml: { file_id: 'local:base.yml', yaml: 'matches: []\n', version: v },
+		snippets_install_team_package: { name: 'goodbyes' },
+		snippets_propose_to_team: { file_id: 'local:base.yml', package: 'goodbyes', summary: 'Share' },
+	};
+	assert.deepEqual(Object.keys(attempts), WRITE_TOOLS);
+	let count = 0;
+	for (const [name, args] of Object.entries(attempts)) {
+		count += 1;
+		assert.deepEqual(await call(name, args), { proposed: true, proposal_id: `p${count}`, note: NOT_YET }, name);
+	}
+	assert.deepEqual(proposed, Object.entries(attempts).map(([tool, args]) => ({ tool, args })));
+	assert.equal(read('base.yml'), before);
+	assert.equal(existsSync(join(matchDir, 'new.yml')), false);
+});
+
+test('in chat, a tool that changes something is described as a proposal, takes no accept_commands, and is not marked as destructive', async (t) => {
+	const { tools, plain } = await chatSetup(t);
+	const inChat = Object.fromEntries(tools.list().map((tool) => [tool.name, tool]));
+	const outside = Object.fromEntries(plain.list().map((tool) => [tool.name, tool]));
+	assert.deepEqual(Object.keys(inChat), [...READ_TOOLS, ...WRITE_TOOLS]);
+	for (const name of READ_TOOLS) assert.deepEqual(inChat[name], outside[name], name);
+	for (const name of WRITE_TOOLS) {
+		assert.equal(
+			inChat[name].description,
+			`${outside[name].description} In this chat the change is not made at once: the person sees it as a card and decides. Nothing is written until they press Apply.`,
+			name
+		);
+		assert.equal(Object.hasOwn(inChat[name].inputSchema.properties, 'accept_commands'), false, name);
+		const { accept_commands: dropped, ...kept } = outside[name].inputSchema.properties;
+		assert.deepEqual(inChat[name].inputSchema, { ...outside[name].inputSchema, properties: kept }, name);
+		assert.deepEqual(inChat[name].annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }, name);
+		assert.equal(inChat[name].title, outside[name].title);
+	}
+	// Outside chat nothing moved.
+	assert.equal(Object.hasOwn(outside.snippets_add_snippet.inputSchema.properties, 'accept_commands'), true);
+	assert.equal(outside.snippets_delete_snippet.annotations.destructiveHint, true);
+});
+
+test('in chat, input is checked before anything is proposed', async (t) => {
+	const { call, proposed } = await chatSetup(t);
+	assert.match((await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: ';x', replace: 'X' } })).error, /^Missing `version`/);
+	assert.match((await call('snippets_delete_snippet', { file_id: 'local:base.yml', index: -1, version: 'v' })).error, /`index` must be a whole number/);
+	assert.equal(
+		(await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: ';x', replace: 'X' }, version: 'v', accept_commands: true })).error,
+		'Unknown input `accept_commands`. This tool takes: file_id, snippet, version, index.'
+	);
+	assert.deepEqual(proposed, []);
+});
+
+test('in chat, what the app says against a proposal reaches the model as an error it can act on', async (t) => {
+	const { call, state, proposed } = await chatSetup(t);
+	state.answer = () => ({ error: 'base.yml changed since you read it. Call snippets_get_file for local:base.yml again, look at what changed, then retry with the new version.' });
+	assert.deepEqual(await call('snippets_delete_snippet', { file_id: 'local:base.yml', index: 0, version: 'old' }), {
+		error: 'base.yml changed since you read it. Call snippets_get_file for local:base.yml again, look at what changed, then retry with the new version.',
+	});
+	assert.equal(proposed.length, 1);
+});
+
+test('in chat, a proposal that cannot be handed over says the chat has ended', async (t) => {
+	const api = await startApi(t);
+	const tools = createTools({
+		api: createApiClient({ dataDir: api.dataDir }),
+		propose: async () => {
+			throw Object.assign(new Error('This chat has ended. The person can send their message again.'), { code: 'UNREACHABLE' });
+		},
+	});
+	const result = await tools.call('snippets_create_file', { name: 'new.yml' });
+	assert.equal(result.isError, true);
+	assert.equal(result.content[0].text, 'This chat has ended. The person can send their message again.');
+});
+
+test('in chat, the tools that read work as they do anywhere', async (t) => {
+	const { call, proposed } = await chatSetup(t);
+	assert.equal((await call('snippets_search', { query: 'hello' })).items[0].file_id, 'local:base.yml');
+	assert.equal((await call('snippets_get_snippet', { file_id: 'local:base.yml', index: 0 })).snippet.trigger, ';hello');
+	assert.deepEqual(proposed, []);
+});
+
+test('the checks for a snippet that runs a command, and the wording of a refusal, can be used outside the tools', async () => {
+	const { snippetRuns, fileRuns, explain } = await import('../mcp/tools.mjs');
+	assert.equal(snippetRuns({ trigger: ':ip', replace: '{{ip}}', vars: [{ name: 'ip', type: 'shell', params: { cmd: 'x' } }] }), true);
+	assert.equal(snippetRuns({ trigger: ':d', replace: '{{d}}', vars: [{ name: 'd', type: 'date' }] }), false);
+	assert.equal(snippetRuns('not a snippet'), false);
+	assert.equal(fileRuns({ global_vars: [{ name: 'x', type: 'script', params: {} }], matches: [] }), true);
+	assert.equal(fileRuns({ matches: [{ trigger: ':a', replace: 'b' }] }), false);
+	assert.match(explain({ status: 409, body: { error: { code: 'CONFLICT', message: 'x' } } }, { fileId: 'local:base.yml' }), /^base\.yml changed since you read it/);
+});

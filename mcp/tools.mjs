@@ -6,10 +6,16 @@
 //   - A failure is a sentence that says what was wrong and what to call next.
 //   - The seven tools that change something refuse unless the person has
 //     switched on "Let AI tools change snippets" in the app.
+//
+// In the app's own chat the person is right there, so the seven do not write
+// at all. Given a `propose` function they hand the change over to be shown as
+// a card, and the app writes it only when the person presses Apply.
 
 const MAX_REPLY = 25_000;
 const SWITCHED_OFF = 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor\'s Settings, then try again.';
 const LIST_FILES = 'Call snippets_list_files to see the files and their ids.';
+const IN_CHAT = ' In this chat the change is not made at once: the person sees it as a card and decides. Nothing is written until they press Apply.';
+const NOT_YET = 'Shown to the person as a card. Nothing has changed yet: it is written only if they press Apply. Say what you proposed and that it is waiting for them. Do not say it is done.';
 const consent = (what) => `${what} would run a command on the person's computer each time it is used. Ask the person first. If they agree, call again with accept_commands set to true.`;
 
 class ToolError extends Error {}
@@ -84,7 +90,8 @@ const cut = (text, most) => (text.length > most ? `${text.slice(0, most - 3)}...
 // Espanso runs a `shell` or `script` variable as a command when the snippet
 // is used. Writing one is never done without the person's say-so.
 const runs = (vars) => Array.isArray(vars) && vars.some((item) => isObject(item) && (item.type === 'shell' || item.type === 'script'));
-const fileRuns = (data) => isObject(data) && (runs(data.global_vars) || (Array.isArray(data.matches) && data.matches.some((match) => isObject(match) && runs(match.vars))));
+export const snippetRuns = (snippet) => isObject(snippet) && runs(snippet.vars);
+export const fileRuns = (data) => isObject(data) && (runs(data.global_vars) || (Array.isArray(data.matches) && data.matches.some((match) => isObject(match) && runs(match.vars))));
 
 function checkSnippet(snippet, accept) {
 	if (!triggersOf(snippet).length) throw new ToolError('`snippet` needs a `trigger`, a list of `triggers`, or a `regex`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.');
@@ -122,7 +129,7 @@ function fit(data, key, { offset = 0, limit = 50 }) {
 
 // --- what went wrong, in words that say what to do next --------------------
 
-function explain(reply, { file, fileId, tool } = {}) {
+export function explain(reply, { file, fileId, tool } = {}) {
 	const { code, message } = reply.body?.error ?? {};
 	const name = file ?? (fileId ? fileId.split(':').at(-1) : 'That file');
 	switch (code) {
@@ -151,7 +158,8 @@ function explain(reply, { file, fileId, tool } = {}) {
 	}
 }
 
-export function createTools({ api }) {
+export function createTools({ api, propose }) {
+	const chat = typeof propose === 'function';
 	const ask = async (method, path, options, context) => {
 		const reply = await api.request(method, path, options);
 		if (reply.status >= 400) throw new ToolError(explain(reply, context));
@@ -449,16 +457,26 @@ export function createTools({ api }) {
 		},
 	];
 
+	// In chat a card carries the warning about commands and Apply is the
+	// person's answer, so the model has nothing to confirm. And a proposal
+	// destroys nothing and sends nothing.
+	const proposes = (tool) => chat && Boolean(tool.write);
+	const inputsOf = (tool) => {
+		if (!proposes(tool)) return tool.inputSchema;
+		const { accept_commands: confirmed, ...properties } = tool.inputSchema.properties;
+		return { ...tool.inputSchema, properties };
+	};
+
 	const definitions = tools.map((tool) => ({
 		name: tool.name,
 		title: tool.title,
-		description: tool.description,
-		inputSchema: tool.inputSchema,
+		description: proposes(tool) ? `${tool.description}${IN_CHAT}` : tool.description,
+		inputSchema: inputsOf(tool),
 		annotations: {
 			readOnlyHint: !tool.write,
-			destructiveHint: Boolean(tool.destructive),
+			destructiveHint: Boolean(tool.destructive) && !proposes(tool),
 			idempotentHint: !tool.write,
-			openWorldHint: Boolean(tool.openWorld),
+			openWorldHint: Boolean(tool.openWorld) && !proposes(tool),
 		},
 	}));
 
@@ -471,11 +489,18 @@ export function createTools({ api }) {
 		async call(name, args) {
 			const tool = tools.find((candidate) => candidate.name === name);
 			if (!tool) return null;
-			const problem = problemWith(tool.inputSchema, args);
+			const problem = problemWith(inputsOf(tool), args);
 			if (problem) return failed(problem);
 			try {
-				if (tool.write && !(await api.settings()).aiWrite) return failed(SWITCHED_OFF);
-				const data = await tool.run(args);
+				let data;
+				if (proposes(tool)) {
+					const handed = await propose({ tool: name, args });
+					if (typeof handed?.error === 'string') return failed(handed.error);
+					data = { proposed: true, proposal_id: handed.id, note: NOT_YET };
+				} else {
+					if (tool.write && !(await api.settings()).aiWrite) return failed(SWITCHED_OFF);
+					data = await tool.run(args);
+				}
 				return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data, isError: false };
 			} catch (error) {
 				if (error instanceof ToolError || error?.code === 'UNREACHABLE') return failed(error.message);
