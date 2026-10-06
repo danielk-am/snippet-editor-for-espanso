@@ -69,9 +69,26 @@ function optional(body, field, check, kind) {
 
 const match = (body) => required(body, 'match', isPlainObject, 'a mapping of snippet keys');
 
+// Digits only. A number parser would also take "0x1", "1e2" and " 2 ".
+const isDigits = (text) => typeof text === 'string' && /^\d+$/.test(text);
+
 function position(text) {
-	if (!/^\d+$/.test(text)) throw invalid('The snippet position in the path must be a whole number.');
+	if (!isDigits(text)) throw invalid('The snippet position in the path must be a whole number.');
 	return Number(text);
+}
+
+// Checking YAML costs more than its length suggests, and the check runs in
+// the app's one process, so a helper takes only as much as a person types.
+const MAX_YAML_TEXT = 256 * 1024;
+
+// A value nested deeper than the YAML writer can follow.
+function written(write) {
+	try {
+		return write();
+	} catch (error) {
+		if (error instanceof RangeError) throw invalid('That value is nested too deeply to write as YAML.');
+		throw error;
+	}
 }
 
 // --- routes -----------------------------------------------------------------
@@ -82,8 +99,8 @@ const routes = [
 	['GET', 'search', ({ service, query }) => {
 		if (!isText(query.q)) throw invalid('`q` must be text.');
 		if (query.limit === undefined) return service.store.search(query.q);
-		const limit = Number(query.limit);
-		if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalid('`limit` must be a whole number from 1 to 1000.');
+		const limit = isDigits(query.limit) ? Number(query.limit) : NaN;
+		if (!(limit >= 1 && limit <= 1000)) throw invalid('`limit` must be a whole number from 1 to 1000.');
 		return service.store.search(query.q, { limit });
 	}],
 
@@ -125,10 +142,12 @@ const routes = [
 		version: query.version,
 	})],
 
-	['POST', 'yaml/preview', ({ body }) => ({ yaml: stringifyMatch(match(body)) })],
+	['POST', 'yaml/preview', ({ body }) => ({ yaml: written(() => stringifyMatch(match(body))) })],
 
 	['POST', 'yaml/parse', ({ body }) => {
-		const doc = parseDocument(required(body, 'text', isText, 'text'));
+		const text = required(body, 'text', isText, 'text');
+		if (text.length > MAX_YAML_TEXT) throw fail('TOO_LARGE', 'That is too much YAML to check at once (over 256 KB).');
+		const doc = parseDocument(text);
 		if (doc.errors.length) throw fail('PARSE_ERROR', doc.errors[0].message.split('\n')[0]);
 		try {
 			return { value: doc.toJS() ?? null };
@@ -140,7 +159,7 @@ const routes = [
 
 	['POST', 'yaml/stringify', ({ body }) => {
 		if (!isPlainObject(body) || !('value' in body)) throw invalid('`value` is required.');
-		return { yaml: stringify(body.value, { lineWidth: 0 }) };
+		return { yaml: written(() => stringify(body.value, { lineWidth: 0 })) };
 	}],
 ].map(([method, pattern, handler, status = 200]) => ({ method, parts: pattern.split('/'), handler, status }));
 

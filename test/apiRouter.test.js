@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -288,4 +288,91 @@ test('a bug inside a route is answered with 500 and a plain message, and is logg
 	assert.ok(!reply.body.error.message.includes('secret detail'));
 	assert.equal(logged.length, 1);
 	assert.equal(logged[0].message, 'secret detail');
+});
+
+// --- added after review ---------------------------------------------------------
+
+test('every write route refuses a missing or stale version and leaves the folder as it was', async (t) => {
+	const { call, matchDir } = await setup(t);
+	const snapshot = () => Object.fromEntries(readdirSync(matchDir).filter((name) => name.endsWith('.yml')).map((name) => [name, readFileSync(join(matchDir, name), 'utf8')]));
+	const before = snapshot();
+	const match = { trigger: ';x', replace: 'X' };
+	const writes = [
+		['PUT', BASE + '/details', { description: 'Changed', prefix: ':' }],
+		['PUT', BASE + '/raw', { text: 'matches: []\n' }],
+		['POST', BASE + '/snippets', { match }],
+		['PUT', BASE + '/snippets/0', { match }],
+	];
+	for (const [method, path, body] of writes) {
+		assert.deepEqual(code(await call(method, path, { body })), [409, 'CONFLICT'], `${method} ${path} with no version`);
+		assert.deepEqual(code(await call(method, path, { body: { ...body, version: 'stale' } })), [409, 'CONFLICT'], `${method} ${path} with a stale version`);
+		assert.deepEqual(code(await call(method, path, { body: { ...body, version: 5 } })), [409, 'CONFLICT'], `${method} ${path} with a version that is not text`);
+	}
+	for (const path of [BASE, BASE + '/snippets/0']) {
+		assert.deepEqual(code(await call('DELETE', path, { query: {} })), [409, 'CONFLICT'], `DELETE ${path} with no version`);
+		assert.deepEqual(code(await call('DELETE', path, { query: { version: 'stale' } })), [409, 'CONFLICT'], `DELETE ${path} with a stale version`);
+	}
+	assert.deepEqual(snapshot(), before);
+});
+
+test('each refused field is named exactly', async (t) => {
+	const { call, version } = await setup(t);
+	const message = async (method, path, body) => (await call(method, path, { body })).body.error.message;
+	assert.equal(await message('POST', '/api/v1/files', {}), '`name` must be text.');
+	assert.equal(await message('POST', '/api/v1/files', { name: 'a.yml', description: 5 }), '`description` must be text.');
+	assert.equal(await message('POST', '/api/v1/files', { name: 'a.yml', prefix: [] }), '`prefix` must be text.');
+	assert.equal(await message('PUT', BASE + '/details', { prefix: ':', version: 'v' }), '`description` must be text.');
+	assert.equal(await message('PUT', BASE + '/details', { description: 'x', version: 'v' }), '`prefix` must be text.');
+	assert.equal(await message('PUT', BASE + '/raw', { version: 'v' }), '`text` must be text.');
+	assert.equal(await message('POST', BASE + '/snippets', { match: 'x', version: await version() }), '`match` must be a mapping of snippet keys.');
+	assert.equal(await message('POST', BASE + '/snippets', { match: {}, index: '1', version: await version() }), '`index` must be a whole number, zero or more.');
+});
+
+test('a search limit must be written as a plain whole number', async (t) => {
+	const { call } = await setup(t);
+	for (const limit of [' 2 ', '0x2', '1e2', '2.0', '+2', '']) {
+		assert.deepEqual(code(await call('GET', '/api/v1/search', { query: { q: 'e', limit } })), [400, 'INVALID'], JSON.stringify(limit));
+	}
+	assert.equal((await call('GET', '/api/v1/search', { query: { q: 'e', limit: '3' } })).body.length, 3);
+});
+
+test('a write that would make a file too large is 413, and a refused description is 400 with the reason', async (t) => {
+	const { call, version, read } = await setup(t);
+	const before = read('base.yml');
+	const big = 'x'.repeat(2 * 1024 * 1024 + 1);
+	assert.deepEqual(code(await call('PUT', BASE + '/raw', { body: { text: `matches:\n  - trigger: ":a"\n    replace: "${big}"\n`, version: await version() } })), [413, 'TOO_LARGE']);
+	assert.deepEqual(code(await call('POST', BASE + '/snippets', { body: { match: { trigger: ':big', replace: big }, version: await version() } })), [413, 'TOO_LARGE']);
+	assert.equal(read('base.yml'), before);
+	const refused = await call('POST', '/api/v1/files', { body: { name: 'work.yml', description: 'prefix: x' } });
+	assert.deepEqual(code(refused), [400, 'INVALID']);
+	assert.match(refused.body.error.message, /description cannot start with/);
+});
+
+test('a file that cannot be opened is read as a described record and refuses writes with 403', async (t) => {
+	const { call, matchDir } = await setup(t);
+	mkdirSync(join(matchDir, 'folder.yml'));
+	const path = at('local:folder.yml');
+	const reply = await call('GET', path);
+	assert.deepEqual([reply.status, reply.body.unreadable, reply.body.parseErrors], [200, true, ['This is a folder, not a file.']]);
+	assert.deepEqual(code(await call('PUT', path + '/raw', { body: { text: 'matches: []\n', version: '' } })), [403, 'READ_ONLY']);
+	assert.deepEqual(code(await call('DELETE', path, { query: { version: '' } })), [403, 'READ_ONLY']);
+});
+
+test('YAML helpers refuse text that is too long and values nested too deeply, without a 500', async (t) => {
+	const logged = [];
+	const { call } = await setup(t, logged);
+	const long = await call('POST', '/api/v1/yaml/parse', { body: { text: 'a: ' + 'x'.repeat(256 * 1024) } });
+	assert.deepEqual(code(long), [413, 'TOO_LARGE']);
+	assert.equal((await call('POST', '/api/v1/yaml/parse', { body: { text: 'a: ' + 'x'.repeat(1000) } })).status, 200);
+	let deep = {};
+	for (let level = 0; level < 20000; level += 1) deep = { a: deep };
+	assert.deepEqual(code(await call('POST', '/api/v1/yaml/stringify', { body: { value: deep } })), [400, 'INVALID']);
+	assert.deepEqual(code(await call('POST', '/api/v1/yaml/preview', { body: { match: deep } })), [400, 'INVALID']);
+	assert.equal(logged.length, 0);
+});
+
+test('the reply to a bug is exactly the plain error and nothing more', async (t) => {
+	const { service } = await setup(t);
+	const handle = createRouter({ service: { ...service, state: async () => { throw new Error('secret detail'); } }, log: () => {} });
+	assert.deepEqual(await handle({ method: 'GET', path: '/api/v1/state' }), { status: 500, body: { error: { code: 'ERROR', message: 'Something went wrong inside the app.' } } });
 });
