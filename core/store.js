@@ -65,7 +65,10 @@ const READ_FAILURES = {
 };
 
 export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes = 2 * MEGABYTE, now = () => new Date() }) {
-	const packagesDir = path.join(matchDir, 'packages');
+	// Two kinds of folder hold other people's snippets, and both are read-only
+	// here: packages Espanso installed, and team packages this app installed.
+	const roots = { package: path.join(matchDir, 'packages'), team: path.join(matchDir, 'team') };
+	const isShared = (source) => Object.hasOwn(roots, source);
 
 	function resolve(ref) {
 		if (!ref || !isSafeFileName(ref.name)) {
@@ -74,10 +77,10 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		if (ref.source === 'local') {
 			return { id: `local:${ref.name}`, filePath: path.join(matchDir, ref.name), backupKey: ['local', ref.name] };
 		}
-		if (ref.source === 'package' && typeof ref.package === 'string' && PACKAGE_NAME.test(ref.package)) {
+		if (isShared(ref.source) && typeof ref.package === 'string' && PACKAGE_NAME.test(ref.package)) {
 			return {
-				id: `package:${ref.package}:${ref.name}`,
-				filePath: path.join(matchDir, 'packages', ref.package, ref.name),
+				id: `${ref.source}:${ref.package}:${ref.name}`,
+				filePath: path.join(roots[ref.source], ref.package, ref.name),
 				backupKey: null,
 			};
 		}
@@ -86,11 +89,11 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 
 	// A package is someone else's content. A link inside one must not be a way
 	// to show a file from elsewhere on the disk, so package files are read
-	// only when they really live under the packages folder. Your own match
+	// only when they really live under their own folder. Your own match
 	// files may be links: that is a choice you made.
-	async function insidePackages(filePath) {
+	async function insideRoot(source, filePath) {
 		try {
-			const [root, real] = await Promise.all([fs.realpath(packagesDir), fs.realpath(filePath)]);
+			const [root, real] = await Promise.all([fs.realpath(roots[source]), fs.realpath(filePath)]);
 			return real.startsWith(root + path.sep);
 		} catch {
 			return false;
@@ -101,7 +104,7 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		return {
 			id,
 			source: ref.source,
-			...(ref.source === 'package' ? { package: ref.package } : {}),
+			...(isShared(ref.source) ? { package: ref.package } : {}),
 			name: ref.name,
 			description: '',
 			prefix: '',
@@ -123,7 +126,7 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 	async function load(ref) {
 		const { id, filePath } = resolve(ref);
 		const gone = () => new StoreError('NOT_FOUND', `${ref.name} is no longer in the match folder.`);
-		if (ref.source === 'package' && !(await insidePackages(filePath))) throw gone();
+		if (isShared(ref.source) && !(await insideRoot(ref.source, filePath))) throw gone();
 
 		// A file that is there but cannot be opened is described, not thrown:
 		// asked for on its own it answers as it does in the list of files.
@@ -207,10 +210,10 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		return loaded.filter(Boolean).map(withoutText);
 	}
 
-	async function readManifest(dir) {
+	async function readManifest(source, dir) {
 		const file = path.join(dir, MANIFEST);
 		try {
-			if (!(await insidePackages(file))) return { data: {} };
+			if (!(await insideRoot(source, file))) return { data: {} };
 			if ((await fs.stat(file)).size > maxFileBytes) return { error: 'The manifest is too large to read.' };
 			const doc = parseDocument(await fs.readFile(file, 'utf8'));
 			if (doc.errors.length) return { error: doc.errors[0].message.split('\n')[0] };
@@ -221,12 +224,12 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		}
 	}
 
-	async function readPackage(name) {
-		const dir = path.join(packagesDir, name);
-		const manifest = await readManifest(dir);
+	async function readPackage(source, name) {
+		const dir = path.join(roots[source], name);
+		const manifest = await readManifest(source, dir);
 		const listed = (await listYaml(dir, { links: false })) ?? [];
 		const files = await loadAll(
-			listed.filter((file) => file.name !== MANIFEST).map((file) => ({ source: 'package', package: name, name: file.name }))
+			listed.filter((file) => file.name !== MANIFEST).map((file) => ({ source, package: name, name: file.name }))
 		);
 		return {
 			name,
@@ -240,10 +243,10 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		};
 	}
 
-	async function listPackages() {
+	async function listPackages(source) {
 		let entries;
 		try {
-			entries = await fs.readdir(packagesDir, { withFileTypes: true });
+			entries = await fs.readdir(roots[source], { withFileTypes: true });
 		} catch {
 			return [];
 		}
@@ -256,7 +259,7 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 
 		return Promise.all(
 			names.map(({ name }) =>
-				readPackage(name).catch((error) => ({
+				readPackage(source, name).catch((error) => ({
 					name,
 					title: name,
 					description: '',
@@ -275,14 +278,15 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		try {
 			listed = await listYaml(matchDir, { links: true });
 		} catch (error) {
-			return { matchDir, exists: true, error: `The match folder could not be read (${error.code ?? error.message}).`, files: [], packages: [] };
+			return { matchDir, exists: true, error: `The match folder could not be read (${error.code ?? error.message}).`, files: [], packages: [], team: [] };
 		}
-		if (listed === null) return { matchDir, exists: false, files: [], packages: [] };
-		const [files, packages] = await Promise.all([
+		if (listed === null) return { matchDir, exists: false, files: [], packages: [], team: [] };
+		const [files, packages, team] = await Promise.all([
 			loadAll(listed.map((file) => ({ source: 'local', name: file.name }))),
-			listPackages(),
+			listPackages('package'),
+			listPackages('team'),
 		]);
-		return { matchDir, exists: true, files, packages };
+		return { matchDir, exists: true, files, packages, team };
 	}
 
 	// Writes run one at a time, in the order they were asked for. A person
@@ -454,8 +458,8 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 			),
 
 		async search(query, options) {
-			const { files, packages } = await inventory();
-			return searchFiles([...files, ...packages.flatMap((pkg) => pkg.files)], query, options);
+			const { files, packages, team } = await inventory();
+			return searchFiles([...files, ...[...packages, ...team].flatMap((pkg) => pkg.files)], query, options);
 		},
 	};
 }

@@ -39,15 +39,13 @@ export const errorBody = (code, message) => ({ error: { code, message } });
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const invalid = (message) => fail('INVALID', message);
 
-// "local:base.yml" or "package:goodbyes:package.yml", as the store knows them.
-// A package name never holds a colon, so the second colon ends it.
+// "local:base.yml", "package:goodbyes:package.yml" or
+// "team:goodbyes:package.yml", as the store knows them. A package name never
+// holds a colon, so the second colon ends it.
 export function refFromId(id) {
 	if (typeof id === 'string' && id.startsWith('local:')) return { source: 'local', name: id.slice(6) };
-	if (typeof id === 'string' && id.startsWith('package:')) {
-		const rest = id.slice(8);
-		const colon = rest.indexOf(':');
-		if (colon > 0) return { source: 'package', package: rest.slice(0, colon), name: rest.slice(colon + 1) };
-	}
+	const [source, name, ...rest] = typeof id === 'string' ? id.split(':') : [];
+	if ((source === 'package' || source === 'team') && name && rest.length) return { source, package: name, name: rest.join(':') };
 	throw fail('INVALID_NAME', 'That is not a file id. Use the `id` of a file from /state.');
 }
 

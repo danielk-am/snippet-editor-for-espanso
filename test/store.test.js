@@ -444,3 +444,72 @@ test('file names with control characters are refused', async () => {
 	}
 	assert.deepEqual(readdirSync(matchDir).sort(), before);
 });
+
+// --- team packages: a third, read-only source ------------------------------------
+
+function withTeam() {
+	const context = sandbox();
+	const dir = join(context.matchDir, 'team', 'farewells');
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, '_manifest.yml'), 'name: farewells\ntitle: Farewells\ndescription: Ways to part\nversion: 1.0.0\nauthor: Team Lead\n');
+	writeFileSync(join(dir, 'package.yml'), 'matches:\n  - trigger: ":farewell"\n    replace: "Farewell, and thank you."\n');
+	writeFileSync(join(dir, '.snippet-editor.json'), '{}\n');
+	return { ...context, dir };
+}
+const team = (name, pkg = 'farewells') => ({ source: 'team', package: pkg, name });
+
+test('installed team packages are listed beside packages, in the same shape', async () => {
+	const { store } = withTeam();
+	const inv = await store.inventory();
+	assert.equal(inv.packages.length, 1);
+	assert.equal(inv.team.length, 1);
+	const [pkg] = inv.team;
+	assert.deepEqual([pkg.name, pkg.title, pkg.description, pkg.version, pkg.author, pkg.manifestError, pkg.matchCount], ['farewells', 'Farewells', 'Ways to part', '1.0.0', 'Team Lead', '', 1]);
+	assert.deepEqual(pkg.files.map((file) => [file.id, file.source, file.package, file.name, file.readOnly, file.matchCount]), [['team:farewells:package.yml', 'team', 'farewells', 'package.yml', true, 1]]);
+	assert.deepEqual((await sandbox().store.inventory()).team, []);
+});
+
+test('a team file can be read and searched, and never changed', async () => {
+	const { store, dir } = withTeam();
+	const before = read(dir, 'package.yml');
+	const file = await store.readFile(team('package.yml'));
+	assert.deepEqual([file.id, file.text, file.readOnly, file.matches.length], ['team:farewells:package.yml', before, true, 1]);
+	const hits = await store.search('farewell');
+	assert.deepEqual(hits.map((hit) => [hit.fileId, hit.source, hit.package, hit.index]), [['team:farewells:package.yml', 'team', 'farewells', 0]]);
+
+	const match = { trigger: ':farewell', replace: 'Mine now' };
+	for (const write of [
+		store.updateMatch(team('package.yml'), { index: 0, match, version: file.version }),
+		store.createMatch(team('package.yml'), { match, version: file.version }),
+		store.deleteMatch(team('package.yml'), { index: 0, version: file.version }),
+		store.saveRaw(team('package.yml'), { text: 'matches: []\n', version: file.version }),
+		store.setHeader(team('package.yml'), { description: 'x', prefix: '', version: file.version }),
+		store.deleteFile(team('package.yml'), { version: file.version }),
+	]) {
+		await rejectsWithCode(write, 'READ_ONLY');
+	}
+	assert.equal(read(dir, 'package.yml'), before);
+});
+
+test('a link in a team package, or a team package that is a link, is not read', async () => {
+	const { store, root, matchDir, dir } = withTeam();
+	writeFileSync(join(root, 'outside.yml'), 'matches:\n  - trigger: ":leak"\n    replace: "outside the folder"\n');
+	symlinkSync(join(root, 'outside.yml'), join(dir, 'linked.yml'));
+	mkdirSync(join(root, 'elsewhere'));
+	writeFileSync(join(root, 'elsewhere', 'package.yml'), 'matches:\n  - trigger: ":elsewhere"\n    replace: "x"\n');
+	symlinkSync(join(root, 'elsewhere'), join(matchDir, 'team', 'linked'));
+
+	const inv = await store.inventory();
+	assert.deepEqual(inv.team.map((pkg) => [pkg.name, pkg.files.map((file) => file.name)]), [['farewells', ['package.yml']]]);
+	await rejectsWithCode(store.readFile(team('linked.yml')), 'NOT_FOUND');
+	await rejectsWithCode(store.readFile(team('package.yml', 'linked')), 'NOT_FOUND');
+	assert.deepEqual(await store.search('leak'), []);
+	assert.deepEqual(await store.search('elsewhere'), []);
+});
+
+test('a team file is named by a package name and a file name, nothing else', async () => {
+	const { store } = withTeam();
+	for (const ref of [team('package.yml', '../packages/goodbyes'), team('../../base.yml'), team('package.yml', ''), { source: 'team', name: 'package.yml' }, { source: 'shared', package: 'farewells', name: 'package.yml' }]) {
+		await rejectsWithCode(store.readFile(ref), 'INVALID_NAME');
+	}
+});

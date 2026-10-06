@@ -376,3 +376,30 @@ test('the reply to a bug is exactly the plain error and nothing more', async (t)
 	const handle = createRouter({ service: { ...service, state: async () => { throw new Error('secret detail'); } }, log: () => {} });
 	assert.deepEqual(await handle({ method: 'GET', path: '/api/v1/state' }), { status: 500, body: { error: { code: 'ERROR', message: 'Something went wrong inside the app.' } } });
 });
+
+// --- team files -------------------------------------------------------------------
+
+test('an installed team file is read by its id, listed in /state, searched, and refused for every write', async (t) => {
+	const { call, matchDir } = await setup(t);
+	const dir = join(matchDir, 'team', 'farewells');
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, '_manifest.yml'), 'name: farewells\ntitle: Farewells\n');
+	writeFileSync(join(dir, 'package.yml'), 'matches:\n  - trigger: ":farewell"\n    replace: "Farewell."\n');
+	assert.deepEqual(refFromId('team:farewells:package.yml'), { source: 'team', package: 'farewells', name: 'package.yml' });
+
+	const state = (await call('GET', '/api/v1/state')).body;
+	assert.deepEqual(state.team.map((pkg) => [pkg.name, pkg.title, pkg.files.map((file) => file.id)]), [['farewells', 'Farewells', ['team:farewells:package.yml']]]);
+	const path = at('team:farewells:package.yml');
+	const file = await call('GET', path);
+	assert.deepEqual([file.status, file.body.source, file.body.readOnly, file.body.matches.length], [200, 'team', true, 1]);
+	assert.deepEqual((await call('GET', '/api/v1/search', { query: { q: 'farewell' } })).body.map((hit) => hit.fileId), ['team:farewells:package.yml']);
+
+	const { version } = file.body;
+	const match = { trigger: ':farewell', replace: 'Mine' };
+	assert.deepEqual(code(await call('PUT', path + '/snippets/0', { body: { match, version } })), [403, 'READ_ONLY']);
+	assert.deepEqual(code(await call('POST', path + '/snippets', { body: { match, version } })), [403, 'READ_ONLY']);
+	assert.deepEqual(code(await call('PUT', path + '/raw', { body: { text: 'matches: []\n', version } })), [403, 'READ_ONLY']);
+	assert.deepEqual(code(await call('DELETE', path, { query: { version } })), [403, 'READ_ONLY']);
+	assert.deepEqual(code(await call('GET', at('team:farewells'))), [400, 'INVALID_NAME']);
+	assert.deepEqual(code(await call('GET', at('team:../x:package.yml'))), [400, 'INVALID_NAME']);
+});
