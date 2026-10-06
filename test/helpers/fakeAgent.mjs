@@ -6,9 +6,13 @@
 // format as the tool it stands in for. What it "says" and which tools it
 // calls are scripted by the person's message, one step per line:
 //
-//   SAY <text>                 answer with this text
+//   SAY <text>                 answer with this text (\\n in it is a new line)
 //   SEARCH <words>             call snippets_search
 //   ADD <trigger>=<text>       read base.yml, then call snippets_add_snippet
+//   UPDATE <position>=<text>   read that snippet of base.yml, then call snippets_update_snippet
+//   DELETE <position>          read base.yml, then call snippets_delete_snippet
+//   COMMAND <trigger>          propose a snippet that runs a command
+//   WAIT <milliseconds>        pause
 //   HANG                       stop printing and stay alive
 //   FLOOD                      print text without end
 //   EXIT <code> <stderr>       end at once with this code, saying this on standard error
@@ -135,7 +139,19 @@ if (codex) {
 for (const step of steps) {
 	const [word, ...rest] = step.split(' ');
 	const text = rest.join(' ');
-	if (word === 'SAY') say(text);
+	if (word === 'SAY') say(text.replaceAll('\\n', '\n'));
+	else if (word === 'WAIT') await new Promise((resolve) => setTimeout(resolve, Number(text)));
+	else if (word === 'UPDATE') {
+		const [position, replace] = text.split('=');
+		const found = await use('snippets_get_snippet', { file_id: 'local:base.yml', index: Number(position) });
+		await use('snippets_update_snippet', { file_id: 'local:base.yml', index: Number(position), snippet: { ...found.structuredContent.snippet, replace: replace.replaceAll('\\n', '\n') }, version: found.structuredContent.version });
+	} else if (word === 'DELETE') {
+		const file = await use('snippets_get_file', { file_id: 'local:base.yml' });
+		await use('snippets_delete_snippet', { file_id: 'local:base.yml', index: Number(text), version: file.structuredContent.version });
+	} else if (word === 'COMMAND') {
+		const file = await use('snippets_get_file', { file_id: 'local:base.yml' });
+		await use('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: text, replace: '{{ip}}', vars: [{ name: 'ip', type: 'shell', params: { cmd: 'ipconfig getifaddr en0' } }] }, version: file.structuredContent.version });
+	}
 	else if (word === 'SEARCH') await use('snippets_search', { query: text });
 	else if (word === 'ADD') {
 		const [trigger, replace] = text.split('=');

@@ -23,7 +23,7 @@ function storage({ quota = Infinity, broken = false } = {}) {
 
 const message = (id, role, text, extra = {}) => ({ id, role, text, ...(role === 'assistant' ? { backend: 'codex', tools: [], cards: [], ending: 'done', error: null } : {}), ...extra });
 const conversation = (id, updatedAt, messages = [message(`${id}-1`, 'user', `Question ${id}`), message(`${id}-2`, 'assistant', `Answer ${id}`)]) => ({ id, title: `Conversation ${id}`, updatedAt, messages });
-const card = (extra = {}) => ({ id: 'abc123', tool: 'snippets_add_snippet', kind: 'add', title: 'Add a snippet to base.yml', subject: ';x', fileId: 'local:base.yml', fileName: 'base.yml', before: null, after: '- trigger: ";x"\n', lines: [], warnings: [], status: 'applied', message: null, code: null, link: null, ...extra });
+const card = (extra = {}) => ({ id: 'abc123', tool: 'snippets_add_snippet', kind: 'add', title: 'Add a snippet to base.yml', subject: ';x', fileId: 'local:base.yml', fileName: 'base.yml', before: null, after: '- trigger: ";x"\n', lines: [], warnings: [], status: 'applied', message: null, code: null, link: null, at: null, ...extra });
 
 // --- history -------------------------------------------------------------------------------
 
@@ -72,6 +72,9 @@ test('a card is kept small, and one that was still waiting when the app closed c
 	assert.equal(loaded[0].after, loaded[0].before);
 	assert.equal(loaded[3].message, 'This changed after the proposal was made. Ask again.');
 	assert.deepEqual(Object.keys(loaded[2]).sort(), Object.keys(card()).sort());
+	// Where in the answer a card came is kept, when it is a sound number.
+	store.save({ ...emptyState(), conversations: [conversation('a', 1, [message('m1', 'user', 'Go'), message('m2', 'assistant', 'Before. After.', { cards: [card({ id: 'x', at: 8 }), card({ id: 'y', at: -1 }), card({ id: 'z', at: 'far' })] })])] });
+	assert.deepEqual(store.load().conversations[0].messages[1].cards.map((item) => item.at), [8, null, null]);
 });
 
 test('an answer that was under way when the app closed comes back as stopped', () => {

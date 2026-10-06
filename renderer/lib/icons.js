@@ -60,6 +60,13 @@ const PATHS = {
 			d="M16 3.13a4 4 0 0 1 0 7.75"
 		/>`,
 	download: html`<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" />`,
+	chat: html`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />`,
+	more: html`<circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" />`,
+	send: html`<path d="m5 12 7-7 7 7" /><path d="M12 19V5" />`,
+	stop: html`<rect width="12" height="12" x="6" y="6" rx="2" />`,
+	history: html`<circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />`,
+	expand: html`<path d="M15 3h6v6" /><path d="m21 3-7 7" /><path d="m3 21 7-7" /><path d="M9 21H3v-6" />`,
+	shrink: html`<path d="m14 10 7-7" /><path d="M20 10h-6V4" /><path d="m3 21 7-7" /><path d="M4 14h6v6" />`,
 	'pull-request': html`<circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M13 6h3a2 2 0 0 1 2 2v7" /><path d="M6 9v12" />`,
 };
 

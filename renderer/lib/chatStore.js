@@ -51,6 +51,8 @@ function cardOf(raw, { reopened }) {
 		message: textOr(raw.message, null),
 		code: textOr(raw.code, null),
 		link: textOr(raw.link, null),
+		// How far into the answer's text the card came.
+		at: Number.isInteger(raw.at) && raw.at >= 0 ? raw.at : null,
 	};
 }
 

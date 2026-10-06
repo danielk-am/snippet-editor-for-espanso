@@ -1,9 +1,11 @@
 import { html, render, useCallback, useEffect, useRef, useState } from './vendor/preact-htm.js';
 import { matchTriggers } from '../shared/snippetModel.js';
 import { api, allFiles, findFile, platform, sourceLabel } from './lib/api.js';
+import { chatInitial } from './lib/chatSession.js';
 import { Icon } from './lib/icons.js';
 import { toText } from '../shared/text.js';
 import { Button, ConfirmDialog, Empty, ErrorBoundary, IconButton, ToastProvider } from './lib/ui.js';
+import { ChatPanel } from './components/ChatPanel.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FileDetailsDialog, NewFileDialog } from './components/dialogs.js';
 import { FileView } from './components/FileView.js';
@@ -15,6 +17,8 @@ import { SnippetEditor } from './components/SnippetEditor.js';
 import { TeamPage } from './components/TeamPage.js';
 
 const NARROW = '(max-width: 900px)';
+// Below this the assistant covers the page instead of sitting beside it.
+const CHAT_SHEET = '(max-width: 1119px)';
 const MOD = platform === 'darwin' ? '⌘' : 'Ctrl';
 
 // Preferences that belong to this window rather than to the snippets live in
@@ -82,6 +86,10 @@ function App() {
 	const [width, setWidthState] = useState(() => clampWidth(Number(stored.get('sidebar-width', 272)) || 272));
 	const dirty = useRef(false);
 	const content = useRef(null);
+	const [chatPrefs, setChatPrefsState] = useState(chatInitial.prefs);
+	const setChatPrefs = useCallback((changes) => setChatPrefsState((prefs) => ({ ...prefs, ...changes })), []);
+	const chatSheet = useMediaQuery(CHAT_SHEET);
+	const toggleChat = () => setChatPrefsState((prefs) => ({ ...prefs, open: !prefs.open }));
 
 	const refresh = useCallback(async () => {
 		try {
@@ -142,6 +150,7 @@ function App() {
 		{ icon: 'list', label: 'Go to All snippets', run: () => navigate({ view: 'all' }) },
 		{ icon: 'team', label: 'Go to Team packages', run: () => navigate({ view: 'team' }) },
 		{ icon: 'settings', label: 'Go to Settings', hint: `${MOD} ,`, run: () => navigate({ view: 'settings' }) },
+		{ icon: 'chat', label: chatPrefs.open ? 'Hide the assistant' : 'Show the assistant', hint: `${MOD} J`, run: toggleChat },
 		{ icon: 'sun', label: 'Use the light theme', run: () => setTheme('light') },
 		{ icon: 'moon', label: 'Use the dark theme', run: () => setTheme('dark') },
 		{ icon: 'monitor', label: 'Match the system theme', run: () => setTheme('system') },
@@ -155,6 +164,7 @@ function App() {
 		// One modal at a time: the palette does not open over a dialog.
 		search: () => (palette || !document.querySelector('.overlay')) && setPalette(!palette),
 		settings: () => navigate({ view: 'settings' }),
+		assistant: toggleChat,
 	};
 	useEffect(() => {
 		const off = api.on('menu:command', (name) => commands.current[name]?.());
@@ -162,6 +172,10 @@ function App() {
 			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
 				event.preventDefault();
 				commands.current.search();
+			}
+			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
+				event.preventDefault();
+				commands.current.assistant();
 			}
 		};
 		window.addEventListener('keydown', onKey);
@@ -189,6 +203,7 @@ function App() {
 	}
 
 	const snippetCount = allFiles(state).reduce((sum, file) => sum + (file.matchCount ?? 0), 0);
+	const chatState = !chatPrefs.open ? 'closed' : chatPrefs.wide && !chatSheet ? 'wide' : 'side';
 	const missingFile = (route.view === 'file' || route.view === 'snippet') && !routeFile;
 	const sidebarState = narrow ? (drawer ? 'open' : 'collapsed') : collapsed ? 'collapsed' : 'open';
 
@@ -253,7 +268,11 @@ function App() {
 		/>`;
 	}
 
-	return html`<div class="app" data-sidebar=${sidebarState} style=${{ '--sidebar-width': `${width}px` }}>
+	// What the assistant is told is open: the file, and the snippet when one is.
+	const openMatch = routeFile && route.view === 'snippet' && Number.isInteger(route.index) ? routeFile.matches?.[route.index] : null;
+	const chatContext = routeFile ? { fileId: routeFile.id, fileName: routeFile.name, ...(openMatch ? { index: route.index, trigger: matchTriggers(openMatch)[0] ?? '' } : {}) } : null;
+
+	return html`<div class="app" data-sidebar=${sidebarState} data-chat=${chatState} style=${{ '--sidebar-width': `${width}px`, '--chat-width': `${chatPrefs.width}px` }}>
 		<${Sidebar}
 			state=${state}
 			route=${route}
@@ -277,6 +296,7 @@ function App() {
 					<kbd class="kbd">${MOD} K</kbd>
 				</button>
 				<${Button} icon="plus" onClick=${() => newSnippet()}>New snippet<//>
+				<${IconButton} label=${chatPrefs.open ? 'Hide the assistant' : 'Show the assistant'} icon="chat" aria-pressed=${chatPrefs.open ? 'true' : 'false'} onClick=${toggleChat} />
 			</header>
 			<main class="content" ref=${content}>
 				<${ErrorBoundary}
@@ -292,6 +312,18 @@ function App() {
 				<//>
 			</main>
 		</div>
+
+		<${ChatPanel}
+			open=${chatPrefs.open}
+			sheet=${chatSheet}
+			prefs=${chatPrefs}
+			setPrefs=${setChatPrefs}
+			context=${chatContext}
+			isDirty=${(fileId) => dirty.current && route.fileId === fileId}
+			refresh=${refresh}
+			navigate=${navigate}
+			onClose=${() => setChatPrefs({ open: false })}
+		/>
 
 		${palette && html`<${CommandPalette} state=${state} actions=${actions} navigate=${navigate} onClose=${() => setPalette(false)} />`}
 		${newFile &&
