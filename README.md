@@ -162,3 +162,7 @@ Not rebuilt in this version:
 - The original branded icon. The packages use a new icon drawn from the sidebar mark.
 
 One behaviour is a best guess. The original applied a file's trigger prefix to its snippets, and the records do not say exactly when. Here the prefix is offered as the start of each new trigger and existing triggers are never rewritten.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE). The one vendored file, Preact with htm, keeps its own licences in `renderer/vendor/`.

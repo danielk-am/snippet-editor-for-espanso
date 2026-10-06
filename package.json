@@ -7,6 +7,7 @@
   "type": "module",
   "description": "A no-build Electron editor for Espanso match files: browse, search and edit snippets without hand-writing YAML. A rebuild of Snippet Manager for Espanso.",
   "author": "Daniel Kam",
+  "license": "MIT",
   "main": "electron/main.js",
   "engines": {
     "node": ">=22"

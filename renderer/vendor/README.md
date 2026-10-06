@@ -11,4 +11,6 @@ To update it, bump `htm` in `package.json`, run `npm install`, then:
 cp node_modules/htm/preact/standalone.module.js renderer/vendor/preact-htm.js
 ```
 
+Their licences are beside it: `LICENSE-htm.txt` and `LICENSE-preact.txt`.
+
 The icon paths in `renderer/lib/icons.js` follow Lucide (ISC).
