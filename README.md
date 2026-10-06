@@ -71,7 +71,7 @@ Espanso's match folder is the only store. There is no database, so nothing can d
 
 - **An edit changes only what you edited.** The app never regenerates a file. It finds the value you changed and splices the new text in at that spot, so every other byte stays as you wrote it: comments, blank lines, indentation, quoting, `imports`, `global_vars` and the other snippets.
 - **Each edit is checked before it is saved.** The result is parsed again. The snippet must read back as intended and everything else must read back unchanged. If that cannot be shown, the edit is refused and you are pointed to the raw editor. Nothing is written.
-- **Text is read the way Espanso reads it.** An unquoted `02134` or `+6591234567` is shown as those characters, not as a number.
+- **Text is read the way Espanso reads it.** An unquoted `02134` or `+6591234567` is shown as those characters, not as a number. `npm run test:espanso` checks this against the Espanso installed on your computer.
 - **A save writes only the fields you changed.** A field you did not touch keeps its exact value and type. List entries are saved as typed, including a trailing space in a trigger.
 - **Backups.** Before each save or delete, the previous version of the file is copied to the backups folder. The newest 20 copies of each file are kept, separately for each match folder.
 - **No overwriting newer changes.** Each write is checked against a fingerprint of the file as the editor opened it, and once more just before the swap. If another program changed the file, the write is refused and you are asked to reload.
@@ -124,6 +124,12 @@ npm test
 ```
 
 Runs the unit tests with Node's built-in runner. One of them generates 1,500 match files in different styles from a fixed seed, edits each, and checks that no byte outside the edited snippet changed.
+
+```bash
+npm run test:espanso
+```
+
+Asks the real Espanso program to read files this app has written, in a temporary folder, and checks that it sees each snippet as written. It needs Espanso installed and skips itself if it is not. It passes with Espanso 2.4.1.
 
 ```bash
 npm run test:ui

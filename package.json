@@ -17,6 +17,7 @@
     "test": "node --test \"test/*.test.js\"",
     "test:ui": "electron test/ui-smoke.mjs",
     "test:packaged": "node test/packaged-smoke.mjs",
+    "test:espanso": "node test/espanso-check.mjs",
     "icon": "electron scripts/make-icon.mjs",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac --win --linux",
