@@ -26,7 +26,8 @@ import { createRunner } from './run.js';
 // three endings, nothing of it is left running or on disk.
 
 const LABEL = { claude: 'Claude Code', codex: 'Codex', ollama: 'Ollama' };
-const LIMITS = { idleMs: 120_000, totalMs: 600_000, maxText: 1_000_000, statusMs: 60_000 };
+// A model on this computer can take a while to load before its first word.
+const LIMITS = { idleMs: 120_000, ollamaIdleMs: 180_000, totalMs: 600_000, maxText: 1_000_000, statusMs: 60_000 };
 // An answer that ended this way says the backend itself needs looking at again.
 const BACKEND_FAULTS = new Set(['SIGNED_OUT', 'MISSING', 'OLD', 'NOT_RUNNING']);
 const TOO_LONG = { type: 'error', code: 'TOO_LONG', message: 'The answer was too long, so it was stopped.' };
@@ -35,7 +36,7 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const count = (number) => number.toLocaleString('en-US');
 
 export function createChat({ service, router, dataDir, mcp, emit, backends = createBackends(), runner = createRunner(), ollama = createOllama(), log = console.error, limits = {} }) {
-	const { idleMs, totalMs, maxText, statusMs } = { ...LIMITS, ...limits };
+	const { idleMs, ollamaIdleMs, totalMs, maxText, statusMs } = { ...LIMITS, ...limits };
 	const chatDir = path.join(dataDir, 'chat');
 	// Where the programs run: a folder with nothing in it, so no file there
 	// can hand them instructions or tools.
@@ -52,12 +53,15 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 		return list;
 	};
 
-	const proposals = createProposals({
-		router,
-		aiWrite: () => service.settings().aiWrite,
-		onCard: (card) => emit({ turnId: active?.id ?? null, type: 'proposal', card }),
-		log,
-	});
+	const proposals = createProposals({ router, aiWrite: () => service.settings().aiWrite, log });
+	// The way in for one answer's proposals. A card carries the name of the
+	// answer that asked for it, and none is made once that answer is over.
+	const proposalsOf = (turn) =>
+		proposals.forTurn({
+			turnId: turn.id,
+			isOpen: () => turn.open,
+			onCard: (card, turnId) => emit({ turnId, type: 'proposal', card }),
+		});
 
 	// Once: the folders, and nothing left over from a run that crashed.
 	const prepare = () =>
@@ -73,7 +77,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 	async function viaProgram(turn, id, input) {
 		const label = LABEL[id];
 		await prepare();
-		const channel = await openChannel({ dir: chatDir, router, onProposal: (proposal) => proposals.receive(proposal), log });
+		const channel = await openChannel({ dir: chatDir, router, onProposal: (proposal) => proposalsOf(turn).receive(proposal), log });
 		let configFile = null;
 		try {
 			if (turn.stopped) return { type: 'stopped' };
@@ -148,8 +152,10 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			ollama,
 			model,
 			messages: promptMessages(input),
-			tools: proposals.tools,
+			tools: proposalsOf(turn).tools,
 			signal: stopper.signal,
+			idleMs: ollamaIdleMs,
+			totalMs,
 			maxText,
 			onEvent(event) {
 				if (event.type === 'done' || event.type === 'error') ending = event;
@@ -171,6 +177,8 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			ending = { type: 'error', code: 'ERROR', message: 'Something went wrong inside the app.' };
 		}
 		if (BACKEND_FAULTS.has(ending.code)) known = null;
+		// Over: a card still being worked out for this answer is no longer wanted.
+		turn.open = false;
 		// Free before the ending is told, so the next message can follow it at once.
 		if (active === turn) active = null;
 		emit({ turnId: turn.id, ...ending });
@@ -190,10 +198,12 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			if (active) throw fail('BUSY', 'An answer is under way. Wait for it, or stop it first.');
 
 			// The place is taken before anything is waited for.
-			const turn = { id: randomBytes(8).toString('hex'), stopped: false, stop: () => {}, finished: null };
+			const turn = { id: randomBytes(8).toString('hex'), open: true, stopped: false, stop: () => {}, finished: null };
 			active = turn;
 			try {
 				const list = known && Date.now() - known.at < statusMs ? known.list : await look();
+				// The app began to close while that was being looked up.
+				if (closed) throw fail('CLOSED', 'The app is closing.');
 				const entry = list.find((item) => item.id === id);
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
 				if (id === 'ollama' && !entry.models.some((model) => model.name === input.model)) throw fail('INVALID', "Choose one of Ollama's models first.");
@@ -209,6 +219,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 		stop(turnId) {
 			if (!active || active.id !== turnId) return;
 			active.stopped = true;
+			active.open = false;
 			active.stop();
 		},
 
@@ -217,6 +228,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 		stopAny() {
 			if (!active) return;
 			active.stopped = true;
+			active.open = false;
 			active.stop();
 		},
 
@@ -228,6 +240,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			const turn = active;
 			if (turn) {
 				turn.stopped = true;
+				turn.open = false;
 				turn.stop();
 				await turn.finished;
 			}

@@ -17,6 +17,10 @@ import { StringDecoder } from 'node:string_decoder';
 // Ollama was not installed on the computer this was built on.
 
 const MOST = 500;
+// What one round may hold: tools asked for at once, thinking, and one line.
+const MAX_CALLS = 20;
+const MAX_THINKING = 400_000;
+const MAX_LINE = 8 * 1024 * 1024;
 const coded = (code, message) => Object.assign(new Error(message), { code });
 const NOT_RUNNING = () => coded('NOT_RUNNING', 'Ollama is not answering on this computer.');
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -130,8 +134,16 @@ export function createOllama({ port = 11434, quickMs = 1500 } = {}) {
 						if (!isObject(chunk)) return;
 						if (typeof chunk.error === 'string') return drop(coded('FAILED', `Ollama said: ${chunk.error}`.slice(0, MOST)));
 						const message = isObject(chunk.message) ? chunk.message : {};
-						if (typeof message.thinking === 'string') reply.thinking += message.thinking;
-						if (Array.isArray(message.tool_calls)) reply.toolCalls.push(...message.tool_calls);
+						if (typeof message.thinking === 'string') {
+							reply.thinking += message.thinking;
+							if (reply.thinking.length > MAX_THINKING) return drop(coded('TOO_LONG', 'The answer was too long, so it was stopped.'));
+						}
+						if (Array.isArray(message.tool_calls)) {
+							if (reply.toolCalls.length + message.tool_calls.length > MAX_CALLS) {
+								return drop(coded('FAILED', `Ollama asked for more tools at once than the app runs (${MAX_CALLS} at most).`));
+							}
+							for (const call of message.tool_calls) reply.toolCalls.push(call);
+						}
 						if (typeof message.content === 'string' && message.content) {
 							reply.content += message.content;
 							try {
@@ -150,6 +162,10 @@ export function createOllama({ port = 11434, quickMs = 1500 } = {}) {
 							const line = pending.slice(0, at);
 							pending = pending.slice(at + 1);
 							take(line);
+						}
+						if (pending.length > MAX_LINE) {
+							pending = '';
+							drop(coded('FAILED', 'Ollama sent a line longer than the app reads.'));
 						}
 					});
 					response.on('end', () => {
@@ -180,11 +196,11 @@ function inputsOf(given) {
 	}
 }
 
-const REPORTED = new Set(['NOT_RUNNING', 'NO_TOOLS', 'SIGNED_OUT', 'FAILED', 'IDLE', 'TOO_LONG']);
+const REPORTED = new Set(['NOT_RUNNING', 'NO_TOOLS', 'SIGNED_OUT', 'FAILED', 'IDLE', 'TOO_LONG', 'TIMEOUT']);
 
 // One message answered, as the same events the other backends give. It ends
 // with `done` or `error`, or with neither when the person stopped it.
-export async function ollamaTurn({ ollama, model, messages, tools, onEvent, signal, maxSteps = 8, idleMs, maxText = 1_000_000 }) {
+export async function ollamaTurn({ ollama, model, messages, tools, onEvent, signal, maxSteps = 8, idleMs, totalMs = 600_000, maxText = 1_000_000 }) {
 	const offered = tools.list().map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } }));
 	const history = [...messages];
 	const stopped = () => signal?.aborted === true;
@@ -192,13 +208,23 @@ export async function ollamaTurn({ ollama, model, messages, tools, onEvent, sign
 	let afterTool = false;
 	let length = 0;
 
+	// The whole answer has a time limit, however many rounds it takes and
+	// whatever it is doing: writing, thinking, or waiting on a tool.
+	const limit = new AbortController();
+	const timer = setTimeout(() => limit.abort(), totalMs);
+	const outOfTime = () => limit.signal.aborted;
+	const either = signal ? AbortSignal.any([signal, limit.signal]) : limit.signal;
+	// A tool can take a while (the team's repository, a large file). A stop,
+	// or the time running out, does not wait for it.
+	const interrupted = new Promise((resolve) => either.addEventListener('abort', () => resolve(null), { once: true }));
+
 	try {
 		for (let step = 1; step <= maxSteps; step += 1) {
 			const reply = await ollama.chat({
 				model,
 				messages: history,
 				tools: offered,
-				signal,
+				signal: either,
 				idleMs,
 				onContent(text) {
 					length += text.length;
@@ -209,6 +235,7 @@ export async function ollamaTurn({ ollama, model, messages, tools, onEvent, sign
 				},
 			});
 			if (stopped()) return;
+			if (outOfTime()) break;
 			if (!reply.toolCalls.length) return void onEvent({ type: 'done' });
 
 			history.push({ role: 'assistant', content: reply.content, ...(reply.thinking ? { thinking: reply.thinking } : {}), tool_calls: reply.toolCalls });
@@ -216,18 +243,25 @@ export async function ollamaTurn({ ollama, model, messages, tools, onEvent, sign
 				const id = `call-${step}-${position + 1}`;
 				const name = String(call?.function?.name ?? '');
 				onEvent({ type: 'tool', id, name, status: 'started' });
-				const result = await tools.call(name, inputsOf(call?.function?.arguments));
+				const result = await Promise.race([tools.call(name, inputsOf(call?.function?.arguments)), interrupted]);
 				if (stopped()) return;
+				if (outOfTime()) break;
 				const failed = result === null || result.isError === true;
 				onEvent({ type: 'tool', id, name, status: failed ? 'failed' : 'done' });
 				history.push({ role: 'tool', tool_name: name, content: result === null ? `There is no tool named ${name}.` : result.content.map((part) => part.text).join('\n') });
 			}
+			if (outOfTime()) break;
 			afterTool = true;
 		}
-		onEvent({ type: 'error', code: 'STEPS', message: `The assistant used tools ${maxSteps} times without finishing, so it was stopped.` });
+		if (outOfTime()) onEvent({ type: 'error', code: 'TIMEOUT', message: 'Ollama took too long, so it was stopped.' });
+		else onEvent({ type: 'error', code: 'STEPS', message: `The assistant used tools ${maxSteps} times without finishing, so it was stopped.` });
 	} catch (error) {
-		if (stopped() || error?.code === 'STOPPED') return;
+		if (stopped()) return;
+		if (outOfTime()) return void onEvent({ type: 'error', code: 'TIMEOUT', message: 'Ollama took too long, so it was stopped.' });
+		if (error?.code === 'STOPPED') return;
 		if (!REPORTED.has(error?.code)) throw error;
 		onEvent({ type: 'error', code: error.code, message: error.message });
+	} finally {
+		clearTimeout(timer);
 	}
 }

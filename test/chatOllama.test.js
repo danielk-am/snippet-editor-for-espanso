@@ -223,3 +223,73 @@ test('stopped while a tool is running: no further request is made', async (t) =>
 	assert.equal(context.requests.length, 1);
 	assert.deepEqual(events, [{ type: 'tool', id: 'call-1-1', name: 'snippets_search', status: 'started' }]);
 });
+
+// --- limits ---------------------------------------------------------------------------------
+
+test('an answer that keeps coming is stopped when its whole time is up, even if it is only thinking', async (t) => {
+	const thinking = Array.from({ length: 400 }, () => said('', { thinking: 'still thinking ' }));
+	const context = await standIn(t, { answers: [{ chunks: thinking }], chunkDelay: 25 });
+	const began = Date.now();
+	const { events } = await turn(context, { totalMs: 400, idleMs: 5000 });
+	assert.deepEqual(events, [{ type: 'error', code: 'TIMEOUT', message: 'Ollama took too long, so it was stopped.' }]);
+	assert.ok(Date.now() - began < 3000);
+});
+
+test('thinking without end, a line without end, and more tools at once than is sane are each stopped', async (t) => {
+	const much = await standIn(t, { answers: [{ chunks: Array.from({ length: 60 }, () => said('', { thinking: 't'.repeat(10_000) })) }] });
+	assert.deepEqual((await turn(much)).events, [{ type: 'error', code: 'TOO_LONG', message: 'The answer was too long, so it was stopped.' }]);
+
+	const call = { type: 'function', function: { name: 'snippets_search', arguments: { query: 'x' } } };
+	const many = await standIn(t, { answers: [{ chunks: [said('', { tool_calls: Array.from({ length: 5000 }, () => call) }), END] }] });
+	const result = await turn(many);
+	assert.deepEqual(result.events, [{ type: 'error', code: 'FAILED', message: 'Ollama asked for more tools at once than the app runs (20 at most).' }]);
+	assert.deepEqual(result.tools.called, []);
+	// Twenty-one, spread over two pieces of one answer, is one too many as well.
+	const spread = await standIn(t, { answers: [{ chunks: [said('', { tool_calls: Array.from({ length: 20 }, () => call) }), said('', { tool_calls: [call] }), END] }] });
+	assert.equal((await turn(spread)).events[0].message, 'Ollama asked for more tools at once than the app runs (20 at most).');
+	// A great many more, in one line of many megabytes: stopped, and nothing is thrown.
+	const huge = await standIn(t, { answers: [{ chunks: [said('', { tool_calls: Array.from({ length: 200_000 }, () => call) }), END] }] });
+	const stopped = await turn(huge);
+	assert.deepEqual([stopped.events.length, stopped.events[0].code, stopped.tools.called.length], [1, 'FAILED', 0]);
+
+	// One line that never ends.
+	const http = await import('node:http');
+	const endless = http.createServer((request, response) => {
+		response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+		const timer = setInterval(() => response.write('{"message":{"role":"assistant","content":"' + 'x'.repeat(1_000_000)), 5);
+		response.on('close', () => clearInterval(timer));
+	});
+	await new Promise((resolve) => endless.listen(0, '127.0.0.1', resolve));
+	t.after(() => {
+		endless.closeAllConnections();
+		endless.close();
+	});
+	const events = [];
+	await ollamaTurn({ ollama: createOllama({ port: endless.address().port }), model: 'm', messages: [], tools: fakeTools(), onEvent: (event) => events.push(event) });
+	assert.deepEqual(events, [{ type: 'error', code: 'FAILED', message: 'Ollama sent a line longer than the app reads.' }]);
+});
+
+test('exactly twenty tools at once are run', async (t) => {
+	const context = await standIn(t, { answers: [{ chunks: [calls(...Array.from({ length: 20 }, (_, index) => ['snippets_search', { query: `q${index}` }])), END] }, { chunks: [said('Done.'), END] }] });
+	const { events, tools } = await turn(context);
+	assert.equal(tools.called.length, 20);
+	assert.deepEqual(events.at(-1), { type: 'done' });
+});
+
+test('stopped while a tool is still working: the answer ends at once, and does not wait for the tool', async (t) => {
+	const context = await standIn(t, { answers: [{ chunks: [calls(['snippets_search', { query: 'x' }]), END] }, { chunks: [said('never'), END] }] });
+	const stopper = new AbortController();
+	let finishTool;
+	const tools = fakeTools();
+	tools.call = () => new Promise((resolve) => (finishTool = () => resolve({ content: [{ type: 'text', text: '{}' }], structuredContent: {}, isError: false })));
+	const events = [];
+	const running = ollamaTurn({ ollama: context.ollama, model: 'm', messages: [], tools, signal: stopper.signal, onEvent: (event) => events.push(event) });
+	while (!finishTool) await wait(10);
+	stopper.abort();
+	await running;
+	assert.deepEqual(events, [{ type: 'tool', id: 'call-1-1', name: 'snippets_search', status: 'started' }]);
+	finishTool();
+	await wait(50);
+	assert.equal(events.length, 1);
+	assert.equal(context.requests.length, 1);
+});

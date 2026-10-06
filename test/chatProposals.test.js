@@ -302,13 +302,90 @@ test('a snippet that runs a command carries a warning, and Apply is the answer t
 	assert.deepEqual((await file(BASE)).matches.at(-1), snippet);
 });
 
-test('text too long to check for commands says so on its card', async (t) => {
-	const { propose, version } = await setup(t);
+test('text too long to check for commands, or to read on a card, is not made into a card', async (t) => {
+	const { propose, version, cards } = await setup(t);
 	const long = `matches:\n${Array.from({ length: 9000 }, (_, index) => `  - trigger: ":t${index}"\n    replace: "reply number ${index}"\n`).join('')}`;
 	assert.ok(long.length > 256 * 1024);
-	const card = await propose('snippets_replace_file_yaml', { file_id: BASE, yaml: long, version: await version(BASE) });
-	assert.deepEqual(card.warnings, ['This text is too long to check for snippets that run commands. Read it before you apply.']);
+	const result = await propose('snippets_replace_file_yaml', { file_id: BASE, yaml: long, version: await version(BASE) });
+	assert.equal(result.error, 'That text is too long to show on a card (over 256 KB). Ask the person to make this change in the raw editor, or change the snippets one at a time.');
+	assert.deepEqual(cards, []);
 });
+
+test('what a card was made from cannot be changed afterwards by whoever asked for it', async (t) => {
+	const { proposals, version, file } = await setup(t);
+	const args = { file_id: BASE, snippet: { trigger: ';x', replace: 'As shown on the card', vars: [] }, version: await version(BASE) };
+	const made = await proposals.tools.call('snippets_add_snippet', args);
+	// The caller still holds the object it passed in.
+	args.snippet.replace = 'Swapped after the card was made';
+	args.snippet.vars.push({ name: 'o', type: 'shell', params: { cmd: 'echo ran' } });
+	args.file_id = 'local:dates.yml';
+	assert.equal((await proposals.apply(made.structuredContent.proposal_id)).status, 'applied');
+	assert.deepEqual((await file(BASE)).matches.at(-1), { trigger: ';x', replace: 'As shown on the card', vars: [] });
+});
+
+test('a trigger that is not text is refused when proposed, in words that say how to write it', async (t) => {
+	const { propose, version, cards } = await setup(t);
+	const v = await version(BASE);
+	for (const snippet of [{ trigger: 123, replace: 'x' }, { triggers: [';a', 7], replace: 'x' }, { trigger: true, replace: 'x' }, { regex: 5, replace: 'x' }]) {
+		const result = await propose('snippets_add_snippet', { file_id: BASE, snippet, version: v });
+		assert.equal(result.error, 'Write each trigger as text, in quotes. Example: {"trigger": "123", "replace": "..."}.', JSON.stringify(snippet));
+	}
+	assert.equal((await propose('snippets_update_snippet', { file_id: BASE, index: 0, snippet: { trigger: 5, replace: 'x' }, version: v })).error, 'Write each trigger as text, in quotes. Example: {"trigger": "123", "replace": "..."}.');
+	assert.deepEqual(cards, []);
+});
+
+test('a card made for one answer belongs to that answer, and one that comes after its answer ended is not made', async (t) => {
+	const { proposals, version, cards } = await setup(t);
+	const seen = [];
+	const state = { open: true };
+	const answer = proposals.forTurn({ turnId: 'turn-a', isOpen: () => state.open, onCard: (card, turnId) => seen.push([turnId, card.subject]) });
+	const v = await version(BASE);
+	const add = (trigger) => ({ file_id: BASE, snippet: { trigger, replace: 'x' }, version: v });
+
+	// From Ollama (the tools, in the app) and from a command-line tool (through the listener).
+	assert.equal((await answer.tools.call('snippets_add_snippet', add(';one'))).isError, false);
+	assert.match((await answer.receive({ tool: 'snippets_add_snippet', args: add(';two') })).id, /^[a-f0-9]{12}$/);
+	assert.deepEqual(seen, [['turn-a', ';one'], ['turn-a', ';two']]);
+
+	// The answer has ended. A card still being worked out is dropped, whichever way it came.
+	state.open = false;
+	const late = await answer.tools.call('snippets_add_snippet', add(';late'));
+	assert.deepEqual([late.isError, late.content[0].text], [true, 'This chat has ended. The person can send their message again.']);
+	await assert.rejects(answer.receive({ tool: 'snippets_add_snippet', args: add(';later') }), (error) => error.code === 'REFUSED' && /^This chat has ended/.test(error.message));
+	assert.equal(proposals.all().length, 2);
+	assert.equal(seen.length, 2);
+	// The general listener hears of cards too.
+	assert.equal(cards.length, 2);
+});
+
+test('the tools the assistant is given cannot write, whatever they are asked to call', async (t) => {
+	const api = await startApi(t, { enabled: false, aiWrite: true });
+	const requests = [];
+	const real = createRouter({ service: api.service, log: () => {} });
+	const proposals = createProposals({
+		router: async (request) => {
+			requests.push(`${request.method} ${request.path}`);
+			return real(request);
+		},
+		aiWrite: () => true,
+	});
+	const before = readFileSync(join(api.matchDir, 'base.yml'), 'utf8');
+	// The app's routes as the assistant's tools reach them: reading only.
+	const reach = proposals.reach;
+	assert.equal((await reach.request('GET', '/state')).status, 200);
+	for (const [method, path, body] of [
+		['POST', '/files', { name: 'x.yml' }],
+		['PUT', `/files/${encodeURIComponent(BASE)}/raw`, { text: 'matches: []\n', version: 'v' }],
+		['DELETE', `/files/${encodeURIComponent(BASE)}/snippets/0`, undefined],
+		['POST', '/team/refresh', {}],
+		['POST', '/yaml/parse', { text: 'a: 1' }],
+	]) {
+		assert.deepEqual(await reach.request(method, path, { body }), { status: 405, body: { error: { code: 'METHOD_NOT_ALLOWED', message: 'In chat a change is a proposal. Nothing is written from here.' } } }, `${method} ${path}`);
+	}
+	assert.deepEqual(requests, ['GET /api/v1/state']);
+	assert.equal(readFileSync(join(api.matchDir, 'base.yml'), 'utf8'), before);
+});
+
 
 // --- refused when proposed ------------------------------------------------------------------
 
@@ -397,6 +474,52 @@ test('installing a team package is a card, with a warning when the package runs 
 
 	// Installed already: the card says it is an update.
 	assert.equal((await propose('snippets_install_team_package', { name: 'support' })).title, 'Update the team package support');
+});
+
+test('installing a package that runs no commands does not say that commands were agreed to', async (t) => {
+	const remote = seeded();
+	const api = await startApi(t, { enabled: false, aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	await api.service.connectTeam(remote.url);
+	const real = createRouter({ service: api.service, log: () => {} });
+	const installs = [];
+	const proposals = createProposals({
+		router: async (request) => {
+			if (request.method === 'PUT' && request.path.includes('/team/packages/')) installs.push(request.body);
+			return real(request);
+		},
+		aiWrite: () => true,
+	});
+	const made = await proposals.tools.call('snippets_install_team_package', { name: 'goodbyes' });
+	assert.equal((await proposals.apply(made.structuredContent.proposal_id)).status, 'applied');
+	assert.deepEqual(installs, [{ acceptCommands: false }]);
+});
+
+test('a file is sent to the repository its card named, and with a title only if the card showed one', async (t) => {
+	const { propose, proposals, remote, service, router } = await team(t);
+	const sent = [];
+	const watching = createProposals({
+		router: async (request) => {
+			if (request.method === 'POST' && request.path.endsWith('/team/proposals')) sent.push(request.body);
+			return router(request);
+		},
+		aiWrite: () => true,
+	});
+	// The model adds a title and a description the card will not show, since the package exists.
+	const made = await watching.tools.call('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share', title: 'Hidden title', description: 'Hidden description' });
+	const card = watching.get(made.structuredContent.proposal_id);
+	assert.ok(!card.lines.join(' ').includes('Hidden'));
+	assert.equal((await watching.apply(card.id)).status, 'applied');
+	assert.deepEqual(sent, [{ fileId: 'local:dates.yml', package: 'goodbyes', summary: 'Share' }]);
+
+	// Connected to another repository after the card was made: the card is not applied there.
+	const waiting = await propose('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share again' });
+	const other = seeded();
+	await service.disconnectTeam();
+	await service.connectTeam(other.url);
+	const result = await proposals.apply(waiting.id);
+	assert.deepEqual([result.status, result.message], ['stale', STALE]);
+	assert.deepEqual(other.branches().filter((branch) => branch.startsWith('snippet-editor/')), []);
+	assert.equal(remote.branches().filter((branch) => branch.startsWith('snippet-editor/')).length, 1);
 });
 
 test('a package that started to run commands after its card was made is not installed', async (t) => {

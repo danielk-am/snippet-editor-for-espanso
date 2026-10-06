@@ -27,6 +27,10 @@ import { createInProcessApi } from './inProcess.js';
 const COMMAND = 'Runs a command on your computer each time it is used.';
 const SWITCH_OFF = 'Changes by AI tools are switched off. Switch on "Let AI tools change snippets" in Settings, then press Apply again.';
 const STALE = 'This changed after the proposal was made. Ask again.';
+const ENDED = 'This chat has ended. The person can send their message again.';
+// The most text a card is made for: what the app can check for commands, and
+// what a person can be expected to read on a card.
+const MAX_CARD_TEXT = 256 * 1024;
 
 const refused = (message) => Object.assign(new Error(message), { code: 'REFUSED' });
 const stale = () => Object.assign(new Error(STALE), { code: 'STALE' });
@@ -35,7 +39,10 @@ const pathOf = (fileId) => `/files/${encodeURIComponent(fileId)}`;
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
 
 export function createProposals({ router, aiWrite, onCard = () => {}, log = console.error, limit = 200 }) {
+	// The app's routes, for making a card and for Apply.
 	const api = createInProcessApi({ router, aiWrite });
+	// The same routes as the assistant's own tools reach them: to read, only.
+	const reach = createInProcessApi({ router, aiWrite, readOnly: true });
 	const kept = new Map();
 
 	// --- reading the app, with a refusal the model can act on ----------------
@@ -69,6 +76,10 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 	const yamlOf = async (match) => (await ask('POST', '/yaml/preview', { body: { match } })).yaml;
 
 	function checked(snippet) {
+		// A trigger that is a number or a switch is shown as text on the card,
+		// and the app would refuse to write it.
+		const triggers = [snippet.trigger, snippet.regex, ...(Array.isArray(snippet.triggers) ? snippet.triggers : [snippet.triggers])].filter((value) => value !== undefined);
+		if (triggers.some((value) => typeof value !== 'string')) throw refused('Write each trigger as text, in quotes. Example: {"trigger": "123", "replace": "..."}.');
 		const problem = snippetProblem(snippet);
 		if (problem) throw refused(problem);
 	}
@@ -186,9 +197,12 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				// Espanso would read this text differently from the card, and from the check for commands below.
 				const odd = oddBreak(yaml);
 				if (odd) throw refused(oddBreakMessage(odd));
+				if (yaml.length > MAX_CARD_TEXT) {
+					throw refused('That text is too long to show on a card (over 256 KB). Ask the person to make this change in the raw editor, or change the snippets one at a time.');
+				}
 				const warnings = [];
 				const parsed = await api.request('POST', '/yaml/parse', { body: { text: yaml } });
-				if (parsed.status === 413 || parsed.body?.error?.code === 'UNREPRESENTABLE') warnings.push('This text is too long to check for snippets that run commands. Read it before you apply.');
+				if (parsed.status === 413 || parsed.body?.error?.code === 'UNREPRESENTABLE') warnings.push('This text could not be checked for snippets that run commands. Read it before you apply.');
 				else if (parsed.status >= 400) throw refused(explain(parsed, { fileId }));
 				else if (fileRuns(parsed.body.value)) warnings.push('This text holds a snippet that runs a command on your computer each time it is used.');
 				return {
@@ -256,13 +270,18 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 						lines: [`Repository: ${team.repository}`, `Package: ${name}${isNew ? ' (new)' : ''}`, ...(isNew ? [`Title: ${title}`, `Description: ${description}`] : []), `Summary: ${summary}`],
 						warnings: ['This leaves your computer. Everyone who can read the repository will be able to read every snippet in this file.'],
 					},
-					made: { text: file.text },
+					made: { text: file.text, repository: team.repository, isNew },
 				};
 			},
 			async apply({ args, made }) {
+				// To the repository the card named, and no other.
+				const team = await route('GET', '/team');
+				if (!team.connected || team.repository !== made.repository) throw stale();
 				const file = await route('GET', pathOf(args.file_id));
 				if (file.text !== made.text) throw stale();
-				const sent = await route('POST', '/team/proposals', { body: { fileId: args.file_id, package: args.package, summary: args.summary, title: args.title, description: args.description } });
+				// A title and a description go only with a new package, where the card showed them.
+				const naming = made.isNew ? { title: args.title, description: args.description } : {};
+				const sent = await route('POST', '/team/proposals', { body: { fileId: args.file_id, package: args.package, summary: args.summary, ...naming } });
 				return {
 					link: sent.compareUrl ?? null,
 					message: `Sent as the branch ${sent.branch}. ${sent.compareUrl ? 'Open the page to start the pull request.' : "A person on the team opens the pull request on the repository's site."}`,
@@ -274,7 +293,8 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 	// --- making a card -------------------------------------------------------
 
 	// What the tools call in chat. A problem goes back to the model as words.
-	async function add({ tool, args }) {
+	// `origin` is the answer the call belongs to, when it belongs to one.
+	async function add({ tool, args }, origin = null) {
 		let built;
 		try {
 			built = await kinds[tool].build(args);
@@ -282,20 +302,40 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 			if (error?.code === 'REFUSED') return { error: error.message };
 			throw error;
 		}
+		// Working a card out takes a moment, and the answer may have ended in it.
+		// A card nobody asked for any more is not made.
+		if (origin && !origin.isOpen()) return { error: ENDED };
 		const id = randomBytes(6).toString('hex');
 		const card = { id, tool, fileId: null, fileName: null, before: null, after: null, lines: [], warnings: [], ...built.card, status: 'pending', message: null, code: null, link: null };
 		kept.set(id, { card, args: structuredClone(args), made: built.made ?? {}, busy: false });
 		while (kept.size > limit) kept.delete(kept.keys().next().value);
-		onCard({ ...card });
+		origin?.onCard?.({ ...card }, origin.turnId);
+		onCard({ ...card }, origin?.turnId ?? null);
 		return { id };
 	}
 
-	// The same tools the model sees in chat. Their input checks run here, in
-	// the app, whoever sent the call.
-	const tools = createTools({ api, propose: add });
 	const changing = new Set(Object.keys(kinds));
 
-	const entry = (id) => {
+	// The two ways a call arrives: from the tools the model sees in chat (their
+	// input checks run here, in the app, whoever sent the call), and from a
+	// command-line tool by way of the MCP server.
+	function entry(origin) {
+		const tools = createTools({ api: reach, propose: (proposal) => add(proposal, origin) });
+		return {
+			tools,
+			async receive({ tool, args }) {
+				if (!changing.has(tool)) {
+					throw refused(tools.list().some((item) => item.name === tool) ? `${tool} does not change anything, so it is not a proposal.` : `There is no tool named ${tool}.`);
+				}
+				const result = await tools.call(tool, args);
+				if (result.isError) throw refused(result.content[0].text);
+				return { id: result.structuredContent.proposal_id };
+			},
+		};
+	}
+	const general = entry(null);
+
+	const held = (id) => {
 		const found = kept.get(id);
 		if (!found) throw failed('NOT_FOUND', 'That proposal is no longer here. Ask again.');
 		return found;
@@ -306,29 +346,25 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 	};
 
 	return {
-		tools,
+		tools: general.tools,
+		receive: general.receive,
+		reach,
 
-		// A proposal from a command-line tool, by way of the MCP server.
-		async receive({ tool, args }) {
-			if (!changing.has(tool)) {
-				throw refused(tools.list().some((item) => item.name === tool) ? `${tool} does not change anything, so it is not a proposal.` : `There is no tool named ${tool}.`);
-			}
-			const result = await tools.call(tool, args);
-			if (result.isError) throw refused(result.content[0].text);
-			return { id: result.structuredContent.proposal_id };
-		},
+		// For one answer: its cards carry its name, and none is made once
+		// `isOpen` says the answer is over.
+		forTurn: ({ turnId, isOpen, onCard: tell }) => entry({ turnId, isOpen, onCard: tell }),
 
 		get: (id) => (kept.has(id) ? { ...kept.get(id).card } : null),
 		all: () => [...kept.values()].map((found) => ({ ...found.card })),
 
 		dismiss(id) {
-			const found = entry(id);
+			const found = held(id);
 			if (found.card.status !== 'pending') return { ...found.card };
 			return update(found, { status: 'dismissed', message: null, code: null });
 		},
 
 		async apply(id) {
-			const found = entry(id);
+			const found = held(id);
 			if (found.card.status !== 'pending') return { ...found.card };
 			if (aiWrite() !== true) return update(found, { message: SWITCH_OFF, code: 'SWITCH_OFF' });
 			update(found, { status: 'applying', message: null, code: null });

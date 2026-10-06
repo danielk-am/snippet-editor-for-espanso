@@ -151,3 +151,42 @@ test('a fault in the reader of the lines stops the program instead of the app', 
 	const result = await started.done;
 	assert.deepEqual([result.reason, result.stderrTail], ['failed', 'reader broke']);
 });
+
+// A helper the program starts, which heeds neither a polite stop nor its input closing.
+const STUBBORN = `
+	const { spawn } = require('node:child_process');
+	const helper = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
+	console.log(helper.pid);
+`;
+
+test('what the program started does not outlive it, whether the program was stopped or ended by itself', { skip: process.platform === 'win32' }, async () => {
+	// Stopped.
+	const lines = [];
+	const stopped = createRunner({ grace: 200 }).run({ ...program(`${STUBBORN} setInterval(() => {}, 1000);`), onLine: (line) => lines.push(line) });
+	while (!lines.length) await wait(10);
+	stopped.stop();
+	assert.equal((await stopped.done).reason, 'stopped');
+	assert.equal(await gone(Number(lines[0])), true, 'the helper outlived a stop');
+
+	// Ended by itself, leaving the helper behind.
+	const left = await collect(createRunner(), program(`${STUBBORN} setTimeout(() => process.exit(0), 200);`));
+	assert.equal(left.result.reason, 'exit');
+	assert.equal(await gone(Number(left.lines[0])), true, 'the helper outlived the program');
+});
+
+test('once it is stopped, nothing more it prints is handed over', async () => {
+	const lines = [];
+	let stoppedAt = null;
+	const started = createRunner().run({
+		...program(`setInterval(() => { for (let i = 0; i < 50; i += 1) console.log('line'); }, 1);`),
+		onLine: (line) => {
+			lines.push(line);
+			if (lines.length === 5 && stoppedAt === null) {
+				started.stop();
+				stoppedAt = lines.length;
+			}
+		},
+	});
+	await started.done;
+	assert.equal(lines.length, stoppedAt);
+});

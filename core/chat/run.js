@@ -64,6 +64,9 @@ export function createRunner({ grace = 2000 } = {}) {
 			clearTimeout(whole);
 			clearTimeout(force);
 			live.delete(stop);
+			// The program has gone. Whatever it started and left behind goes too:
+			// a helper may heed neither a polite stop nor its input closing.
+			if (child?.pid) signal('SIGKILL');
 			settle(result);
 		};
 

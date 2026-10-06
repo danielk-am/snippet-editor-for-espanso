@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,9 +18,9 @@ const ENDINGS = ['done', 'error', 'stopped'];
 
 const ready = (id, label, extra = {}) => ({ id, label, ready: true, state: 'ready', message: '', command: null, sendsTo: null, models: [], ...extra });
 
-async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {} } = {}) {
+async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {}, statusDelay = 0, locateDelay = 0, chunkDelay = 0 } = {}) {
 	const api = await startApi(t, { enabled: false, aiWrite });
-	const ollama = await standIn(t, { answers });
+	const ollama = await standIn(t, { answers, chunkDelay });
 	const events = [];
 	const backends = {
 		claude: ready('claude', 'Claude Code', { sendsTo: 'Anthropic' }),
@@ -41,9 +41,13 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 		backends: {
 			status: async () => {
 				checks.count += 1;
+				await wait(statusDelay);
 				return Object.values(backends);
 			},
-			locate: async () => program,
+			locate: async () => {
+				await wait(locateDelay);
+				return program;
+			},
 		},
 		ollama: ollama.ollama,
 		log: () => {},
@@ -280,6 +284,69 @@ test('closing the app stops an answer under way and leaves nothing behind', opti
 	await chat.dispose();
 	assert.deepEqual(left(), []);
 	await assert.rejects(chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY again' }] }), (error) => error.code === 'CLOSED');
+});
+
+test('a stop that arrives while an answer is still starting ends it before any program runs', options, async (t) => {
+	const { chat, events, left } = await setup(t, { locateDelay: 300 });
+	const { turnId } = await chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	chat.stop(turnId);
+	while (!events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(20);
+	assert.deepEqual(events.map((event) => event.type), ['stopped']);
+	assert.deepEqual(left(), []);
+});
+
+test('closing the app while a message is still being checked means the answer never starts', options, async (t) => {
+	const { chat, events, left, chatDir } = await setup(t, { statusDelay: 300 });
+	const sending = chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	await wait(50);
+	await chat.dispose();
+	await assert.rejects(sending, (error) => error.code === 'CLOSED' && error.message === 'The app is closing.');
+	await wait(400);
+	assert.deepEqual(events, []);
+	assert.deepEqual(left(), []);
+	assert.equal(existsSync(join(chatDir, 'empty')), false);
+});
+
+test('what tells Claude Code which program to start, and what tells that program where to call, can be read by their owner only', options, async (t) => {
+	const { chat, events, left, chatDir } = await setup(t);
+	const { turnId } = await chat.send({ backend: 'claude', messages: [{ role: 'user', text: 'SAY started\nHANG' }] });
+	while (!events.some((event) => event.type === 'text')) await wait(20);
+	const files = left();
+	assert.deepEqual(files.map((name) => name.replace(/-[a-f0-9]+/, '')).sort(), ['chat.json', 'mcp.json']);
+	for (const name of files) assert.equal(statSync(join(chatDir, name)).mode & 0o777, 0o600, name);
+	chat.stop(turnId);
+	while (!events.some((event) => event.type === 'stopped')) await wait(20);
+});
+
+test('ollama: an answer that never ends is stopped at the same limit as the others', async (t) => {
+	const thinking = Array.from({ length: 400 }, () => said('', { thinking: 'still thinking ' }));
+	const api = await setup(t, { answers: [{ chunks: thinking }], chunkDelay: 25, limits: { totalMs: 400 } });
+	const began = Date.now();
+	const events = await api.answer({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] });
+	assert.deepEqual(events, [{ type: 'error', code: 'TIMEOUT', message: 'Ollama took too long, so it was stopped.' }]);
+	assert.ok(Date.now() - began < 3000);
+});
+
+test('a card belongs to the answer that asked for it, and is not made once that answer has ended', async (t) => {
+	// The model asks for a file, and the answer is stopped while the card is still being worked out.
+	const api = await setup(t, { answers: [{ chunks: [calls(['snippets_create_file', { name: 'late.yml' }]), END] }, { chunks: [said('never'), END] }] });
+	const state = api.service.state.bind(api.service);
+	let release;
+	api.service.state = async () => {
+		await new Promise((resolve) => (release = resolve));
+		return state();
+	};
+	const first = await api.chat.send({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Make a file' }] });
+	while (!release) await wait(10);
+	api.chat.stop(first.turnId);
+	while (!api.events.some((event) => event.type === 'stopped')) await wait(10);
+	// The next answer is under way when the first one's card would have been ready.
+	api.service.state = state;
+	const second = await api.chat.send({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hello' }] });
+	release();
+	while (!api.events.some((event) => event.turnId === second.turnId && event.type === 'done')) await wait(10);
+	await wait(100);
+	assert.deepEqual(api.events.filter((event) => event.type === 'proposal'), []);
 });
 
 // --- answers that do not end well ----------------------------------------------------------
