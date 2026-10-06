@@ -1,0 +1,190 @@
+import { parseDocument, stringify } from 'yaml';
+import { stringifyMatch } from './matchFile.js';
+import { isPlainObject } from '../shared/text.js';
+
+// The app's one contract. A request comes in as plain data, whichever way it
+// travelled, and a reply goes out as plain data: the window's channel and the
+// HTTP listener both call this and nothing else, so a route cannot behave
+// differently for one of them.
+
+const PREFIX = '/api/v1/';
+
+const STATUS = {
+	INVALID: 400,
+	INVALID_NAME: 400,
+	UNAUTHORIZED: 401,
+	FORBIDDEN: 403,
+	READ_ONLY: 403,
+	NOT_FOUND: 404,
+	METHOD_NOT_ALLOWED: 405,
+	CONFLICT: 409,
+	EXISTS: 409,
+	TOO_LARGE: 413,
+	UNSUPPORTED_TYPE: 415,
+	PARSE_ERROR: 422,
+};
+
+// Failures of the disk itself. They are nobody's bad input, so they answer
+// 500, but in words a person can act on and without the path Node puts in
+// its own message.
+const DISK = {
+	ENOSPC: 'The disk is full, so nothing was saved.',
+	EACCES: 'Permission was denied for that file or folder.',
+	EPERM: 'Permission was denied for that file or folder.',
+	EROFS: 'That folder is read-only.',
+};
+
+export const errorBody = (code, message) => ({ error: { code, message } });
+
+const fail = (code, message) => Object.assign(new Error(message), { code });
+const invalid = (message) => fail('INVALID', message);
+
+// "local:base.yml" or "package:goodbyes:package.yml", as the store knows them.
+// A package name never holds a colon, so the second colon ends it.
+export function refFromId(id) {
+	if (typeof id === 'string' && id.startsWith('local:')) return { source: 'local', name: id.slice(6) };
+	if (typeof id === 'string' && id.startsWith('package:')) {
+		const rest = id.slice(8);
+		const colon = rest.indexOf(':');
+		if (colon > 0) return { source: 'package', package: rest.slice(0, colon), name: rest.slice(colon + 1) };
+	}
+	throw fail('INVALID_NAME', 'That is not a file id. Use the `id` of a file from /state.');
+}
+
+// --- input checks -----------------------------------------------------------
+
+const isText = (value) => typeof value === 'string';
+const isPosition = (value) => Number.isInteger(value) && value >= 0;
+
+function required(body, field, check, kind) {
+	if (!isPlainObject(body) || !check(body[field])) throw invalid(`\`${field}\` must be ${kind}.`);
+	return body[field];
+}
+
+function optional(body, field, check, kind) {
+	if (body[field] === undefined) return undefined;
+	if (!check(body[field])) throw invalid(`\`${field}\` must be ${kind}.`);
+	return body[field];
+}
+
+const match = (body) => required(body, 'match', isPlainObject, 'a mapping of snippet keys');
+
+function position(text) {
+	if (!/^\d+$/.test(text)) throw invalid('The snippet position in the path must be a whole number.');
+	return Number(text);
+}
+
+// --- routes -----------------------------------------------------------------
+
+const routes = [
+	['GET', 'state', ({ service }) => service.state()],
+
+	['GET', 'search', ({ service, query }) => {
+		if (!isText(query.q)) throw invalid('`q` must be text.');
+		if (query.limit === undefined) return service.store.search(query.q);
+		const limit = Number(query.limit);
+		if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw invalid('`limit` must be a whole number from 1 to 1000.');
+		return service.store.search(query.q, { limit });
+	}],
+
+	['POST', 'files', ({ service, body }) => service.store.createFile({
+		name: required(body, 'name', isText, 'text'),
+		description: optional(body, 'description', isText, 'text'),
+		prefix: optional(body, 'prefix', isText, 'text'),
+	}), 201],
+
+	['GET', 'files/:id', ({ service, params }) => service.store.readFile(refFromId(params.id))],
+
+	['DELETE', 'files/:id', ({ service, params, query }) => service.store.deleteFile(refFromId(params.id), { version: query.version })],
+
+	['PUT', 'files/:id/details', ({ service, params, body }) => service.store.setHeader(refFromId(params.id), {
+		description: required(body, 'description', isText, 'text'),
+		prefix: required(body, 'prefix', isText, 'text'),
+		version: body.version,
+	})],
+
+	['PUT', 'files/:id/raw', ({ service, params, body }) => service.store.saveRaw(refFromId(params.id), {
+		text: required(body, 'text', isText, 'text'),
+		version: body.version,
+	})],
+
+	['POST', 'files/:id/snippets', ({ service, params, body }) => service.store.createMatch(refFromId(params.id), {
+		match: match(body),
+		index: optional(body, 'index', isPosition, 'a whole number, zero or more'),
+		version: body.version,
+	}), 201],
+
+	['PUT', 'files/:id/snippets/:index', ({ service, params, body }) => service.store.updateMatch(refFromId(params.id), {
+		index: position(params.index),
+		match: match(body),
+		version: body.version,
+	})],
+
+	['DELETE', 'files/:id/snippets/:index', ({ service, params, query }) => service.store.deleteMatch(refFromId(params.id), {
+		index: position(params.index),
+		version: query.version,
+	})],
+
+	['POST', 'yaml/preview', ({ body }) => ({ yaml: stringifyMatch(match(body)) })],
+
+	['POST', 'yaml/parse', ({ body }) => {
+		const doc = parseDocument(required(body, 'text', isText, 'text'));
+		if (doc.errors.length) throw fail('PARSE_ERROR', doc.errors[0].message.split('\n')[0]);
+		try {
+			return { value: doc.toJS() ?? null };
+		} catch (error) {
+			// An alias with nothing to point at only fails when it is resolved.
+			throw fail('PARSE_ERROR', String(error.message).split('\n')[0]);
+		}
+	}],
+
+	['POST', 'yaml/stringify', ({ body }) => {
+		if (!isPlainObject(body) || !('value' in body)) throw invalid('`value` is required.');
+		return { yaml: stringify(body.value, { lineWidth: 0 }) };
+	}],
+].map(([method, pattern, handler, status = 200]) => ({ method, parts: pattern.split('/'), handler, status }));
+
+function find(method, path) {
+	if (typeof path !== 'string' || !path.startsWith(PREFIX)) throw fail('NOT_FOUND', 'There is nothing at that path. Routes start with /api/v1/.');
+	let segments;
+	try {
+		segments = path.slice(PREFIX.length).split('/').map(decodeURIComponent);
+	} catch {
+		throw invalid('The path is not valid percent-encoding.');
+	}
+
+	let pathExists = false;
+	for (const route of routes) {
+		if (route.parts.length !== segments.length) continue;
+		const params = {};
+		const fits = route.parts.every((part, index) => {
+			if (part.startsWith(':')) {
+				params[part.slice(1)] = segments[index];
+				return segments[index] !== '';
+			}
+			return part === segments[index];
+		});
+		if (!fits) continue;
+		if (route.method === method) return { route, params };
+		pathExists = true;
+	}
+	if (pathExists) throw fail('METHOD_NOT_ALLOWED', `${method} is not available on that path.`);
+	throw fail('NOT_FOUND', 'There is nothing at that path.');
+}
+
+export function createRouter({ service, log = console.error }) {
+	return async function handle({ method, path, query, body }) {
+		try {
+			const { route, params } = find(method, path);
+			const result = await route.handler({ service, params, query: isPlainObject(query) ? query : {}, body });
+			return { status: route.status, body: result };
+		} catch (error) {
+			const known = typeof error?.code === 'string' && Object.hasOwn(STATUS, error.code);
+			if (known) return { status: STATUS[error.code], body: errorBody(error.code, error.message) };
+			// Not one of ours: say so plainly and keep the detail in the log.
+			log(error);
+			const message = Object.hasOwn(DISK, error?.code ?? '') ? DISK[error.code] : 'Something went wrong inside the app.';
+			return { status: 500, body: errorBody('ERROR', message) };
+		}
+	};
+}
