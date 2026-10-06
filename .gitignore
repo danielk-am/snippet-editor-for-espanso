@@ -3,3 +3,4 @@ dist/
 drafts/
 test/.artifacts/
 .DS_Store
+.claude/
