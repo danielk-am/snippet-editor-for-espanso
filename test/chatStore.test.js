@@ -175,8 +175,9 @@ test('long stretches that did not change are folded, and say how many lines they
 	assert.deepEqual(rows.filter((item) => item.kind === 'same').map((item) => item.text), ['line 9', 'line 10', 'line 12', 'line 13', 'line 15', 'line 16']);
 });
 
-test('a difference only in the line end at the bottom is said in words', () => {
-	assert.deepEqual(diffLines('a\nb', 'a\nb\n'), [{ kind: 'note', text: 'Only the line end at the bottom differs.' }]);
+test('a difference only in line ends is said in words', () => {
+	assert.deepEqual(diffLines('a\nb', 'a\nb\n'), [{ kind: 'note', text: 'Only line ends differ.' }]);
+	assert.deepEqual(diffLines('a\nb\n', 'a\r\nb\r\n'), [{ kind: 'note', text: 'Only line ends differ.' }]);
 });
 
 test('two very long and very different texts are shown whole, old then new, without a long wait', () => {

@@ -1,6 +1,6 @@
 import { Scalar, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import { deepEqual } from '../shared/snippetModel.js';
-import { hasOwn, isPlainObject } from '../shared/text.js';
+import { ANY_BREAK, hasOwn, isPlainObject, oddBreak, oddBreakMessage, withoutBreaks } from '../shared/text.js';
 
 // Reading and rewriting one Espanso match file.
 //
@@ -86,6 +86,10 @@ function hasCycle(value, path = new Set()) {
 export function parseMatchFile(text) {
 	const header = parseHeaderMeta(text);
 	const failed = (doc, errors) => ({ doc, seq: null, matches: null, errors, header });
+	// A line break Espanso reads and this reader does not: the two would see
+	// different files, so this one is not shown as a list of snippets.
+	const odd = oddBreak(text);
+	if (odd) return failed(null, [oddBreakMessage(odd)]);
 	let doc = null;
 	try {
 		doc = parseDocument(text, { prettyErrors: true });
@@ -737,7 +741,8 @@ export function parseHeaderMeta(text) {
 export function writeHeaderMeta(text, { description = '', prefix = '' }) {
 	const { bom, header, rest, eol } = splitHeader(text);
 	const current = parseHeaderMeta(text);
-	const wanted = description.replace(/[\r\n]+/g, ' ').trim();
+	const wanted = withoutBreaks(description).trim();
+	if (ANY_BREAK.test(prefix)) throw new Error('A prefix is one line: it cannot hold a line break.');
 	if (/^prefix:/i.test(wanted) || TOOL_LINE.test(`# ${wanted}`)) {
 		throw new Error('A description cannot start with "prefix:" or "yaml-language-server:".');
 	}

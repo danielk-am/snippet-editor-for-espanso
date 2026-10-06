@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseDocument, stringify } from 'yaml';
 import { isSafeFileName } from './store.js';
-import { isPlainObject, toText } from '../shared/text.js';
+import { isPlainObject, oddBreak, toText } from '../shared/text.js';
 
 // The app's copy of the team repository. It is a bare copy: nothing is
 // checked out, and packages are read straight from the commit with git's own
@@ -53,6 +53,8 @@ function scan(bytes) {
 	const unread = { matchCount: null, runs: true };
 	const text = bytes.toString('utf8');
 	if (!Buffer.from(text, 'utf8').equals(bytes)) return unread;
+	// A line break only Espanso reads can hide a command from this reader.
+	if (oddBreak(text)) return unread;
 	try {
 		const doc = parseDocument(text, { uniqueKeys: false });
 		if (doc.errors.length) return unread;

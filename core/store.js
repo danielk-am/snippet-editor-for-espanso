@@ -11,7 +11,7 @@ import {
 	writeHeaderMeta,
 } from './matchFile.js';
 import { searchFiles } from '../shared/search.js';
-import { toText } from '../shared/text.js';
+import { oddBreak, oddBreakMessage, toText } from '../shared/text.js';
 
 // The match folder is the only store: Espanso reads these files directly, so
 // there is no database to drift from them. Every write is therefore careful:
@@ -413,6 +413,9 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 			} catch (error) {
 				throw new StoreError('INVALID', error.message);
 			}
+			// Nothing the app writes may read one way here and another to Espanso.
+			const odd = oddBreak(text);
+			if (odd) throw new StoreError('INVALID', oddBreakMessage(odd));
 			await fs.mkdir(matchDir, { recursive: true });
 			const taken = (await fs.readdir(matchDir)).some((existing) => existing.toLowerCase() === name.toLowerCase());
 			if (taken) throw new StoreError('EXISTS', `A file named ${name} already exists.`);

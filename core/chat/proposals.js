@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { brokenFile, createTools, explain, fileRuns, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
+import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
 import { isSafeFileName } from '../store.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
 import { createInProcessApi } from './inProcess.js';
@@ -161,6 +162,12 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 		snippets_create_file: {
 			async build({ name, description, prefix }) {
 				if (!isSafeFileName(name)) throw refused('Use a file name ending in .yml, without slashes or a leading dot.');
+				// Either would be written into the file's first lines.
+				for (const [what, value] of [['description', description], ['prefix', prefix]]) {
+					const odd = oddBreak(value);
+					if (odd) throw refused(`The ${what}: ${oddBreakMessage(odd)}`);
+				}
+				if (typeof prefix === 'string' && ANY_BREAK.test(prefix)) throw refused('A prefix is one line: it cannot hold a line break.');
 				const state = await ask('GET', '/state');
 				const taken = state.files.find((file) => file.name.toLowerCase() === name.toLowerCase());
 				if (taken) throw refused(explain({ body: { error: { code: 'EXISTS', message: `A file named ${taken.name} already exists.` } } }));
@@ -176,6 +183,9 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 			async build({ file_id: fileId, yaml, version }) {
 				const file = await ownFile(fileId);
 				current(file, version);
+				// Espanso would read this text differently from the card, and from the check for commands below.
+				const odd = oddBreak(yaml);
+				if (odd) throw refused(oddBreakMessage(odd));
 				const warnings = [];
 				const parsed = await api.request('POST', '/yaml/parse', { body: { text: yaml } });
 				if (parsed.status === 413 || parsed.body?.error?.code === 'UNREPRESENTABLE') warnings.push('This text is too long to check for snippets that run commands. Read it before you apply.');

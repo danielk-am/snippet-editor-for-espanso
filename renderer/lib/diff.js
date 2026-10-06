@@ -5,9 +5,14 @@
 // Rows: { kind: 'same' | 'add' | 'remove', text }, { kind: 'skip', count },
 // and { kind: 'note', text } when no line differs but the texts do.
 
+// Every kind of line break ends a row: Windows line ends, and the four that
+// Espanso reads and most YAML readers do not (a lone carriage return, U+0085,
+// U+2028, U+2029). Nothing may sit unseen on the end of a row.
+const BREAK = new RegExp(`\\r\\n|[\\n\\r${String.fromCharCode(0x85, 0x2028, 0x2029)}]`);
+
 const linesOf = (text) => {
 	if (text === null || text === undefined || text === '') return [];
-	const lines = String(text).split('\n');
+	const lines = String(text).split(BREAK);
 	if (lines.at(-1) === '') lines.pop();
 	return lines;
 };
@@ -59,7 +64,7 @@ export function diffLines(before, after, { context = 2, budget = 2_000_000 } = {
 		endB -= 1;
 	}
 	if (top === endA && top === endB) {
-		return (before ?? '') === (after ?? '') ? [] : [{ kind: 'note', text: 'Only the line end at the bottom differs.' }];
+		return (before ?? '') === (after ?? '') ? [] : [{ kind: 'note', text: 'Only line ends differ.' }];
 	}
 
 	const same = (text) => ({ kind: 'same', text });
