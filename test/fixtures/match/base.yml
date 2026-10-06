@@ -1,0 +1,23 @@
+# Greetings for support replies
+# prefix: ";"
+
+global_vars:
+  - name: firstname
+    type: echo
+    params:
+      echo: Daniel
+
+matches:
+  # Simple hello
+  - trigger: ";hello"
+    replace: "Hello there"
+
+  - trigger: ";sig"
+    label: Signature
+    replace: |-
+      Best,
+      {{firstname}}
+    left_word: true
+
+  - triggers: [";ty", ";thanks"]
+    replace: "Thank you!"

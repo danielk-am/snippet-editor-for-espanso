@@ -1,0 +1,7 @@
+matches:
+  - trigger: ":bye"
+    label: Friendly goodbye
+    replace: "Thanks for reaching out. Have a great day!"
+
+  - trigger: ":cheers"
+    replace: "Cheers,"

@@ -1,0 +1,5 @@
+# Imported by other files only
+
+matches:
+  - trigger: ":addr"
+    replace: "1 Example Road"

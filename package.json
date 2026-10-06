@@ -1,0 +1,35 @@
+{
+  "name": "snippet-editor-for-espanso",
+  "productName": "Snippet Editor",
+  "desktopName": "snippet-editor-for-espanso.desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A no-build Electron editor for Espanso match files: browse, search and edit snippets without hand-writing YAML. A rebuild of Snippet Manager for Espanso.",
+  "author": "Daniel Kam",
+  "main": "electron/main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "demo": "node scripts/demo.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "test:ui": "electron test/ui-smoke.mjs",
+    "test:packaged": "node test/packaged-smoke.mjs",
+    "icon": "electron scripts/make-icon.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --mac --win --linux",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "htm": "3.1.1"
+  }
+}

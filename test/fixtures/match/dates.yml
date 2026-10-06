@@ -1,0 +1,37 @@
+# Dates, forms and other dynamic snippets
+
+matches:
+  - trigger: ":today"
+    label: Today's date
+    replace: "{{today}}"
+    vars:
+      - name: today
+        type: date
+        params:
+          format: "%d %B %Y"
+
+  - trigger: ":meet"
+    label: Meeting invite
+    form: "Meet [[who]] on [[day]] about [[topic]]"
+    form_fields:
+      day:
+        type: choice
+        values:
+          - Monday
+          - Wednesday
+          - Friday
+      topic:
+        multiline: true
+
+  - regex: ":ticket(?P<id>\\d+)"
+    replace: "https://example.com/tickets/{{id}}"
+    search_terms:
+      - support
+      - zendesk
+
+  - trigger: ":shrug"
+    replace: "¯\\_(ツ)_/¯"
+    word: true
+    propagate_case: true
+    uppercase_style: capitalize_words
+    force_mode: clipboard

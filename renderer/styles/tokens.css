@@ -1,0 +1,119 @@
+/* danielk.am default color tokens v2 — approved by Daniel on 2026-10-02.
+   White surfaces, blue primary, supporting teal. Canonical source: danielk.am
+   brand/color-tokens.css in Daniel's shared Drive. Keep project copies aligned. */
+:root {
+  color-scheme: light;
+  --color-white: #FFFFFF;
+  --color-ink: #153847;
+  --color-muted: #526B78;
+  --color-brand: #2563EB;
+  --color-brand-hover: #1D4ED8;
+  --color-brand-soft: #EDF3FF;
+  --color-brand-soft-hover: #DFE9FF;
+  --color-teal: #087E8B;
+  --color-teal-hover: #066571;
+  --color-teal-soft: #F0F9FA;
+  --color-blue: #2563EB;
+  --color-blue-soft: #EDF3FF;
+  --color-blue-ink: #2451A6;
+  --color-border: #D7E5EA;
+  --color-border-strong: #8BA6B2;
+  --color-map-surface: #E7F3F6;
+  --color-map-street: #F8FCFD;
+  --color-map-street-secondary: #D9EDF2;
+  --color-marker: var(--color-brand);
+  --color-marker-outline: var(--color-white);
+  --color-origin: var(--color-blue);
+  --color-focus: var(--color-blue);
+
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --paper: var(--color-white);
+  --white: var(--color-white);
+  --line: var(--color-border);
+  --accent: var(--color-blue);
+}
+
+/* ---------------------------------------------------------------------------
+   App layer. The roles shadcn/ui components expect (background, primary,
+   muted, ring…), each resolved from a brand token above. Components read
+   only these `--ui-*` roles, so a brand change is a change to the block
+   above and nothing else. The `--ui-` prefix keeps the roles clear of the
+   brand file's own short aliases (--muted and --accent mean something
+   different there).
+   --------------------------------------------------------------------------- */
+:root {
+  --ui-background: var(--color-white);
+  --ui-foreground: var(--color-ink);
+  --ui-card: var(--color-white);
+  --ui-popover: var(--color-white);
+  --ui-primary: var(--color-brand);
+  --ui-primary-hover: var(--color-brand-hover);
+  --ui-primary-foreground: var(--color-white);
+  --ui-secondary: var(--color-brand-soft);
+  --ui-secondary-hover: var(--color-brand-soft-hover);
+  --ui-secondary-foreground: var(--color-blue-ink);
+  --ui-muted: color-mix(in srgb, var(--color-border) 32%, var(--color-white));
+  --ui-muted-foreground: var(--color-muted);
+  --ui-border: var(--color-border);
+  --ui-input: color-mix(in srgb, var(--color-border-strong) 60%, var(--color-border));
+  --ui-ring: var(--color-focus);
+  --ui-link: var(--color-brand);
+  --ui-sidebar: color-mix(in srgb, var(--color-brand-soft) 42%, var(--color-white));
+  --ui-success: var(--color-teal);
+  --ui-success-soft: var(--color-teal-soft);
+
+  /* Status colors the brand file leaves to each project. */
+  --ui-destructive: #C62828;
+  --ui-destructive-hover: #A61E1E;
+  --ui-destructive-text: #B42318;
+  --ui-destructive-soft: #FDECEC;
+  --ui-warning-text: #8A5200;
+  --ui-warning-soft: #FFF4DB;
+  --ui-regex-text: #9D2B6B;
+  --ui-regex-soft: #FCEEF5;
+
+  --ui-radius: 8px;
+  --ui-radius-sm: 6px;
+  --ui-shadow-sm: 0 1px 2px rgb(21 56 71 / 0.06);
+  --ui-shadow-md: 0 4px 12px rgb(21 56 71 / 0.08), 0 1px 3px rgb(21 56 71 / 0.06);
+  --ui-shadow-lg: 0 16px 48px rgb(21 56 71 / 0.18), 0 2px 8px rgb(21 56 71 / 0.08);
+  --ui-overlay: rgb(21 56 71 / 0.32);
+
+  --ui-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --ui-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* Dark theme. The brand file is light-only, so these are this app's own
+   values, kept to the same hues: ink for surfaces, the brand blue for
+   actions. Blue text is lightened to stay readable on dark surfaces. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ui-background: #0F1B22;
+  --ui-foreground: #E7EFF3;
+  --ui-card: #14242D;
+  --ui-popover: #172A34;
+  --ui-primary-hover: #3B76F0;
+  --ui-secondary: #1B2F52;
+  --ui-secondary-hover: #223B66;
+  --ui-secondary-foreground: #C3D5FB;
+  --ui-muted: #182932;
+  --ui-muted-foreground: #9FB4BF;
+  --ui-border: #263E4A;
+  --ui-input: #3A5663;
+  --ui-ring: #6E9BF5;
+  --ui-link: #8FB2F8;
+  --ui-sidebar: #0C171D;
+  --ui-success: #4FC3CF;
+  --ui-success-soft: #12343A;
+  --ui-destructive-text: #FF9A9A;
+  --ui-destructive-soft: #3A1B1D;
+  --ui-warning-text: #F0B455;
+  --ui-warning-soft: #3A2C10;
+  --ui-regex-text: #F3A6CF;
+  --ui-regex-soft: #3A1C2C;
+  --ui-shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --ui-shadow-md: 0 4px 12px rgb(0 0 0 / 0.35);
+  --ui-shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55);
+  --ui-overlay: rgb(3 10 14 / 0.6);
+}

@@ -1,0 +1,4 @@
+matches:
+  - trigger: ":oops"
+    replace: "unterminated
+   bad: [
