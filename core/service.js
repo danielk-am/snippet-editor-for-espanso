@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createStore } from '../core/store.js';
-import { resolveMatchDir } from '../core/espansoPaths.js';
-import { loadSettings, saveSettings } from '../core/settings.js';
+import { createStore } from './store.js';
+import { resolveMatchDir } from './espansoPaths.js';
+import { loadSettings, saveSettings as writeSettings } from './settings.js';
 
-// Owns the pieces that depend on where the match folder is: the store, and a
-// watcher that tells the window when Espanso files change underneath it.
-export async function createServices({ userDataDir, env = process.env, onChange = () => {} }) {
+// The app's working parts with no window attached: the store for the current
+// match folder, the settings, and a watcher that reports when Espanso's files
+// change underneath. The window, the HTTP API and the tests all start here.
+export async function createService({ userDataDir, env = process.env, onChange = () => {} }) {
 	const settingsFile = path.join(userDataDir, 'settings.json');
 	let backupDir;
 	let location;
@@ -54,18 +55,24 @@ export async function createServices({ userDataDir, env = process.env, onChange 
 	await configure();
 
 	return {
+		tokenFile: path.join(userDataDir, 'api-token'),
 		get store() {
 			return store;
 		},
 		get backupDir() {
 			return backupDir;
 		},
+		settings: () => ({ ...settings }),
+		async saveSettings(patch) {
+			settings = await writeSettings(settingsFile, patch);
+			return { ...settings };
+		},
 		async state() {
 			if (!watcher) watch();
 			return { ...(await store.inventory()), matchDirSource: location.source, backupDir, maxBackups: settings.maxBackups };
 		},
 		async setMatchDir(dir) {
-			await saveSettings(settingsFile, { matchDirOverride: dir });
+			await writeSettings(settingsFile, { matchDirOverride: dir });
 			await configure();
 		},
 		dispose() {

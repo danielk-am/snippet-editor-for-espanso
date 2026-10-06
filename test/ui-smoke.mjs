@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, ipcMain } from 'electron';
-import { createServices } from '../electron/services.js';
+import { createService } from '../core/service.js';
 import { registerIpc } from '../electron/ipc.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
@@ -76,7 +76,7 @@ const watchdog = setTimeout(() => {
 
 async function run() {
 	let win = null;
-	const services = await createServices({
+	const services = await createService({
 		userDataDir: app.getPath('userData'),
 		env: { SNIPPET_EDITOR_MATCH_DIR: matchDir },
 		onChange: () => win?.webContents.send('data:changed'),

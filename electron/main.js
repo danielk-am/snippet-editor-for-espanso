@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
-import { createServices } from './services.js';
+import { createService } from '../core/service.js';
 import { registerIpc } from './ipc.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 
@@ -64,7 +64,7 @@ if (!app.requestSingleInstanceLock()) {
 	});
 
 	app.whenReady().then(async () => {
-		const services = await createServices({
+		const services = await createService({
 			userDataDir: app.getPath('userData'),
 			onChange: () => send('data:changed'),
 		});
