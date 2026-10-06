@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createGit } from '../core/git.js';
 import { createApiClient } from '../mcp/client.mjs';
@@ -125,6 +125,8 @@ test('snippets_get_file gives a file in brief, in full or as raw YAML, always wi
 	assert.deepEqual([full.snippets, full.has_more, full.next_offset], [[{ index: 1, snippet: { trigger: ';sig', label: 'Signature', replace: 'Best,\n{{firstname}}', left_word: true } }], true, 2]);
 	const raw = await call('snippets_get_file', { file_id: 'local:base.yml', detail: 'raw' });
 	assert.deepEqual([raw.yaml, raw.version, raw.snippets], [read('base.yml'), brief.version, undefined]);
+	// A file that fits is whole, and says so by having nothing more to read.
+	assert.deepEqual([raw.has_more, raw.next_offset, raw.total_characters, raw.note], [false, null, read('base.yml').length, undefined]);
 });
 
 test('a file with YAML errors is described, and its raw text can still be read', async (t) => {
@@ -284,10 +286,22 @@ test('a reply is never longer than 25,000 characters: a list is cut at a whole i
 	const next = await call('snippets_get_file', { file_id: 'local:big.yml', detail: 'full', limit: 200, offset: full.next_offset });
 	assert.equal(next.snippets[0].index, full.snippets.length);
 
-	const raw = await call('snippets_get_file', { file_id: 'local:big.yml', detail: 'raw' });
-	assert.ok(JSON.stringify(raw).length <= 25000);
-	assert.equal(raw.truncated, true);
-	assert.match(raw.note, /^The YAML is cut to its first \d+ characters of \d+\. Read the snippets in pages with detail "full", limit and offset\.$/);
+	// Raw text comes in parts. Only the last part carries the version, so the
+	// whole text has been read before anything can be written back.
+	const text = readFileSync(join(matchDir, 'big.yml'), 'utf8');
+	const parts = [];
+	for (let offset = 0, guard = 0; offset !== null && guard < 50; guard += 1) {
+		const part = await call('snippets_get_file', { file_id: 'local:big.yml', detail: 'raw', offset });
+		assert.ok(JSON.stringify(part).length <= 25000);
+		assert.equal(part.total_characters, text.length);
+		assert.equal('version' in part, !part.has_more, `part at ${offset}`);
+		assert.match(part.note, new RegExp(`^This is characters ${offset} to \\d+ of ${text.length}\\. `));
+		assert.match(part.note, /Join every part, in order, before sending the file back with snippets_replace_file_yaml\.$/);
+		parts.push(part.yaml);
+		offset = part.next_offset;
+	}
+	assert.ok(parts.length > 3);
+	assert.equal(parts.join(''), text);
 
 	const found = await call('snippets_search', { query: 'word', limit: 200 });
 	assert.ok(JSON.stringify(found).length <= 25000);
@@ -302,6 +316,9 @@ test('team tools, with no repository connected', async (t) => {
 		connected: false,
 		repository: null,
 		packages: [],
+		total_count: 0,
+		has_more: false,
+		next_offset: null,
 		installed_only: [],
 		note: 'No team repository is connected. The person can connect one in the app, under Settings.',
 	});
@@ -369,4 +386,211 @@ test('no reply ever carries the token', async (t) => {
 		await call('snippets_list_team_packages'),
 	];
 	assert.ok(!JSON.stringify(replies).includes(token));
+});
+
+// --- added after review -----------------------------------------------------------
+
+const SHELL = { name: 'out', type: 'shell', params: { cmd: 'echo hi' } };
+const ASK_FIRST = / would run a command on the person's computer each time it is used\. Ask the person first\. If they agree, call again with accept_commands set to true\.$/;
+
+test('a snippet that runs a command is written only when the call says the person agreed', async (t) => {
+	const { call, read, version } = await setup(t, { aiWrite: true });
+	const before = read('base.yml');
+	const risky = { trigger: ';ip', replace: '{{out}}', vars: [{ name: 'when', type: 'date', params: { format: '%Y' } }, SHELL] };
+	const script = { trigger: ';py', replace: '{{out}}', vars: [{ name: 'out', type: 'script', params: { args: ['python3', 'x.py'] } }] };
+
+	assert.match((await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: risky, version: await version('local:base.yml') })).error, ASK_FIRST);
+	assert.match((await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: script, version: await version('local:base.yml') })).error, ASK_FIRST);
+	assert.match((await call('snippets_update_snippet', { file_id: 'local:base.yml', index: 0, snippet: risky, version: await version('local:base.yml') })).error, ASK_FIRST);
+	for (const yaml of [
+		`${before}\n  - trigger: ";ip"\n    replace: "{{out}}"\n    vars:\n      - name: out\n        type: shell\n        params:\n          cmd: "echo hi"\n`,
+		before.replace('type: echo', 'type: shell'),
+	]) {
+		assert.match((await call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml, version: await version('local:base.yml') })).error, ASK_FIRST);
+	}
+	assert.equal(read('base.yml'), before);
+
+	// With the person's agreement, each of the three goes through.
+	const added = await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: risky, version: await version('local:base.yml'), accept_commands: true });
+	assert.equal(added.snippet_count, 4);
+	const updated = await call('snippets_update_snippet', { file_id: 'local:base.yml', index: 0, snippet: script, version: added.version, accept_commands: true });
+	assert.equal(updated.index, 0);
+	const replaced = await call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml: before.replace('type: echo', 'type: shell'), version: updated.version, accept_commands: true });
+	assert.equal(replaced.snippet_count, 3);
+	// A snippet that runs nothing needs no such agreement.
+	assert.equal((await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: ';plain', replace: 'type: shell is only text here' }, version: replaced.version })).snippet_count, 4);
+});
+
+test('YAML that cannot be checked for commands is not written without that agreement either', async (t) => {
+	const { call, read, version } = await setup(t, { aiWrite: true });
+	const before = read('base.yml');
+	const long = `matches:\n  - trigger: ":long"\n    replace: "${'x'.repeat(300 * 1024)}"\n`;
+	const odd = 'matches:\n  - trigger: ":odd"\n    replace: "x"\n    weight: .inf\n';
+	for (const yaml of [long, odd]) {
+		const refused = await call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml, version: await version('local:base.yml') });
+		assert.match(refused.error, /^This YAML could not be checked for snippets that run commands/);
+	}
+	assert.equal(read('base.yml'), before);
+	assert.equal((await call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml: odd, version: await version('local:base.yml'), accept_commands: true })).file_id, 'local:base.yml');
+});
+
+test('a snippet needs something to trigger it', async (t) => {
+	const { call, read, version } = await setup(t, { aiWrite: true });
+	const before = read('base.yml');
+	for (const snippet of [{}, { replace: 'No trigger' }, { trigger: '', replace: 'x' }, { triggers: [], replace: 'x' }]) {
+		const expected = { error: '`snippet` needs a `trigger`, a list of `triggers`, or a `regex`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.' };
+		assert.deepEqual(await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet, version: await version('local:base.yml') }), expected, JSON.stringify(snippet));
+		assert.deepEqual(await call('snippets_update_snippet', { file_id: 'local:base.yml', index: 0, snippet, version: await version('local:base.yml') }), expected);
+	}
+	assert.equal(read('base.yml'), before);
+	assert.equal((await call('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { regex: ':n(?P<n>\\d+)', replace: 'n' }, version: await version('local:base.yml') })).snippet_count, 4);
+});
+
+test('an id is one name, however it is written: nothing in it reaches another route', async (t) => {
+	const { call, read, version, matchDir } = await setup(t, { aiWrite: true });
+	const before = read('base.yml');
+	const v = await version('local:base.yml');
+	for (const fileId of ['x/../local:base.yml#', 'local:base.yml#', 'local:base.yml?version=' + v, 'local:base.yml/raw', '../state', 'local:..%2Fbase.yml', 'local:base.yml/snippets/0']) {
+		assert.ok((await call('snippets_delete_snippet', { file_id: fileId, index: 0, version: v })).error, `delete with ${fileId}`);
+		assert.ok((await call('snippets_get_file', { file_id: fileId })).error, `read with ${fileId}`);
+		assert.ok((await call('snippets_replace_file_yaml', { file_id: fileId, yaml: 'matches: []\n', version: v })).error, `replace with ${fileId}`);
+	}
+	for (const name of ['../../packages/goodbyes', 'goodbyes/installed?x=', 'a#b']) assert.ok((await call('snippets_install_team_package', { name })).error, name);
+	assert.equal(read('base.yml'), before);
+	assert.deepEqual(readdirSync(matchDir).sort(), ['_shared.yml', 'base.yml', 'broken.yml', 'dates.yml', 'packages']);
+});
+
+test('one file with a value that cannot be sent is marked, and every other file is still listed', async (t) => {
+	const { call, matchDir } = await setup(t);
+	const text = 'matches:\n  - trigger: ":odd"\n    replace: "x"\n    weight: .inf\n';
+	writeFileSync(join(matchDir, 'odd.yml'), text);
+	const listed = await call('snippets_list_files');
+	assert.equal(listed.total_count, 6);
+	const odd = listed.items.find((item) => item.name === 'odd.yml');
+	assert.equal(odd.snippet_count, null);
+	assert.match(odd.problem, /^This file holds a value JSON cannot carry/);
+	assert.match((await call('snippets_get_file', { file_id: 'local:odd.yml' })).problem, /JSON cannot carry.*detail "raw"/s);
+	assert.equal((await call('snippets_get_file', { file_id: 'local:odd.yml', detail: 'raw' })).yaml, text);
+	assert.deepEqual((await call('snippets_search', { query: 'odd' })).items, []);
+});
+
+test('errors point at the next call that fits what went wrong', async (t) => {
+	const remote = seeded();
+	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	await service.connectTeam(remote.url);
+
+	// A file that is not there is a file problem, even in a team tool.
+	assert.deepEqual(await call('snippets_propose_to_team', { file_id: 'local:missing.yml', package: 'goodbyes', summary: 'Share' }), {
+		error: 'missing.yml is no longer in the match folder. Call snippets_list_files to see the files and their ids.',
+	});
+	// A folder in the way of an install is the person's to move.
+	mkdirSync(join(matchDir, 'team', 'goodbyes'), { recursive: true });
+	writeFileSync(join(matchDir, 'team', 'goodbyes', 'mine.yml'), 'matches: []\n');
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), {
+		error: 'A folder named goodbyes is already in match/team and was not put there by this app. Ask the person to move or remove that folder.',
+	});
+	// A package name is one name: written like a path, it must not install another package.
+	assert.ok((await call('snippets_install_team_package', { name: 'support/installed?x=' })).error);
+	assert.equal(existsSync(join(matchDir, 'team', 'support')), false);
+	// An empty file has no positions to offer.
+	writeFileSync(join(matchDir, 'empty.yml'), 'matches: []\n');
+	assert.deepEqual(await call('snippets_get_snippet', { file_id: 'local:empty.yml', index: 0 }), { error: 'empty.yml has no snippets.' });
+	// A file that cannot be opened is not offered as raw text.
+	writeFileSync(join(matchDir, 'latin.yml'), Buffer.from([0x6d, 0x61, 0x74, 0x63, 0x68, 0x65, 0x73, 0x3a, 0x20, 0xff, 0x0a]));
+	const summary = await call('snippets_get_file', { file_id: 'local:latin.yml' });
+	assert.match(summary.problem, /^latin\.yml could not be opened: .* It can only be changed outside this app\.$/);
+	assert.ok(!summary.problem.includes('raw'));
+	const raw = await call('snippets_get_file', { file_id: 'local:latin.yml', detail: 'raw' });
+	assert.deepEqual(['yaml' in raw, 'version' in raw, raw.problem], [false, false, summary.problem]);
+});
+
+test('one snippet too long for a reply is named, with where to carry on', async (t) => {
+	const { call, matchDir } = await setup(t);
+	const long = 'word '.repeat(6000);
+	writeFileSync(join(matchDir, 'mixed.yml'), `matches:\n  - trigger: ":a"\n    replace: "A"\n  - trigger: ":long"\n    replace: "${long}"\n  - trigger: ":c"\n    replace: "C"\n`);
+	const first = await call('snippets_get_file', { file_id: 'local:mixed.yml', detail: 'full' });
+	assert.deepEqual([first.snippets.map((item) => item.index), first.next_offset], [[0], 1]);
+	assert.deepEqual(await call('snippets_get_file', { file_id: 'local:mixed.yml', detail: 'full', offset: 1 }), {
+		error: 'The item at offset 1 is longer than a reply can carry. Continue with offset 2. To see that one, ask the person to open it in the app.',
+	});
+	assert.deepEqual((await call('snippets_get_file', { file_id: 'local:mixed.yml', detail: 'full', offset: 2 })).snippets.map((item) => item.index), [2]);
+	assert.deepEqual(await call('snippets_get_snippet', { file_id: 'local:mixed.yml', index: 1 }), { error: 'This snippet is longer than a reply can carry. Ask the person to open it in the app.' });
+});
+
+test('an error is capped like any other reply, and so is a very long description', async (t) => {
+	const { call, matchDir, version } = await setup(t, { aiWrite: true });
+	const broken = `matches:\n${Array.from({ length: 3000 }, (_, index) => `  - trigger: ":b${index}\n    replace: "x"\n`).join('')}`;
+	const refused = await call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml: broken, version: await version('local:base.yml'), accept_commands: true });
+	assert.ok(refused.error.length <= 1600, `the error was ${refused.error.length} characters`);
+	assert.match(refused.error, /\.\.\. \(cut: \d+ characters in all\)$/);
+
+	writeFileSync(join(matchDir, 'wordy.yml'), `# ${'d'.repeat(30000)}\n\nmatches: []\n`);
+	const listed = (await call('snippets_list_files')).items.find((item) => item.name === 'wordy.yml');
+	assert.deepEqual([listed.description.length, listed.description.endsWith('...')], [300, true]);
+	assert.ok(JSON.stringify(await call('snippets_get_file', { file_id: 'local:wordy.yml', detail: 'raw' })).length <= 25000);
+});
+
+test('when more than a thousand snippets match, the count says it is only a floor', async (t) => {
+	const { call, matchDir } = await setup(t);
+	writeFileSync(join(matchDir, 'many.yml'), `matches:\n${Array.from({ length: 1300 }, (_, index) => `  - trigger: ":m${index}"\n    replace: "needle"\n`).join('')}`);
+	const found = await call('snippets_search', { query: 'needle', limit: 5 });
+	assert.deepEqual([found.total_count, found.note], [1000, 'At least 1000 snippets match, and only the first 1000 can be reached. Narrow the search.']);
+	assert.equal((await call('snippets_search', { query: 'goodbye' })).note, undefined);
+});
+
+test('a match folder that is missing says so, and is not shown as a folder with no files', async (t) => {
+	const { call, matchDir } = await setup(t);
+	rmSync(matchDir, { recursive: true, force: true });
+	assert.deepEqual(await call('snippets_list_files'), { items: [], total_count: 0, has_more: false, next_offset: null, note: 'The match folder does not exist yet. Creating a file creates it.' });
+});
+
+test('the list of team packages is paged like every other list', async (t) => {
+	const remote = seeded();
+	const { call, service } = await setup(t, { serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	await service.connectTeam(remote.url);
+	const first = await call('snippets_list_team_packages', { limit: 1 });
+	assert.deepEqual([first.packages.map((pkg) => pkg.name), first.total_count, first.has_more, first.next_offset], [['goodbyes'], 2, true, 1]);
+	const second = await call('snippets_list_team_packages', { limit: 1, offset: 1 });
+	assert.deepEqual([second.packages.map((pkg) => pkg.name), second.has_more, second.next_offset], [['support'], false, null]);
+});
+
+test('what each tool may do is marked exactly', async (t) => {
+	const { tools } = await setup(t);
+	const marks = Object.fromEntries(tools.list().map((tool) => [tool.name, [tool.annotations.readOnlyHint, tool.annotations.destructiveHint, tool.annotations.idempotentHint, tool.annotations.openWorldHint]]));
+	assert.deepEqual(marks, {
+		snippets_search: [true, false, true, false],
+		snippets_list_files: [true, false, true, false],
+		snippets_get_file: [true, false, true, false],
+		snippets_get_snippet: [true, false, true, false],
+		snippets_list_team_packages: [true, false, true, false],
+		snippets_add_snippet: [false, false, false, false],
+		// Changing a snippet drops the keys left out, and an update replaces installed files.
+		snippets_update_snippet: [false, true, false, false],
+		snippets_delete_snippet: [false, true, false, false],
+		snippets_create_file: [false, false, false, false],
+		snippets_replace_file_yaml: [false, true, false, false],
+		snippets_install_team_package: [false, true, false, false],
+		snippets_propose_to_team: [false, false, false, true],
+	});
+});
+
+test('the two tools that wait on git are given longer than the rest', async () => {
+	const calls = [];
+	const api = {
+		settings: async () => ({ apiEnabled: true, apiPort: 1, aiWrite: true }),
+		request: async (method, path, options = {}) => {
+			calls.push([method, path, options.timeout]);
+			if (path.startsWith('/files/')) return { status: 200, body: { id: 'local:dates.yml', name: 'dates.yml', matches: [{}], text: '' } };
+			if (path === '/team/proposals') return { status: 201, body: { branch: 'b', compareUrl: null, created: false } };
+			return { status: 200, body: { packages: [{ name: 'goodbyes', installed: true, updateAvailable: false }] } };
+		},
+	};
+	const tools = createTools({ api });
+	await tools.call('snippets_install_team_package', { name: 'goodbyes' });
+	await tools.call('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share' });
+	assert.deepEqual(calls.filter(([, path]) => path.startsWith('/team/')), [
+		['PUT', '/team/packages/goodbyes/installed', 150_000],
+		['POST', '/team/proposals', 150_000],
+	]);
+	assert.equal(calls.find(([, path]) => path.startsWith('/files/'))[2], undefined);
 });

@@ -10,6 +10,7 @@
 const MAX_REPLY = 25_000;
 const SWITCHED_OFF = 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor\'s Settings, then try again.';
 const LIST_FILES = 'Call snippets_list_files to see the files and their ids.';
+const consent = (what) => `${what} would run a command on the person's computer each time it is used. Ask the person first. If they agree, call again with accept_commands set to true.`;
 
 class ToolError extends Error {}
 
@@ -31,6 +32,7 @@ const SNIPPET = {
 };
 const LIMIT = whole('How many items to return, from 1 to 200. Default 50.', 1, 200);
 const OFFSET = whole('How many items to skip, for the next page. Use `next_offset` from the last reply. Default 0.', 0);
+const ACCEPT = { type: 'boolean', description: 'Pass true only after the person has agreed to a snippet that runs a command (a variable of type shell or script). Example: true.' };
 
 const schema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
@@ -77,6 +79,18 @@ function previewOf(match) {
 	return body.length > 120 ? `${body.slice(0, 117)}...` : body;
 }
 
+const cut = (text, most) => (text.length > most ? `${text.slice(0, most - 3)}...` : text);
+
+// Espanso runs a `shell` or `script` variable as a command when the snippet
+// is used. Writing one is never done without the person's say-so.
+const runs = (vars) => Array.isArray(vars) && vars.some((item) => isObject(item) && (item.type === 'shell' || item.type === 'script'));
+const fileRuns = (data) => isObject(data) && (runs(data.global_vars) || (Array.isArray(data.matches) && data.matches.some((match) => isObject(match) && runs(match.vars))));
+
+function checkSnippet(snippet, accept) {
+	if (!triggersOf(snippet).length) throw new ToolError('`snippet` needs a `trigger`, a list of `triggers`, or a `regex`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.');
+	if (runs(snippet.vars) && accept !== true) throw new ToolError(consent('This snippet'));
+}
+
 const brief = (match, index) => ({ index, triggers: triggersOf(match), label: isObject(match) ? textOf(match.label) : '', preview: previewOf(match) });
 
 function page(items, { offset = 0, limit = 50 }) {
@@ -91,16 +105,18 @@ function fit(data, key, { offset = 0, limit = 50 }) {
 	if (size(data) <= MAX_REPLY) return data;
 	const items = data[key];
 	let keep = items.length;
-	const cut = (count) => ({
+	const trimmed = (count) => ({
 		...data,
 		[key]: items.slice(0, count),
 		has_more: true,
 		next_offset: offset + count,
 		note: `Cut to fit: this reply holds ${count} of the ${Math.min(limit, items.length)} asked for. Ask again with offset ${offset + count}, or use a smaller limit.`,
 	});
-	while (keep > 1 && size(cut(keep)) > MAX_REPLY) keep = Math.max(1, Math.floor(keep * 0.8));
-	const result = cut(keep);
-	if (size(result) > MAX_REPLY) throw new ToolError('One item here is longer than a reply can carry. Ask the person to open it in the app.');
+	while (keep > 1 && size(trimmed(keep)) > MAX_REPLY) keep = Math.max(1, Math.floor(keep * 0.8));
+	const result = trimmed(keep);
+	if (size(result) > MAX_REPLY) {
+		throw new ToolError(`The item at offset ${offset} is longer than a reply can carry. Continue with offset ${offset + 1}. To see that one, ask the person to open it in the app.`);
+	}
 	return result;
 }
 
@@ -119,13 +135,13 @@ function explain(reply, { file, fileId, tool } = {}) {
 		case 'INVALID_NAME':
 			return fileId === undefined ? message : `That is not a file id. ${LIST_FILES}`;
 		case 'EXISTS':
-			return `${message} Choose another name, or change the existing file.`;
+			return tool === 'team' ? `${message} Ask the person to move or remove that folder.` : `${message} Choose another name, or change the existing file.`;
 		case 'PARSE_ERROR':
 			return `That YAML has errors, so nothing was saved: ${message}`;
 		case 'NOT_CONNECTED':
 			return 'No team repository is connected. Ask the person to connect one in the app, under Settings.';
 		case 'UNREPRESENTABLE':
-			return `${name} holds a value that cannot be sent here. Ask the person to open it in the app.`;
+			return 'That holds a value that cannot be sent here: a number that is not finite, or a list or mapping that contains itself. Ask the person to open it in the app.';
 		case 'INVALID':
 		case 'TOO_LARGE':
 		case 'GIT_FAILED':
@@ -148,11 +164,18 @@ export function createTools({ api }) {
 		name: file.name,
 		source: file.source,
 		...(file.package ? { package: file.package } : {}),
-		description: file.description,
-		prefix: file.prefix,
+		description: cut(textOf(file.description), 300),
+		prefix: cut(textOf(file.prefix), 40),
 		read_only: file.readOnly,
 	});
-	const broken = (file) => `${file.name} ${file.unreadable ? 'could not be opened' : 'has YAML errors'}: ${file.parseErrors?.[0] ?? 'no detail'}`;
+	// Why a file's snippets are not listed, and what can still be done.
+	const broken = (file) =>
+		file.unreadable
+			? `${file.name} could not be opened: ${file.parseErrors?.[0] ?? 'no detail'} It can only be changed outside this app.`
+			: file.notCarried
+				? file.parseErrors.at(-1)
+				: `${file.name} has YAML errors: ${file.parseErrors?.[0] ?? 'no detail'}`;
+	const hint = (file) => (file.unreadable ? '' : ' Read it with snippets_get_file and detail "raw" to see the text.');
 
 	const tools = [
 		{
@@ -166,6 +189,8 @@ export function createTools({ api }) {
 				const found = hits.map((hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) }));
 				const data = fit(page(found, { offset, limit }), 'items', { offset, limit });
 				if (!found.length) data.note = 'No snippets match. Try fewer or different words: search looks at triggers, labels, search terms and the text a snippet expands to.';
+				// The app returns 1000 hits at most.
+				if (hits.length === 1000) data.note = 'At least 1000 snippets match, and only the first 1000 can be reached. Narrow the search.';
 				return data;
 			},
 		},
@@ -181,30 +206,54 @@ export function createTools({ api }) {
 				const items = files.map((file) => ({ ...head(file), snippet_count: file.matchCount, ...(file.matches === null ? { problem: broken(file) } : {}) }));
 				// The header fields in a fixed order, with the count before read_only.
 				const ordered = items.map(({ read_only: readOnly, ...rest }) => ({ ...rest, read_only: readOnly }));
-				return fit(page(ordered, { offset, limit }), 'items', { offset, limit });
+				const data = fit(page(ordered, { offset, limit }), 'items', { offset, limit });
+				if (state.error) data.note = state.error;
+				else if (state.exists === false) data.note = 'The match folder does not exist yet. Creating a file creates it.';
+				return data;
 			},
 		},
 		{
 			name: 'snippets_get_file',
 			title: 'Read a match file',
 			description:
-				'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as Espanso keys. "raw" gives the YAML text itself, with its comments, imports and global variables. In "summary" and "full", long files come back in pages: use `limit` and `offset`, and a `preview` is cut to 120 characters. "raw" is not paged: text too long for one reply is cut, and the reply says so.',
+'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as Espanso keys. "raw" gives the YAML text itself, with its comments, imports and global variables. In "summary" and "full", long files come back in pages: use `limit` and `offset`, and a `preview` is cut to 120 characters. In "raw", a long file comes back in parts: `offset` then counts characters, each part says where the next starts, and the `version` comes only with the last part, so the whole text has been read before anything can be sent back.',
 			inputSchema: schema(
-				{ file_id: FILE_ID, detail: { enum: ['summary', 'full', 'raw'], description: 'How much to return. Default "summary". Example: "full".' }, limit: LIMIT, offset: OFFSET },
+				{
+					file_id: FILE_ID,
+					detail: { enum: ['summary', 'full', 'raw'], description: 'How much to return. Default "summary". Example: "full".' },
+					limit: LIMIT,
+					offset: whole('For "summary" and "full": how many snippets to skip. For "raw": how many characters to skip. Use `next_offset` from the last reply. Default 0.', 0),
+				},
 				['file_id']
 			),
 			async run({ file_id: fileId, detail = 'summary', limit = 50, offset = 0 }) {
 				const file = await readFile(fileId);
 				const base = { ...head(file), version: file.version, snippet_count: file.matchCount };
 				if (detail === 'raw') {
-					const data = { ...base, yaml: file.text };
-					const over = JSON.stringify(data).length - MAX_REPLY;
-					if (over <= 0) return data;
-					const kept = Math.max(0, file.text.length - over - 400);
-					return { ...base, yaml: file.text.slice(0, kept), truncated: true, note: `The YAML is cut to its first ${kept} characters of ${file.text.length}. Read the snippets in pages with detail "full", limit and offset.` };
+					const { version, ...unversioned } = base;
+					if (file.unreadable) return { ...unversioned, problem: broken(file) };
+					const total = file.text.length;
+					const part = (end) => {
+						const more = end < total;
+						return {
+							// The version unlocks a write. It is held back until the last
+							// part, so a file is never replaced by its first part alone.
+							...(more ? unversioned : base),
+							yaml: file.text.slice(offset, end),
+							total_characters: total,
+							has_more: more,
+							next_offset: more ? end : null,
+							...(more || offset > 0
+								? { note: `This is characters ${offset} to ${end} of ${total}. ${more ? `Read on with offset ${end}. The version comes with the last part.` : 'This is the last part.'} Join every part, in order, before sending the file back with snippets_replace_file_yaml.` }
+								: {}),
+						};
+					};
+					let end = total;
+					while (end > offset && JSON.stringify(part(end)).length > MAX_REPLY) end = offset + Math.floor((end - offset) * 0.8);
+					return part(end);
 				}
 				if (file.matches === null) {
-					return { ...base, problem: `${broken(file)} Read it with detail "raw" to see the text.`, snippets: [], has_more: false, next_offset: null };
+					return { ...base, problem: `${broken(file)}${hint(file)}`, snippets: [], has_more: false, next_offset: null };
 				}
 				const all = file.matches.map((match, index) => (detail === 'full' ? { index, snippet: match } : brief(match, index)));
 				const { items, total_count: total, ...paging } = page(all, { offset, limit });
@@ -219,7 +268,8 @@ export function createTools({ api }) {
 			inputSchema: schema({ file_id: FILE_ID, index: INDEX }, ['file_id', 'index']),
 			async run({ file_id: fileId, index }) {
 				const file = await readFile(fileId);
-				if (file.matches === null) throw new ToolError(`${broken(file)} Read it with snippets_get_file and detail "raw".`);
+				if (file.matches === null) throw new ToolError(`${broken(file)}${hint(file)}`);
+				if (!file.matches.length) throw new ToolError(`${file.name} has no snippets.`);
 				if (index >= file.matches.length) {
 					throw new ToolError(`${file.name} has ${file.matches.length} snippets, at positions 0 to ${file.matches.length - 1}. Call snippets_get_file to see them.`);
 				}
@@ -233,13 +283,11 @@ export function createTools({ api }) {
 			title: 'List team packages',
 			description:
 				'Show the team repository the app is connected to and the packages it offers: which are installed, which have an update, and which run commands when their snippets are used. Use it before snippets_install_team_package or snippets_propose_to_team. `snippet_count` is what the repository offers now. `installed_only` names packages that are installed but that the repository no longer offers. Team packages are separate from packages Espanso installed, even when they share a name. If no repository is connected, it says so.',
-			inputSchema: schema({}),
-			async run() {
+			inputSchema: schema({ limit: LIMIT, offset: OFFSET }),
+			async run({ limit = 50, offset = 0 }) {
 				const team = await ask('GET', '/team');
-				const data = {
-					connected: team.connected,
-					repository: team.repository,
-					packages: team.packages.map((pkg) => ({
+				const { items, ...paging } = page(
+					team.packages.map((pkg) => ({
 						name: pkg.name,
 						title: pkg.title,
 						description: pkg.description,
@@ -248,11 +296,12 @@ export function createTools({ api }) {
 						update_available: pkg.updateAvailable,
 						runs_commands: pkg.runsCommands,
 					})),
-					installed_only: team.installedOnly.map((item) => item.name),
-				};
+					{ offset, limit }
+				);
+				const data = fit({ connected: team.connected, repository: team.repository, packages: items, ...paging, installed_only: team.installedOnly.map((item) => item.name) }, 'packages', { offset, limit });
 				if (!team.connected) data.note = team.problem || 'No team repository is connected. The person can connect one in the app, under Settings.';
 				else if (team.problem) data.note = `${team.problem} What is listed is from the last time the repository could be reached.`;
-				return fit(data, 'packages', { limit: data.packages.length });
+				return data;
 			},
 		},
 		{
@@ -261,8 +310,12 @@ export function createTools({ api }) {
 			write: true,
 			description:
 				'Add a new snippet to one of the person\'s own files. Read the file first with snippets_get_file and pass its `version`. The snippet goes at the end unless you give `index`. Returns the new position and the file\'s new version. Fails on a read-only file, and when the file changed since you read it.',
-			inputSchema: schema({ file_id: FILE_ID, snippet: SNIPPET, version: VERSION, index: whole('Where to put it, counting from 0. Leave out to add at the end. Example: 0.', 0) }, ['file_id', 'snippet', 'version']),
-			async run({ file_id: fileId, snippet, version, index }) {
+			inputSchema: schema(
+				{ file_id: FILE_ID, snippet: SNIPPET, version: VERSION, index: whole('Where to put it, counting from 0. Leave out to add at the end. Example: 0.', 0), accept_commands: ACCEPT },
+				['file_id', 'snippet', 'version']
+			),
+			async run({ file_id: fileId, snippet, version, index, accept_commands: accept }) {
+				checkSnippet(snippet, accept);
 				const file = await ask('POST', `${filePath(fileId)}/snippets`, { body: { match: snippet, index, version } }, { fileId });
 				return { file_id: file.id, index: Math.min(index ?? file.matches.length - 1, file.matches.length - 1), snippet_count: file.matches.length, version: file.version };
 			},
@@ -273,8 +326,10 @@ export function createTools({ api }) {
 			write: true,
 			description:
 				'Replace one snippet in one of the person\'s own files with the one you give. Read it first with snippets_get_snippet, change what you need in that object, and send the whole snippet back with the file\'s `version`. Keys you leave out are removed from the snippet. Nothing else in the file is touched.',
-			inputSchema: schema({ file_id: FILE_ID, index: INDEX, snippet: SNIPPET, version: VERSION }, ['file_id', 'index', 'snippet', 'version']),
-			async run({ file_id: fileId, index, snippet, version }) {
+			destructive: true,
+			inputSchema: schema({ file_id: FILE_ID, index: INDEX, snippet: SNIPPET, version: VERSION, accept_commands: ACCEPT }, ['file_id', 'index', 'snippet', 'version']),
+			async run({ file_id: fileId, index, snippet, version, accept_commands: accept }) {
+				checkSnippet(snippet, accept);
 				const file = await ask('PUT', `${filePath(fileId)}/snippets/${index}`, { body: { match: snippet, version } }, { fileId });
 				return { file_id: file.id, index, snippet_count: file.matches.length, version: file.version };
 			},
@@ -318,8 +373,21 @@ export function createTools({ api }) {
 			destructive: true,
 			description:
 				'Replace the whole YAML text of one of the person\'s own files. Use it only for what the snippet tools cannot do: comments, `imports`, `global_vars` and other keys beside `matches`. Read the text first with snippets_get_file and detail "raw", change it, and send all of it back with the file\'s `version`. YAML that does not parse is refused. The app keeps a backup.',
-			inputSchema: schema({ file_id: FILE_ID, yaml: text('The complete new text of the file. Example: "matches:\\n  - trigger: \\":hi\\"\\n    replace: \\"Hello\\"\\n".'), version: VERSION }, ['file_id', 'yaml', 'version']),
-			async run({ file_id: fileId, yaml, version }) {
+			inputSchema: schema(
+				{ file_id: FILE_ID, yaml: text('The complete new text of the file. Example: "matches:\\n  - trigger: \\":hi\\"\\n    replace: \\"Hello\\"\\n".'), version: VERSION, accept_commands: ACCEPT },
+				['file_id', 'yaml', 'version']
+			),
+			async run({ file_id: fileId, yaml, version, accept_commands: accept }) {
+				if (accept !== true) {
+					// The app reads the YAML, so this file needs no parser of its own.
+					const parsed = await api.request('POST', '/yaml/parse', { body: { text: yaml } });
+					if (parsed.status === 413 || parsed.body?.error?.code === 'UNREPRESENTABLE') {
+						throw new ToolError(
+							'This YAML could not be checked for snippets that run commands: it is too long, or holds a value that cannot be sent. Ask the person first. If they agree, call again with accept_commands set to true.'
+						);
+					}
+					if (parsed.status === 200 && fileRuns(parsed.body.value)) throw new ToolError(consent('This file'));
+				}
 				const file = await ask('PUT', `${filePath(fileId)}/raw`, { body: { text: yaml, version } }, { fileId });
 				return { file_id: file.id, snippet_count: file.matchCount, version: file.version };
 			},
@@ -328,6 +396,7 @@ export function createTools({ api }) {
 			name: 'snippets_install_team_package',
 			title: 'Install a team package',
 			write: true,
+			destructive: true,
 			description:
 				'Install a package from the connected team repository, or update an installed one to what the repository has now. Its snippets then work in Espanso and show as read-only files with source "team". A package that runs commands is refused until the person agrees and you pass accept_commands. See what is on offer with snippets_list_team_packages.',
 			inputSchema: schema(
@@ -367,6 +436,8 @@ export function createTools({ api }) {
 				['file_id', 'package', 'summary']
 			),
 			async run({ file_id: fileId, package: name, summary, title, description }) {
+				// Read first: a file that is not there is then reported as a file.
+				await readFile(fileId);
 				const sent = await ask('POST', '/team/proposals', { body: { fileId, package: name, summary, title, description }, timeout: 150_000 }, { fileId, tool: 'team' });
 				return {
 					branch: sent.branch,
@@ -391,7 +462,7 @@ export function createTools({ api }) {
 		},
 	}));
 
-	const failed = (message) => ({ content: [{ type: 'text', text: message }], isError: true });
+	const failed = (message) => ({ content: [{ type: 'text', text: message.length > 1500 ? `${message.slice(0, 1500)}... (cut: ${message.length} characters in all)` : message }], isError: true });
 
 	return {
 		list: () => definitions,
