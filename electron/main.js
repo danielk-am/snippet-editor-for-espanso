@@ -49,7 +49,22 @@ function buildMenu() {
 			],
 		},
 		{ role: 'editMenu' },
-		{ role: 'viewMenu' },
+		{
+			label: 'View',
+			submenu: [
+				command('Show or Hide the Assistant', 'CmdOrCtrl+J', 'assistant'),
+				{ type: 'separator' },
+				{ role: 'reload' },
+				{ role: 'forceReload' },
+				{ role: 'toggleDevTools' },
+				{ type: 'separator' },
+				{ role: 'resetZoom' },
+				{ role: 'zoomIn' },
+				{ role: 'zoomOut' },
+				{ type: 'separator' },
+				{ role: 'togglefullscreen' },
+			],
+		},
 		{ role: 'windowMenu' },
 	]);
 }
@@ -68,6 +83,7 @@ if (!app.requestSingleInstanceLock()) {
 			ipcMain,
 			userDataDir: app.getPath('userData'),
 			onChange: () => send('data:changed'),
+			onChatEvent: (event) => send('chat:event', event),
 			getWindow: () => win,
 			isTrustedSender,
 			mcp: mcpSetup({ packaged: app.isPackaged, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),

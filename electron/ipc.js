@@ -8,7 +8,7 @@ import { mcpSetupText, mcpSetupToml, mcpSetupWarning } from './mcpSetup.js';
 // error on its way to the renderer.
 // `clipboard` and `openExternal` can be swapped for stand-ins, so a test can
 // see what was copied or opened without touching the real clipboard or browser.
-export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, mcp, clipboard = systemClipboard, openExternal = shell.openExternal }) {
+export function registerIpc({ ipcMain, service, router, listener, chat, getWindow, isTrustedSender, mcp, clipboard = systemClipboard, openExternal = shell.openExternal }) {
 	const handle = (channel, fn) =>
 		ipcMain.handle(channel, async (event, ...args) => {
 			try {
@@ -96,4 +96,16 @@ export function registerIpc({ ipcMain, service, router, listener, getWindow, isT
 		clipboard.writeText(await listener.textToCopy(what));
 		return true;
 	});
+
+	// The chat. A message goes in here, and the answer comes back as
+	// `chat:event` messages. A change the assistant proposes is written only
+	// by `chat:apply`, which the person's own press of Apply sends.
+	handle('chat:status', () => chat.status());
+	handle('chat:send', (input) => chat.send(input));
+	handle('chat:stop', (turnId) => {
+		chat.stop(String(turnId ?? ''));
+		return true;
+	});
+	handle('chat:apply', (id) => chat.apply(String(id ?? '')));
+	handle('chat:dismiss', (id) => chat.dismiss(String(id ?? '')));
 }

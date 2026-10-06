@@ -17,8 +17,13 @@ const CHANNELS = new Set([
 	'listener:set',
 	'listener:replaceToken',
 	'listener:copy',
+	'chat:status',
+	'chat:send',
+	'chat:stop',
+	'chat:apply',
+	'chat:dismiss',
 ]);
-const EVENTS = new Set(['data:changed', 'menu:command']);
+const EVENTS = new Set(['data:changed', 'menu:command', 'chat:event']);
 
 contextBridge.exposeInMainWorld('snippetEditor', {
 	platform: process.platform,

@@ -50,6 +50,13 @@ export const api = {
 	ai: () => call('ai:get'),
 	setAi: (input) => call('ai:set', input),
 
+	// The chat. An answer arrives as `chat:event` messages.
+	chatStatus: () => call('chat:status'),
+	chatSend: (input) => call('chat:send', input),
+	chatStop: (turnId) => call('chat:stop', turnId),
+	chatApply: (id) => call('chat:apply', id),
+	chatDismiss: (id) => call('chat:dismiss', id),
+
 	// Things only a window can ask for.
 	chooseMatchDir: () => call('settings:chooseMatchDir'),
 	resetMatchDir: () => call('settings:resetMatchDir'),
