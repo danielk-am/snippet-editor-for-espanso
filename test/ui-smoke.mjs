@@ -73,7 +73,8 @@ window.__ui = {
 				.filter((el) => !el.matches('.sidebar__resize'))
 				.filter((el) => { const r = el.getBoundingClientRect(); return Math.min(r.width, r.height) < 24; })
 				.map(describe),
-			overflow: document.documentElement.scrollWidth > window.innerWidth,
+			// The page itself, or the pane that scrolls inside it.
+			overflow: document.documentElement.scrollWidth > window.innerWidth || [...document.querySelectorAll('.content')].some((el) => el.scrollWidth > el.clientWidth),
 		};
 	},
 };
@@ -303,6 +304,15 @@ async function run() {
 			await waitFor(`document.querySelector('.editor')`, 'the editor again');
 		});
 	}
+
+	await step('settings in a narrow window', async () => {
+		await js(`document.querySelector('.topbar [aria-label="Show the sidebar"]').click()`);
+		await waitFor(`getComputedStyle(document.querySelector('.sidebar')).display !== 'none'`, 'the sidebar drawer');
+		await js(`window.__ui.click('Settings', '.nav-item__label')`);
+		await waitFor(`document.querySelector('.copy-row code')`, 'Settings in a narrow window');
+		await js(`document.querySelector('.sidebar-scrim')?.click()`);
+		await shot('16-settings-760');
+	});
 
 	await step('hostile content', async () => {
 		win.setContentSize(1440, 900);
