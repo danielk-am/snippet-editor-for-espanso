@@ -91,6 +91,15 @@ test('nothing listening, or something that is not Ollama, is "not answering"', a
 	await notRunning(createOllama({ port: other.address().port }).version());
 	await notRunning(createOllama({ port: other.address().port }).models());
 
+	// JSON, but not what Ollama sends.
+	for (const body of ['null', '[]', '"ollama"', '{"version":7}', '{"models":{}}']) {
+		const odd = http.createServer((request, response) => response.end(body));
+		await new Promise((resolve) => odd.listen(0, '127.0.0.1', resolve));
+		t.after(() => odd.close());
+		await notRunning(createOllama({ port: odd.address().port }).version());
+		await notRunning(createOllama({ port: odd.address().port }).models());
+	}
+
 	const silent = http.createServer(() => {});
 	await new Promise((resolve) => silent.listen(0, '127.0.0.1', resolve));
 	t.after(() => {
@@ -248,5 +257,5 @@ test('stopped while a tool is running: no further request is made', async (t) =>
 	const events = [];
 	await ollamaTurn({ ollama: context.ollama, model: 'm', messages: [], tools, signal: stopper.signal, onEvent: (event) => events.push(event) });
 	assert.equal(context.requests.length, 1);
-	assert.ok(!events.some((event) => event.type === 'done' || event.type === 'error'));
+	assert.deepEqual(events, [{ type: 'tool', id: 'call-1-1', name: 'snippets_search', status: 'started' }]);
 });
