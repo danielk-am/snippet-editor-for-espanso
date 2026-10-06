@@ -100,3 +100,18 @@ test('a reply that is not what the API sends is treated as the app not being the
 	writeFileSync(join(dataDir, 'api-token'), 'a'.repeat(64) + '\n');
 	await unreachable(createApiClient({ dataDir }).request('GET', '/state'), /not reachable/);
 });
+
+test('with the API switched off, the token is not sent to whatever else holds that port', async (t) => {
+	let arrived = 0;
+	const other = net.createServer((socket) => {
+		arrived += 1;
+		socket.end('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}');
+	});
+	await new Promise((resolve) => other.listen(0, '127.0.0.1', resolve));
+	t.after(() => other.close());
+	const dataDir = mkdtempSync(join(tmpdir(), 'snippet-editor-mcpclient-'));
+	writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: false, apiPort: other.address().port }));
+	writeFileSync(join(dataDir, 'api-token'), 'a'.repeat(64) + '\n');
+	await unreachable(createApiClient({ dataDir }).request('GET', '/state'), /not reachable/);
+	assert.equal(arrived, 0);
+});
