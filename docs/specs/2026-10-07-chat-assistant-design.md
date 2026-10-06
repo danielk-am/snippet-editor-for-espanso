@@ -106,7 +106,7 @@ The message goes in on standard input here too. Codex prints whole messages, not
 
 Reached at `http://127.0.0.1:11434`. `/api/version` says whether it is running and `/api/tags` lists your models. You pick one in the panel.
 
-The app sends `/api/chat` with the tool list and `stream: true`, reads the answer as it arrives, runs each tool call itself and sends the results back, for at most 8 rounds. Cloud models are the ones your own Ollama offers once you have signed in to Ollama. The app talks only to the Ollama on this computer and holds no key. This follows the rule in your Agents app: no settings field that accepts a key.
+The app sends `/api/chat` with the tool list and `stream: true`, reads the answer as it arrives, runs each tool call itself and sends the results back, for at most 8 rounds. Cloud models are the ones your own Ollama offers once you have signed in to Ollama. The app talks only to the Ollama on this computer and holds no key. This follows your standing rule: no settings field that accepts a key.
 
 ## Conversation memory
 
