@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGit } from '../core/git.js';
@@ -272,4 +272,181 @@ test('work asked for at the same moment runs one piece at a time', async () => {
 	const [, listed, , files] = await Promise.all([repo.fetch(), repo.packages(), repo.fetch(), repo.packageFiles('goodbyes')]);
 	assert.equal(listed.packages.length, 2);
 	assert.equal(files[1].bytes.toString('utf8'), MATCHES([':bye', 'One at a time']));
+});
+
+// --- proposing ------------------------------------------------------------------
+
+const AT = () => new Date(Date.UTC(2026, 9, 6, 10, 15, 0));
+const BRANCH = 'snippet-editor/goodbyes-20261006-101500';
+const FAREWELLS = MATCHES([':farewell', 'Farewell, and thank you.']);
+
+// Nothing of a proposal may stay in the app's copy: no branch, no folder.
+async function leftBehind({ dataDir, git }) {
+	const [folder] = readdirSync(join(dataDir, 'team'));
+	const dir = join(dataDir, 'team', folder);
+	const refs = (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { cwd: join(dir, 'repo.git') })).trim().split('\n');
+	return { folders: readdirSync(dir).filter((name) => name.startsWith('work-')), branches: refs.filter((ref) => ref !== 'main') };
+}
+
+test('a proposal arrives as one commit on a new branch, and the main branch is untouched', async () => {
+	const context = setup({ now: AT });
+	const { repo, remote } = context;
+	await repo.connect();
+	const main = remote.head();
+	const result = await repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' });
+
+	assert.deepEqual(result, { branch: BRANCH, commit: remote.head(BRANCH), created: false, compareUrl: null });
+	assert.equal(remote.head(), main);
+	assert.deepEqual(remote.branches(), ['main', BRANCH]);
+	assert.equal(remote.head(`${BRANCH}~1`), main);
+	assert.deepEqual(remote.log(BRANCH).slice(0, 1), ['Test Person <test@example.com>|Add farewells']);
+	assert.deepEqual(remote.filesIn(BRANCH, 'packages/goodbyes'), ['packages/goodbyes/_manifest.yml', 'packages/goodbyes/farewells.yml', 'packages/goodbyes/package.yml']);
+	assert.equal(remote.show(BRANCH, 'packages/goodbyes/farewells.yml') + '\n', FAREWELLS);
+	assert.deepEqual(await leftBehind(context), { folders: [], branches: [] });
+});
+
+test('a proposal starts from the newest commit, and links to the pull request page when there is a web address', async () => {
+	const { remote, dataDir, git } = setup();
+	const address = { ...parseRepositoryAddress(remote.url, { allowLocal: true }), webUrl: 'https://github.com/acme/team' };
+	const repo = createTeamRepo({ dataDir, address, git, now: AT });
+	await repo.connect();
+	const newer = remote.commit({ 'packages/support/replies.yml': MATCHES([':refund', 'Refund sent.']) });
+	const result = await repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' });
+	assert.equal(remote.head(`${BRANCH}~1`), newer);
+	assert.equal(result.compareUrl, `https://github.com/acme/team/compare/main...${BRANCH}?expand=1`);
+});
+
+test('a proposal for a package that does not exist yet writes its manifest', async () => {
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	const input = { package: 'farewells', fileName: 'package.yml', text: FAREWELLS, summary: 'Start a farewells package' };
+	for (const [extra, field] of [
+		[{}, 'title'],
+		[{ title: 'Farewells' }, 'description'],
+		[{ title: 'Farewells', description: 'No' }, 'description'],
+		[{ title: 'Farewells', description: 'x'.repeat(1001) }, 'description'],
+		[{ title: 'Two\nlines', description: 'Ways to say goodbye' }, 'title'],
+	]) {
+		await rejectsWith(repo.propose({ ...input, ...extra }), (error) => {
+			assert.equal(error.code, 'INVALID');
+			assert.match(error.message, new RegExp(`\`${field}\``));
+		});
+	}
+	assert.deepEqual(remote.branches(), ['main']);
+
+	const result = await repo.propose({ ...input, title: 'Farewells: "kind" ones', description: 'Ways to say goodbye' });
+	assert.equal(result.created, true);
+	const branch = 'snippet-editor/farewells-20261006-101500';
+	assert.equal(
+		remote.show(branch, 'packages/farewells/_manifest.yml') + '\n',
+		'name: farewells\ntitle: \'Farewells: "kind" ones\'\ndescription: Ways to say goodbye\nversion: 0.1.0\nauthor: Test Person\n'
+	);
+	assert.deepEqual(remote.filesIn(branch, 'packages/farewells'), ['packages/farewells/_manifest.yml', 'packages/farewells/package.yml']);
+});
+
+test('a file the package already holds can be replaced, but not proposed unchanged', async () => {
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	const current = MATCHES([':bye', 'Goodbye for now'], [':cheers', 'Cheers,']);
+	await rejectsWith(repo.propose({ package: 'goodbyes', fileName: 'package.yml', text: current, summary: 'Nothing new' }), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.equal(error.message, 'The team package already has this file as it is.');
+	});
+	assert.deepEqual(remote.branches(), ['main']);
+	const changed = MATCHES([':bye', 'Goodbye, and thanks'], [':cheers', 'Cheers,']);
+	await repo.propose({ package: 'goodbyes', fileName: 'package.yml', text: changed, summary: 'Warmer goodbye' });
+	assert.equal(remote.show(BRANCH, 'packages/goodbyes/package.yml') + '\n', changed);
+});
+
+test('what is asked for is checked before git is involved', async () => {
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	const good = { package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' };
+	for (const bad of [
+		{ package: 'Good_Byes' },
+		{ package: '../escape' },
+		{ package: '' },
+		{ fileName: '../farewells.yml' },
+		{ fileName: 'farewells.txt' },
+		{ fileName: '.hidden.yml' },
+		{ fileName: '_manifest.yml' },
+		{ text: '' },
+		{ text: '   \n' },
+		{ text: 42 },
+		{ summary: '' },
+		{ summary: '   ' },
+		{ summary: 'x'.repeat(101) },
+		{ summary: 'Two\nlines' },
+	]) {
+		await rejectsWith(repo.propose({ ...good, ...bad }), (error) => assert.equal(error.code, 'INVALID', JSON.stringify(bad)));
+	}
+	await rejectsWith(repo.propose({ ...good, text: 'x'.repeat(3 * 1024 * 1024) }), (error) => assert.equal(error.code, 'TOO_LARGE'));
+	assert.deepEqual(remote.branches(), ['main']);
+});
+
+test('without a name and email for git, the proposal fails plainly and leaves nothing behind', async () => {
+	const context = setup({ identity: false, now: AT });
+	await context.repo.connect();
+	const error = await rejectsWith(context.repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' }), (failure) =>
+		assert.deepEqual([failure.code, failure.kind], ['GIT_FAILED', 'identity'])
+	);
+	assert.match(error.message, /Git does not know your name and email yet/);
+	assert.deepEqual(context.remote.branches(), ['main']);
+	assert.deepEqual(await leftBehind(context), { folders: [], branches: [] });
+});
+
+test('a repository that refuses the push says so, and nothing is left behind', async () => {
+	const context = setup({ now: AT });
+	await context.repo.connect();
+	context.remote.refuseProposals();
+	const error = await rejectsWith(context.repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' }), (failure) =>
+		assert.deepEqual([failure.code, failure.kind], ['GIT_FAILED', 'denied'])
+	);
+	assert.equal(error.message, 'You do not have permission to push to this repository.');
+	assert.deepEqual(context.remote.branches(), ['main']);
+	assert.deepEqual(await leftBehind(context), { folders: [], branches: [] });
+});
+
+test('a link in the repository is never written through', async () => {
+	const remote = seeded();
+	const outside = join(remote.root, 'outside');
+	mkdirSync(outside);
+	writeFileSync(join(outside, 'target.yml'), 'untouched\n');
+	remote.commit({ 'packages/linked': { link: outside }, 'packages/goodbyes/linked.yml': { link: join(outside, 'target.yml') } });
+	const context = setup({ remote, now: AT });
+	await context.repo.connect();
+	for (const input of [
+		{ package: 'linked', fileName: 'target.yml' },
+		{ package: 'linked', fileName: 'new.yml' },
+		{ package: 'goodbyes', fileName: 'linked.yml' },
+	]) {
+		await rejectsWith(context.repo.propose({ ...input, text: FAREWELLS, summary: 'Through a link', title: 'Linked', description: 'A link' }), (error) => {
+			assert.equal(error.code, 'INVALID', JSON.stringify(input));
+			assert.match(error.message, /link|folder/);
+		});
+	}
+	assert.equal(readFileSync(join(outside, 'target.yml'), 'utf8'), 'untouched\n');
+	assert.deepEqual(readdirSync(outside), ['target.yml']);
+	assert.deepEqual(remote.branches(), ['main']);
+	assert.deepEqual(await leftBehind(context), { folders: [], branches: [] });
+});
+
+test('two proposals in the same second get two branches', async () => {
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	const [first, second] = await Promise.all([
+		repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' }),
+		repo.propose({ package: 'goodbyes', fileName: 'more.yml', text: MATCHES([':more', 'More']), summary: 'Add more' }),
+	]);
+	assert.deepEqual([first.branch, second.branch], [BRANCH, `${BRANCH}-2`]);
+	assert.deepEqual(remote.branches(), ['main', BRANCH, `${BRANCH}-2`]);
+});
+
+test('an empty repository cannot take a proposal yet', async () => {
+	const { repo } = setup({ remote: createRemote(), now: AT });
+	await repo.connect();
+	await rejectsWith(repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells', title: 'Goodbyes', description: 'Ways to part' }), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.match(error.message, /empty/);
+	});
 });

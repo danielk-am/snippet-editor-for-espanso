@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseDocument } from 'yaml';
+import { parseDocument, stringify } from 'yaml';
 import { isSafeFileName } from './store.js';
 import { isPlainObject, toText } from '../shared/text.js';
 
@@ -250,9 +250,91 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		return (cache = { commit, branch, packages, problems, files });
 	}
 
+	const oneLine = (value, most) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= most && !/[\r\n]/.test(value);
+	const stamp = () => now().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+
+	// What the commit holds at one path: null, or its entry.
+	const entryAt = async (commit, file) => parseTree(await run(['ls-tree', '-z', commit, '--', file]))[0] ?? null;
+
+	// Sends one file to a package as a new branch. The main branch is never
+	// pushed, and nothing is forced: the only thing that reaches the team is a
+	// branch someone can open a pull request from, or ignore.
+	async function propose({ package: name, fileName, text, summary, title, description }) {
+		await needCloned();
+		if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) {
+			throw fail('INVALID', 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
+		}
+		if (fileName === MANIFEST || !isSafeFileName(fileName)) throw fail('INVALID', 'That is not a match file name.');
+		if (typeof text !== 'string' || !text.trim()) throw fail('INVALID', 'There is nothing in that file to propose.');
+		if (Buffer.byteLength(text) > max.fileBytes) throw fail('TOO_LARGE', 'That file is larger than the app opens.');
+		if (!oneLine(summary, 100)) throw fail('INVALID', 'Write a one-line summary, 100 characters or fewer.');
+
+		await fetch();
+		const branch = await defaultBranch();
+		const commit = await head(branch);
+		if (!commit) throw fail('INVALID', 'This repository is empty. Add a first commit on GitHub, then propose again.');
+
+		// The path must be folders all the way down. A link there would have
+		// the file written wherever the link points.
+		const [root, folder, existing] = await Promise.all([entryAt(commit, 'packages'), entryAt(commit, `packages/${name}`), entryAt(commit, `packages/${name}/${fileName}`)]);
+		if ((root && root.type !== 'tree') || (folder && folder.type !== 'tree')) {
+			throw fail('INVALID', `The repository has something other than a folder at packages/${name}, such as a link.`);
+		}
+		if (existing && (existing.type !== 'blob' || existing.mode === '120000')) {
+			throw fail('INVALID', `${fileName} is a link in the team repository, so it cannot be replaced from here.`);
+		}
+
+		const created = !folder;
+		if (created) {
+			if (!oneLine(title, 100)) throw fail('INVALID', 'A new package needs a `title`: one line, 100 characters or fewer.');
+			if (typeof description !== 'string' || description.trim().length < 3 || description.trim().length > 1000) {
+				throw fail('INVALID', 'A new package needs a `description` of 3 to 1000 characters.');
+			}
+		}
+
+		// A name nobody has used: two proposals can land in the same second.
+		const base = `snippet-editor/${name}-${stamp()}`;
+		let proposal = base;
+		for (let attempt = 2; (await run(['ls-remote', '--heads', 'origin', `refs/heads/${proposal}`], { timeout: 60_000 })).trim(); attempt += 1) {
+			proposal = `${base}-${attempt}`;
+		}
+
+		const work = path.join(dir, `work-${randomBytes(4).toString('hex')}`);
+		const inWork = (args, options) => git(args, { cwd: work, ...options });
+		try {
+			await run(['worktree', 'add', '--quiet', '-b', proposal, work, commit], { timeout: 60_000 });
+			const target = path.join(work, 'packages', name);
+			await fs.mkdir(target, { recursive: true });
+			await fs.writeFile(path.join(target, fileName), text);
+			if (created) {
+				const author = await inWork(['config', 'user.name']).then((out) => out.trim(), () => '');
+				await fs.writeFile(path.join(target, MANIFEST), stringify({ name, title: title.trim(), description: description.trim(), version: '0.1.0', author }, { lineWidth: 0 }));
+			}
+			await inWork(['add', '--', `packages/${name}`]);
+			// Nothing staged: the package holds this file already, byte for byte
+			// or once git has normalised its line endings.
+			if (!(await inWork(['status', '--porcelain'])).trim()) throw fail('INVALID', 'The team package already has this file as it is.');
+			await inWork(['commit', '--quiet', '-m', `${summary.trim()}\n\nProposed with Snippet Editor for Espanso.`], { timeout: 60_000 });
+			const sha = (await inWork(['rev-parse', 'HEAD'])).trim();
+			await run(['push', '--quiet', 'origin', `refs/heads/${proposal}:refs/heads/${proposal}`], { timeout: 60_000 });
+			return {
+				branch: proposal,
+				commit: sha,
+				created,
+				compareUrl: address.webUrl ? `${address.webUrl}/compare/${branch}...${proposal}?expand=1` : null,
+			};
+		} finally {
+			await run(['worktree', 'remove', '--force', work]).catch(() => {});
+			await fs.rm(work, { recursive: true, force: true });
+			await run(['worktree', 'prune']).catch(() => {});
+			await run(['branch', '--quiet', '-D', proposal]).catch(() => {});
+		}
+	}
+
 	return {
 		dir,
 		connect: () => inTurn(connect),
+		propose: (input = {}) => inTurn(() => propose(input)),
 		fetch: () => inTurn(async () => (await needCloned(), fetch())),
 		status: () => inTurn(status),
 		packages: () => inTurn(async () => (({ packages, problems }) => ({ packages, problems }))(await listing())),
