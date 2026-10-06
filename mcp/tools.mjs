@@ -73,7 +73,7 @@ function problemWith(inputSchema, args) {
 
 // --- shaping what comes back -----------------------------------------------
 
-const triggersOf = (match) => {
+export const triggersOf = (match) => {
 	if (!isObject(match)) return [];
 	if (Array.isArray(match.triggers)) return match.triggers.map(textOf).filter(Boolean);
 	return [textOf(match.trigger) || textOf(match.regex)].filter(Boolean);
@@ -93,10 +93,29 @@ const runs = (vars) => Array.isArray(vars) && vars.some((item) => isObject(item)
 export const snippetRuns = (snippet) => isObject(snippet) && runs(snippet.vars);
 export const fileRuns = (data) => isObject(data) && (runs(data.global_vars) || (Array.isArray(data.matches) && data.matches.some((match) => isObject(match) && runs(match.vars))));
 
+// What is wrong with a snippet before the app is even asked, or null.
+export const snippetProblem = (snippet) =>
+	triggersOf(snippet).length ? null : '`snippet` needs a `trigger`, a list of `triggers`, or a `regex`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.';
+
 function checkSnippet(snippet, accept) {
-	if (!triggersOf(snippet).length) throw new ToolError('`snippet` needs a `trigger`, a list of `triggers`, or a `regex`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.');
+	const problem = snippetProblem(snippet);
+	if (problem) throw new ToolError(problem);
 	if (runs(snippet.vars) && accept !== true) throw new ToolError(consent('This snippet'));
 }
+
+// Why a file's snippets are not listed, and what can still be done.
+const broken = (file) =>
+	file.unreadable
+		? `${file.name} could not be opened: ${file.parseErrors?.[0] ?? 'no detail'} It can only be changed outside this app.`
+		: file.notCarried
+			? file.parseErrors.at(-1)
+			: `${file.name} has YAML errors: ${file.parseErrors?.[0] ?? 'no detail'}`;
+const hint = (file) => (file.unreadable ? '' : ' Read it with snippets_get_file and detail "raw" to see the text.');
+export const brokenFile = (file) => `${broken(file)}${hint(file)}`;
+
+// A position that is not in the file, said so that the next call can be right.
+export const outOfRange = (file) =>
+	file.matches.length ? `${file.name} has ${file.matches.length} snippets, at positions 0 to ${file.matches.length - 1}. Call snippets_get_file to see them.` : `${file.name} has no snippets.`;
 
 const brief = (match, index) => ({ index, triggers: triggersOf(match), label: isObject(match) ? textOf(match.label) : '', preview: previewOf(match) });
 
@@ -176,15 +195,6 @@ export function createTools({ api, propose }) {
 		prefix: cut(textOf(file.prefix), 40),
 		read_only: file.readOnly,
 	});
-	// Why a file's snippets are not listed, and what can still be done.
-	const broken = (file) =>
-		file.unreadable
-			? `${file.name} could not be opened: ${file.parseErrors?.[0] ?? 'no detail'} It can only be changed outside this app.`
-			: file.notCarried
-				? file.parseErrors.at(-1)
-				: `${file.name} has YAML errors: ${file.parseErrors?.[0] ?? 'no detail'}`;
-	const hint = (file) => (file.unreadable ? '' : ' Read it with snippets_get_file and detail "raw" to see the text.');
-
 	const tools = [
 		{
 			name: 'snippets_search',
@@ -277,10 +287,7 @@ export function createTools({ api, propose }) {
 			async run({ file_id: fileId, index }) {
 				const file = await readFile(fileId);
 				if (file.matches === null) throw new ToolError(`${broken(file)}${hint(file)}`);
-				if (!file.matches.length) throw new ToolError(`${file.name} has no snippets.`);
-				if (index >= file.matches.length) {
-					throw new ToolError(`${file.name} has ${file.matches.length} snippets, at positions 0 to ${file.matches.length - 1}. Call snippets_get_file to see them.`);
-				}
+				if (index >= file.matches.length) throw new ToolError(outOfRange(file));
 				const data = { file_id: file.id, file: file.name, read_only: file.readOnly, version: file.version, index, snippet: file.matches[index] };
 				if (JSON.stringify(data).length > MAX_REPLY) throw new ToolError('This snippet is longer than a reply can carry. Ask the person to open it in the app.');
 				return data;

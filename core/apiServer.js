@@ -39,6 +39,55 @@ function answers(port) {
 // How much one request may send and how long it may take.
 export const LIMITS = { maxBody: 4 * 1024 * 1024, headersTimeout: 10_000, requestTimeout: 30_000 };
 
+// JSON has no way to write a number that is not finite, or a list or
+// mapping that contains itself, and YAML allows both. Sending such a value
+// altered would hand the caller data that is not in the file, so it is
+// never sent altered. A file that holds one is marked and listed without
+// its snippets (below); any other reply that holds one is refused whole.
+function toJson(body) {
+	try {
+		return JSON.stringify(body, (key, value) => {
+			if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('not finite');
+			return value;
+		});
+	} catch (error) {
+		if (error instanceof TypeError) return null;
+		throw error;
+	}
+}
+
+const NOT_CARRIED =
+	'This file holds a value JSON cannot carry (a number that is not finite, or a list or mapping that contains itself), so its snippets are not listed here. Its text can still be read.';
+
+// One odd file must not hide all the others. Where a reply is a file, a
+// list of files or a list of search hits, the part that cannot be carried
+// is marked or left out, and the rest goes through untouched.
+function soften(body) {
+	const file = (record) =>
+		isPlainObject(record) && Array.isArray(record.matches) && toJson(record.matches) === null
+			? { ...record, matchCount: null, parseErrors: [...(Array.isArray(record.parseErrors) ? record.parseErrors : []), NOT_CARRIED], matches: null, notCarried: true }
+			: record;
+	const groups = (list) => (Array.isArray(list) ? list.map((group) => (isPlainObject(group) && Array.isArray(group.files) ? { ...group, files: group.files.map(file) } : group)) : list);
+	if (Array.isArray(body)) return body.filter((hit) => toJson(hit) !== null);
+	if (!isPlainObject(body)) return body;
+	const next = file(body);
+	return {
+		...next,
+		...(Array.isArray(next.files) ? { files: next.files.map(file) } : {}),
+		...('packages' in next ? { packages: groups(next.packages) } : {}),
+		...('team' in next ? { team: groups(next.team) } : {}),
+	};
+}
+
+// A reply as it is sent: its status, and its body as JSON. The window's
+// channel has no need of this, but a caller inside the app that wants the
+// same data an HTTP caller gets (the chat's tools) asks for it here.
+export function carried(status, body) {
+	const text = toJson(body) ?? toJson(soften(body));
+	if (text !== null) return { status, text };
+	return { status: 422, text: JSON.stringify(errorBody('UNREPRESENTABLE', 'This reply holds a value JSON cannot carry: a number that is not finite, or a list or mapping that contains itself. Change it in the app, in the raw YAML.')) };
+}
+
 export function createApiServer({
 	handle,
 	getToken,
@@ -51,57 +100,9 @@ export function createApiServer({
 	let server = null;
 	let port = null;
 
-	// JSON has no way to write a number that is not finite, or a list or
-	// mapping that contains itself, and YAML allows both. Sending such a value
-	// altered would hand the caller data that is not in the file, so it is
-	// never sent altered. A file that holds one is marked and listed without
-	// its snippets (below); any other reply that holds one is refused whole.
-	function toJson(body) {
-		try {
-			return JSON.stringify(body, (key, value) => {
-				if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('not finite');
-				return value;
-			});
-		} catch (error) {
-			if (error instanceof TypeError) return null;
-			throw error;
-		}
-	}
-
-	const NOT_CARRIED =
-		'This file holds a value JSON cannot carry (a number that is not finite, or a list or mapping that contains itself), so its snippets are not listed here. Its text can still be read.';
-
-	// One odd file must not hide all the others. Where a reply is a file, a
-	// list of files or a list of search hits, the part that cannot be carried
-	// is marked or left out, and the rest goes through untouched.
-	function soften(body) {
-		const file = (record) =>
-			isPlainObject(record) && Array.isArray(record.matches) && toJson(record.matches) === null
-				? { ...record, matchCount: null, parseErrors: [...(Array.isArray(record.parseErrors) ? record.parseErrors : []), NOT_CARRIED], matches: null, notCarried: true }
-				: record;
-		const groups = (list) => (Array.isArray(list) ? list.map((group) => (isPlainObject(group) && Array.isArray(group.files) ? { ...group, files: group.files.map(file) } : group)) : list);
-		if (Array.isArray(body)) return body.filter((hit) => toJson(hit) !== null);
-		if (!isPlainObject(body)) return body;
-		const next = file(body);
-		return {
-			...next,
-			...(Array.isArray(next.files) ? { files: next.files.map(file) } : {}),
-			...('packages' in next ? { packages: groups(next.packages) } : {}),
-			...('team' in next ? { team: groups(next.team) } : {}),
-		};
-	}
-
 	function reply(response, status, body, extra = {}) {
-		let text = toJson(body) ?? toJson(soften(body));
-		if (text === null) {
-			status = 422;
-			text = JSON.stringify(
-				errorBody(
-					'UNREPRESENTABLE',
-					'This reply holds a value JSON cannot carry: a number that is not finite, or a list or mapping that contains itself. Change it in the app, in the raw YAML.'
-				)
-			);
-		}
+		const { text, ...sent } = carried(status, body);
+		status = sent.status;
 		response.writeHead(status, {
 			'Content-Type': 'application/json; charset=utf-8',
 			'Content-Length': Buffer.byteLength(text),
