@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../core/apiRouter.js';
-import { createApiServer } from '../core/apiServer.js';
+import { LIMITS, createApiServer } from '../core/apiServer.js';
 import { createService } from '../core/service.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/match', import.meta.url));
@@ -214,4 +214,127 @@ test('a full write over HTTP reaches the file, through the real router', async (
 	const stale = await send(port, { method: 'PUT', path: file + '/snippets/0', body: { match: { trigger: ';hello', replace: 'Again' }, version } });
 	assert.deepEqual(code(stale), [409, 'CONFLICT']);
 	assert.deepEqual(code(await send(port, { method: 'DELETE', path: file + '/snippets/0' })), [409, 'CONFLICT']);
+});
+
+// --- added after review ---------------------------------------------------------
+
+// One request written by hand, for what an HTTP library would not send.
+function raw(port, text, { hold = 0 } = {}) {
+	return new Promise((resolve) => {
+		let received = '';
+		const socket = net.connect(port, '127.0.0.1', () => {
+			socket.write(text);
+			// Hang up after `hold`, or give up after five seconds so a listener
+			// that never answers fails the test instead of stalling it.
+			setTimeout(() => socket.destroy(), hold || 5000).unref();
+		});
+		socket.setEncoding('utf8');
+		socket.on('data', (chunk) => (received += chunk));
+		socket.on('error', () => {});
+		socket.on('close', () => resolve(received));
+	});
+}
+
+test('the limits are the ones the design promises', () => {
+	assert.deepEqual(LIMITS, { maxBody: 4 * 1024 * 1024, headersTimeout: 10_000, requestTimeout: 30_000 });
+});
+
+test('with no limit given, a body just under 4 MB is taken and one just over is 413', async (t) => {
+	const { port, seen } = await listening(t);
+	const under = await send(port, { method: 'POST', path: '/api/v1/files', body: { name: 'x'.repeat(4 * 1024 * 1024 - 100) } });
+	assert.equal(under.status, 200);
+	assert.equal(seen.length, 1);
+	const over = await send(port, { method: 'POST', path: '/api/v1/files', body: { name: 'x'.repeat(4 * 1024 * 1024 + 100) } });
+	assert.deepEqual(code(over), [413, 'TOO_LARGE']);
+	assert.equal(seen.length, 1);
+});
+
+test('a body far over the limit still gets an answer the sender can read', async (t) => {
+	// Twice the real limit, several times over: a listener that hangs up as
+	// soon as it has seen enough leaves the sender with a broken connection.
+	const { port, seen } = await listening(t);
+	const body = { name: 'x'.repeat(8 * 1024 * 1024) };
+	for (const chunked of [false, true, false, true]) {
+		const reply = await send(port, { method: 'POST', path: '/api/v1/files', body, chunked }).catch((error) => ({ status: error.code }));
+		assert.deepEqual(code(reply), [413, 'TOO_LARGE'], chunked ? 'in chunks' : 'with a length');
+	}
+	assert.equal(seen.length, 0);
+});
+
+test('a sender that stalls partway through its body is cut off', async (t) => {
+	// Node takes the shorter of the two timeouts for the headers, so both are set.
+	const { port, seen } = await listening(t, { headersTimeout: 200, requestTimeout: 300, checkInterval: 100 });
+	const started = Date.now();
+	const received = await raw(
+		port,
+		`POST /api/v1/files HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"name":`
+	);
+	assert.ok(Date.now() - started < 4000, 'the connection stayed open');
+	assert.match(received, /^HTTP\/1\.1 408 /);
+	assert.equal(seen.length, 0);
+});
+
+test('a request with no Host at all is refused', async (t) => {
+	const { port, seen } = await listening(t);
+	const received = await raw(port, `GET /api/v1/state HTTP/1.0\r\nAuthorization: Bearer ${TOKEN}\r\n\r\n`);
+	assert.match(received, /^HTTP\/1\.[01] 403 /);
+	assert.equal(seen.length, 0);
+});
+
+test('no refusal carries a cross-origin header', async (t) => {
+	const { port } = await listening(t, { maxBody: 1024 });
+	const refusals = [
+		await send(port, { token: null }),
+		await send(port, { headers: { Origin: 'https://example.com' } }),
+		await send(port, { headers: { Host: 'evil.example' } }),
+		await send(port, { method: 'POST', path: '/api/v1/files', body: { name: 'x'.repeat(2000) } }),
+		await send(port, { method: 'POST', path: '/api/v1/files', body: 'x', headers: { 'Content-Type': 'text/plain' } }),
+	];
+	assert.deepEqual(refusals.map((reply) => reply.status), [401, 403, 403, 413, 415]);
+	for (const reply of refusals) {
+		const cors = Object.keys(reply.headers).filter((name) => name.startsWith('access-control-'));
+		assert.deepEqual(cors, [], String(reply.status));
+	}
+});
+
+test('a reply JSON cannot carry is refused as a whole, never sent altered', async (t) => {
+	const logged = [];
+	const self = [];
+	self.push(self);
+	for (const value of [Infinity, -Infinity, NaN, self]) {
+		const { port } = await listening(t, { handle: async () => ({ status: 200, body: { matches: [{ priority: value }] } }), log: (error) => logged.push(error) });
+		const reply = await send(port);
+		assert.deepEqual(code(reply), [422, 'UNREPRESENTABLE'], String(value));
+		assert.match(reply.body.error.message, /JSON cannot carry/);
+	}
+	assert.equal(logged.length, 0);
+});
+
+test('a sender that hangs up partway is not recorded as a fault of the app', async (t) => {
+	const logged = [];
+	const { port, seen } = await listening(t, { log: (error) => logged.push(error) });
+	await raw(
+		port,
+		`POST /api/v1/files HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"name":`,
+		{ hold: 50 }
+	);
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.deepEqual([logged.length, seen.length], [0, 0]);
+	assert.equal((await send(port)).status, 200);
+});
+
+test('a port another program holds on every address counts as taken', async (t) => {
+	const blocker = net.createServer();
+	await new Promise((resolve) => blocker.listen(0, '0.0.0.0', resolve));
+	t.after(() => blocker.close());
+	const taken = blocker.address().port;
+	const server = createApiServer({ handle: async () => ({ status: 200, body: {} }), getToken: () => TOKEN });
+	t.after(() => server.stop());
+	await assert.rejects(server.start(taken), (error) => error.code === 'PORT_IN_USE' && error.message === `Port ${taken} is in use.`);
+	assert.equal(server.running, false);
+});
+
+test('the reply to a failure inside the listener is exactly the plain error', async (t) => {
+	const { port } = await listening(t, { handle: async () => { throw new Error('secret detail'); }, log: () => {} });
+	assert.deepEqual((await send(port)).body, { error: { code: 'ERROR', message: 'Something went wrong inside the app.' } });
 });

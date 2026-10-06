@@ -1,4 +1,5 @@
 import http from 'node:http';
+import net from 'node:net';
 import { errorBody } from './apiRouter.js';
 import { tokensMatch } from './apiToken.js';
 import { isPlainObject } from '../shared/text.js';
@@ -20,20 +21,62 @@ import { isPlainObject } from '../shared/text.js';
 
 const LOOPBACK = '127.0.0.1';
 
+// Whether something already accepts connections on this port, on this computer.
+function answers(port) {
+	return new Promise((resolve) => {
+		const socket = net.connect({ port, host: LOOPBACK });
+		const done = (result) => {
+			socket.destroy();
+			resolve(result);
+		};
+		socket.setTimeout(1000, () => done(false));
+		socket.once('connect', () => done(true));
+		socket.once('error', () => done(false));
+	});
+}
+
+// How much one request may send and how long it may take.
+export const LIMITS = { maxBody: 4 * 1024 * 1024, headersTimeout: 10_000, requestTimeout: 30_000 };
+
 export function createApiServer({
 	handle,
 	getToken,
 	log = console.error,
-	maxBody = 4 * 1024 * 1024,
-	headersTimeout = 10_000,
-	requestTimeout = 30_000,
+	maxBody = LIMITS.maxBody,
+	headersTimeout = LIMITS.headersTimeout,
+	requestTimeout = LIMITS.requestTimeout,
 	checkInterval = 5_000,
 }) {
 	let server = null;
 	let port = null;
 
+	// JSON has no way to write a number that is not finite, or a list or
+	// mapping that contains itself, and YAML allows both. Sending such a reply
+	// altered would hand the caller data that is not in the file, so it is
+	// refused as a whole.
+	function toJson(body) {
+		try {
+			return JSON.stringify(body, (key, value) => {
+				if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('not finite');
+				return value;
+			});
+		} catch (error) {
+			if (error instanceof TypeError) return null;
+			throw error;
+		}
+	}
+
 	function reply(response, status, body, extra = {}) {
-		const text = JSON.stringify(body);
+		let text = toJson(body);
+		if (text === null) {
+			status = 422;
+			text = JSON.stringify(
+				errorBody(
+					'UNREPRESENTABLE',
+					'This reply holds a value JSON cannot carry: a number that is not finite, or a list or mapping that contains itself. Change it in the app, in the raw YAML.'
+				)
+			);
+		}
 		response.writeHead(status, {
 			'Content-Type': 'application/json; charset=utf-8',
 			'Content-Length': Buffer.byteLength(text),
@@ -50,15 +93,18 @@ export function createApiServer({
 		return new Promise((resolve, reject) => {
 			const chunks = [];
 			let size = 0;
+			// Past the limit the rest is read and dropped, not kept. Hanging up
+			// at once would leave the sender with a broken connection in place
+			// of its answer; the request timeout bounds how long this can go on.
 			request.on('data', (chunk) => {
 				size += chunk.length;
-				if (size > maxBody) {
-					reject(Object.assign(new Error('too large'), { code: 'TOO_LARGE' }));
-					return;
-				}
-				chunks.push(chunk);
+				if (size > maxBody) chunks.length = 0;
+				else chunks.push(chunk);
 			});
-			request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+			request.on('end', () => {
+				if (size > maxBody) reject(Object.assign(new Error('too large'), { code: 'TOO_LARGE' }));
+				else resolve(Buffer.concat(chunks).toString('utf8'));
+			});
 			request.on('error', reject);
 		});
 	}
@@ -88,7 +134,7 @@ export function createApiServer({
 
 		let body;
 		if (request.method === 'POST' || request.method === 'PUT') {
-			const tooLarge = () => refuse(response, 413, 'TOO_LARGE', `The body is larger than ${Math.round(maxBody / 1024)} KB.`, { Connection: 'close' });
+			const tooLarge = () => refuse(response, 413, 'TOO_LARGE', `The body is larger than ${Math.round(maxBody / 1024)} KB.`);
 			const type = (request.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
 			if (type !== 'application/json') {
 				return refuse(response, 415, 'UNSUPPORTED_TYPE', 'Send the body as JSON, with "Content-Type: application/json".');
@@ -120,10 +166,17 @@ export function createApiServer({
 			return port;
 		},
 
-		start(wantedPort) {
+		async start(wantedPort) {
+			const inUse = () => Object.assign(new Error(`Port ${wantedPort} is in use.`), { code: 'PORT_IN_USE' });
+			// A program listening on every address does not stop this one from
+			// opening the same port on 127.0.0.1 alone, and would then lose its
+			// local callers to it. So ask first whether anything answers there.
+			if (wantedPort !== 0 && (await answers(wantedPort))) throw inUse();
 			return new Promise((resolve, reject) => {
 				const next = http.createServer({ connectionsCheckingInterval: checkInterval }, (request, response) => {
 					onRequest(request, response).catch((error) => {
+						// A sender that hung up partway is not a fault of the app.
+						if (error?.code === 'ECONNRESET') return response.destroy();
 						log(error);
 						if (response.headersSent) response.destroy();
 						else refuse(response, 500, 'ERROR', 'Something went wrong inside the app.');
@@ -135,7 +188,7 @@ export function createApiServer({
 				// Before the port opens this fails the start. Afterwards nobody is
 				// waiting, and the handler keeps a late error from stopping the app.
 				next.on('error', (error) => {
-					reject(error.code === 'EADDRINUSE' ? Object.assign(new Error(`Port ${wantedPort} is in use.`), { code: 'PORT_IN_USE' }) : error);
+					reject(error.code === 'EADDRINUSE' ? inUse() : error);
 				});
 				next.listen(wantedPort, LOOPBACK, () => {
 					server = next;
