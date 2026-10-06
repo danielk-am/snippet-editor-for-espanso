@@ -1,6 +1,6 @@
 # Local API: design
 
-Status: awaiting Daniel's approval. No code is written until it is approved.
+Status: approved by Daniel on 2026-10-06 and built on the `local-api` branch. Where the build differs from the text Daniel approved, the section "Changed while building" at the end says how and why.
 
 This is the first of three connected pieces Daniel asked for on 2026-10-06, in the order he chose:
 
@@ -85,7 +85,7 @@ Errors always look the same:
 | `CONFLICT`, `EXISTS` | 409 |
 | `TOO_LARGE` | 413 |
 | `UNSUPPORTED_TYPE` (body is not JSON) | 415 |
-| `PARSE_ERROR` (the YAML would not parse) | 422 |
+| `PARSE_ERROR` (the YAML would not parse), `UNREPRESENTABLE` (the reply holds a value JSON cannot carry) | 422 |
 | `ERROR` (anything unforeseen) | 500, with a plain message and no stack trace |
 
 ## What stays out of the API
@@ -94,15 +94,15 @@ Choosing the match folder, showing a folder in Finder, and copying to the clipbo
 
 ## The HTTP listener
 
-- **Off by default.** Settings gets an "API for other tools" card with a switch, the address, the token with a copy button, a "Replace token" button, and a ready-to-run `curl` example.
+- **Off by default.** Settings gets an "API for other tools" card with a switch, the address, a button that copies the token, a "Replace token" button, and a button that copies a ready-to-run `curl` example. The token itself is never displayed.
 - **Address:** `127.0.0.1` only, never other network interfaces. Default port `27187`, changeable in Settings.
-- **Token:** 32 random bytes, made on first use and kept in `api-token` in the app's data folder, readable only by you. Sent as `Authorization: Bearer <token>`. Every route needs it; there is no open health check, so a web page cannot even detect the app.
+- **Token:** 32 random bytes, made on first use and kept in `api-token` in the app's data folder, readable only by you. Sent as `Authorization: Bearer <token>`. Every route needs it and there is no open health check, so a web page learns nothing from the listener beyond the fact that something is listening on that port.
 - **Guards against web pages.** A browser tab on any site can send requests to `127.0.0.1`. Three things stop it:
   1. It cannot know the token.
-  2. Any request that carries an `Origin` header is refused. Browsers add that header; `curl`, scripts and the MCP server do not.
+  2. Any request that carries an `Origin` or `Sec-Fetch-Site` header is refused. Browsers add `Origin` to anything that can change data and `Sec-Fetch-Site` to every request; `curl`, scripts and the MCP server send neither.
   3. The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`, which blocks DNS rebinding.
   The listener sends no cross-origin headers at all.
-- **Limits:** bodies up to 4 MB, 10 seconds to send headers, 30 seconds per request.
+- **Limits:** bodies up to 4 MB, 10 seconds to send headers, 30 seconds per request. A write that would leave a match file over 2 MB is refused with 413, because the app does not open files larger than that. The YAML helpers take up to 256 KB of text.
 
 ## Settings added
 
@@ -129,9 +129,9 @@ Choosing the match folder, showing a folder in Finder, and copying to the clipbo
 | Any write | The edit cannot be proven exact | Existing refusal in `core/matchFile.js` | Router test | 400 `INVALID`, pointing to the raw editor |
 | Any write | Package file, write-protected file, file that could not be opened | Existing store checks | Router test | 403 `READ_ONLY` |
 | Listener start | Port already in use | Listener stays off; the window is unaffected because it does not use the socket | Server test that occupies the port first | Settings shows "Port 27187 is in use" |
-| Listener start | Token file missing or unreadable | A new token is made and saved | Server test | Old token stops working; Settings shows the new one |
+| Listener start | Token file missing or unreadable | The file is read at every start; a new token is made and saved. If it cannot be saved, the listener stays off | Listener test | Old token stops working; "Copy token" gives the new one. If it cannot be saved, Settings says so |
 | Token | Replaced while a script is running | Old token refused from that moment | Server test | 401 until the script uses the new token |
-| Window | Request sent twice (double click on Save) | Second one carries the same, now stale, version | UI test | First saves, second gets 409 and the editor reloads |
+| Window | Request sent twice (double click on Save) | The second click is ignored while a save is in flight. A second request that does arrive carries the same, now stale, version | UI test | One save and one backup. A second request would get 409 |
 | Window | App quits mid-request | The write is atomic, so the file is either the old or the new version | Existing store tests | Nothing half-written |
 | Anything else | A bug throws inside a route | Caught at the router boundary and logged to the app's console | Router test with a failing service | 500 `ERROR`, plain message |
 
@@ -149,6 +149,29 @@ Choosing the match folder, showing a folder in Finder, and copying to the clipbo
 - HTTPS, or access from other computers.
 - Changing the match folder or other settings over HTTP.
 - GitHub and MCP, which are the next two pieces.
+
+## Changed while building
+
+Each of these was decided during the build or after an independent review of it. None changes the three decisions at the top.
+
+| Change | Why |
+| --- | --- |
+| The token is never displayed. Settings copies it for you. | The text above promised both that the token never enters the page and that Settings shows it. The first is the security promise, so it won. |
+| Requests with a `Sec-Fetch-Site` header are refused too. | Browsers leave `Origin` off a plain cross-site GET, such as an image tag. The token still protects the data either way. |
+| The claim that a web page "cannot even detect the app" is gone. | Any open port can be detected by timing. What holds is that a page cannot read or change anything. |
+| A new error, `UNREPRESENTABLE` (422), over HTTP only. | YAML allows a number that is not finite and a structure that contains itself; JSON has no way to write either. The listener refuses such a reply as a whole. Sending it altered would hand a script data that is not in the file. The window is not affected. |
+| A write that would leave a file over 2 MB is refused with 413. | The app opens files up to 2 MB. Before this, a larger save produced a file the app would then neither change nor delete. |
+| The YAML helpers take up to 256 KB of text. | Checking a very large mapping holds up the whole app for seconds. |
+| A file that cannot be opened is returned as a described, read-only record when read on its own. | It already was in the list of files. Writes to it answer 403, as the table above says. |
+| A port held by a program listening on every address counts as in use. | On macOS the listener could otherwise open the same port on 127.0.0.1 and take that program's local callers. |
+| A failure of the disk (full, permission denied, read-only) answers 500 with a sentence that says which. | The window now gets its errors from the router, and a bare "something went wrong" would have been a step back. |
+| A double click on Save sends one request. | The second request used to be refused and reported as the file changing on disk. |
+| The editor says "Saved" only after the window has re-read the folder. | An action taken straight after a save could start from the old version and be refused. This also made the end-to-end test fail now and then. |
+
+Known limits, not fixed here:
+
+- A match file with tens of thousands of keys in one mapping is slow to open, in the window and over the API alike. The cost is in the YAML library's check for repeated keys. It was there before this work.
+- One file holding a value JSON cannot carry makes `/state` answer 422 over HTTP until that value is changed. Answering for the other files and marking that one would be better.
 
 ## Sketch of the next two pieces
 

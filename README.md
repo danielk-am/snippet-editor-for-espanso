@@ -94,6 +94,8 @@ A file `{id}` is the `id` from `/state`, such as `local:base.yml`, percent-encod
 
 Errors always have the same shape: `{ "error": { "code": "CONFLICT", "message": "…" } }`.
 
+Limits: a request body can be up to 4 MB, a match file up to 2 MB, and the YAML helpers take up to 256 KB of text. Over a limit, the answer is `413`. YAML can hold two things JSON cannot: a number that is not finite, and a list or mapping that contains itself. A reply that would include one is refused with `422` and the code `UNREPRESENTABLE`, so a script is never handed data that differs from the file.
+
 How it is guarded:
 
 - It listens on `127.0.0.1` only, so other computers cannot reach it.
