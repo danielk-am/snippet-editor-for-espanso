@@ -1319,6 +1319,15 @@ pre,
   gap: 8px;
 }
 
+.setting__port {
+  display: flex;
+  gap: 8px;
+}
+
+.setting__port .input {
+  width: 8.5rem;
+}
+
 /* --- overlays ------------------------------------------------------------- */
 
 .overlay {

@@ -3,6 +3,7 @@
 // of the fixtures, drives the UI, checks what reached the disk and saves
 // screenshots to test/.artifacts for review.
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,18 @@ fs.cpSync(path.join(here, 'fixtures', 'match'), matchDir, { recursive: true });
 fs.rmSync(artifacts, { recursive: true, force: true });
 fs.mkdirSync(artifacts, { recursive: true });
 app.setPath('userData', path.join(sandbox, 'userData'));
+
+// A port nothing else is using, so the listener step cannot clash with
+// another program. The listener itself stays off until the test turns it on.
+const apiPort = await new Promise((resolve) => {
+	const probe = net.createServer();
+	probe.listen(0, '127.0.0.1', () => {
+		const { port } = probe.address();
+		probe.close(() => resolve(port));
+	});
+});
+fs.mkdirSync(path.join(sandbox, 'userData'), { recursive: true });
+fs.writeFileSync(path.join(sandbox, 'userData', 'settings.json'), JSON.stringify({ apiPort }));
 
 const failures = [];
 const consoleProblems = [];
@@ -207,6 +220,47 @@ async function run() {
 		await js(`window.__ui.click('Settings', '.nav-item__label')`);
 		await waitFor(`document.querySelector('.copy-row code')?.textContent === ${JSON.stringify(matchDir)}`, 'the match folder path in Settings');
 		await shot('09-settings');
+	});
+
+	await step('API listener', async () => {
+		const address = `http://127.0.0.1:${apiPort}/api/v1`;
+		const shown = `[...document.querySelectorAll('.copy-row code')].some((el) => el.textContent === '${address}')`;
+		const reach = (headers) => fetch(`${address}/state`, { headers }).then((reply) => reply.status, () => 'closed');
+		check((await reach()) === 'closed', 'the API was listening before it was switched on');
+
+		await js(`document.querySelector('[role="switch"][aria-checked="false"]').click()`);
+		await waitFor(shown, 'Settings to show the API address');
+		await shot('09b-settings-api');
+
+		const token = fs.readFileSync(path.join(app.getPath('userData'), 'api-token'), 'utf8').trim();
+		check(!(await js(`document.body.innerHTML.includes(${JSON.stringify(token)})`)), 'the token is present in the page');
+		check((await reach()) === 401, 'the API answered without a token');
+		check((await reach({ Authorization: `Bearer ${token}`, Origin: 'https://example.com' })) === 403, 'the API answered a web page');
+		const reply = await fetch(`${address}/state`, { headers: { Authorization: `Bearer ${token}` } });
+		const state = await reply.json();
+		check(reply.status === 200 && state.files.length === 4, `the API returned ${reply.status} with ${state.files?.length} files`);
+
+		// A port another program holds: Settings says so and the window carries on.
+		const blocker = net.createServer();
+		await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+		const busy = blocker.address().port;
+		await js(`window.__ui.type('.setting__port input', '${busy}')`);
+		await js(`window.__ui.click('Use this port')`);
+		await waitFor(`document.querySelector('.alert__title')?.textContent === 'Port ${busy} is in use.'`, 'the port clash to be reported');
+		await shot('09c-settings-api-port-in-use');
+		await new Promise((resolve) => blocker.close(resolve));
+		await js(`window.__ui.click('Try again')`);
+		await waitFor(`[...document.querySelectorAll('.copy-row code')].some((el) => el.textContent === 'http://127.0.0.1:${busy}/api/v1')`, 'the API to start once the port is free');
+		await js(`window.__ui.type('.setting__port input', '80')`);
+		await waitFor(`document.querySelector('.field__error')?.textContent === 'Use a whole number from 1024 to 65535.'`, 'the port to be refused before it is sent');
+		check(await js(`window.__ui.byText('Use this port').disabled`), 'a port outside the range could be sent');
+		await js(`window.__ui.type('.setting__port input', '${apiPort}')`);
+		await js(`window.__ui.click('Use this port')`);
+		await waitFor(shown, 'the API to come back on its own port');
+
+		await js(`document.querySelector('[role="switch"][aria-checked="true"]').click()`);
+		await waitFor(`document.querySelector('[role="switch"][aria-checked="false"]') && !(${shown})`, 'Settings to show the API as off');
+		check((await reach({ Authorization: `Bearer ${token}` })) === 'closed', 'the API kept listening after it was switched off');
 	});
 
 	await step('external change is picked up', async () => {
