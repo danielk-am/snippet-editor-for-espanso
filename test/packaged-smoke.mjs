@@ -153,6 +153,19 @@ try {
 	check(saved(), 'saving a snippet did not reach the file');
 	check(fs.existsSync(path.join(userData, 'backups')), 'no backup was written to the app data folder');
 
+	// The assistant is part of the packaged app: its panel opens, and the main
+	// process answers for the three backends. Which of them is ready depends
+	// on the computer, so only the shape of the answer is checked.
+	const assistant = await client.evaluate(`(async () => {
+		document.querySelector('.topbar [aria-label="Show the assistant"]')?.click();
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const status = await window.snippetEditor.invoke('chat:status');
+		return { open: Boolean(document.querySelector('.chat:not([hidden])')), ok: status.ok, ids: status.ok ? status.data.map((item) => item.id) : [], states: status.ok ? status.data.map((item) => item.id + ': ' + item.state) : [status.error?.message] };
+	})()`);
+	check(assistant.open, 'the assistant panel did not open in the packaged app');
+	check(assistant.ok && JSON.stringify(assistant.ids) === JSON.stringify(['claude', 'codex', 'ollama']), `the packaged app did not report its three backends: ${JSON.stringify(assistant.states)}`);
+	console.log(`Packaged app: backends on this computer: ${assistant.states.join(', ')}`);
+
 	check(client.problems.length === 0, `console problems: ${client.problems.join(' | ')}`);
 	client.close();
 } catch (error) {
@@ -189,6 +202,28 @@ if (fs.existsSync(server)) {
 	check(answer.includes('"supportedVersions":["2026-07-28"]'), `the packaged MCP server did not answer server/discover: ${answer.slice(0, 300)}`);
 	check((answer.match(/"name":"snippets_/g) ?? []).length === 12, 'the packaged MCP server did not list its twelve tools');
 	check(answer.includes('"isError":false') && answer.includes('package:goodbyes:package.yml'), `the packaged MCP server could not search the running app: ${answer.slice(0, 400)}`);
+
+	// Started for the app's chat, the same program offers its changing tools
+	// as proposals. With no answer under way there is no listener to reach,
+	// and it says so.
+	const inChat = await new Promise((resolve) => {
+		const mcp = spawn(binary, [server], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SNIPPET_EDITOR_CHAT: path.join(sandbox, 'no-such-chat.json') }, stdio: ['pipe', 'pipe', 'pipe'] });
+		let out = '';
+		const giveUp = setTimeout(() => (mcp.kill(), resolve(`no answer. ${out}`)), 20000);
+		mcp.stdout.on('data', (chunk) => {
+			out += chunk;
+			if (out.split('\n').length < 3) return;
+			clearTimeout(giveUp);
+			mcp.stdin.end();
+			resolve(out);
+		});
+		mcp.on('error', (error) => resolve(`could not start: ${error.message}`));
+		const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+		mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: meta } }) + '\n');
+		mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'snippets_search', arguments: { query: 'goodbye' }, _meta: meta } }) + '\n');
+	});
+	check((inChat.match(/In this chat the change is not made at once/g) ?? []).length === 7, `started for a chat, the packaged MCP server did not offer its seven changing tools as proposals: ${inChat.slice(0, 200)}`);
+	check(inChat.includes('This chat has ended. The person can send their message again.'), `with no chat under way, the packaged MCP server answered: ${inChat.slice(-300)}`);
 }
 
 child.kill();
