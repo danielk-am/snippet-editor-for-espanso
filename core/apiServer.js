@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { errorBody } from './apiRouter.js';
@@ -51,9 +52,10 @@ export function createApiServer({
 	let port = null;
 
 	// JSON has no way to write a number that is not finite, or a list or
-	// mapping that contains itself, and YAML allows both. Sending such a reply
+	// mapping that contains itself, and YAML allows both. Sending such a value
 	// altered would hand the caller data that is not in the file, so it is
-	// refused as a whole.
+	// never sent altered. A file that holds one is marked and listed without
+	// its snippets (below); any other reply that holds one is refused whole.
 	function toJson(body) {
 		try {
 			return JSON.stringify(body, (key, value) => {
@@ -66,8 +68,31 @@ export function createApiServer({
 		}
 	}
 
+	const NOT_CARRIED =
+		'This file holds a value JSON cannot carry (a number that is not finite, or a list or mapping that contains itself), so its snippets are not listed here. Its text can still be read.';
+
+	// One odd file must not hide all the others. Where a reply is a file, a
+	// list of files or a list of search hits, the part that cannot be carried
+	// is marked or left out, and the rest goes through untouched.
+	function soften(body) {
+		const file = (record) =>
+			isPlainObject(record) && Array.isArray(record.matches) && toJson(record.matches) === null
+				? { ...record, matchCount: null, parseErrors: [...(Array.isArray(record.parseErrors) ? record.parseErrors : []), NOT_CARRIED], matches: null, notCarried: true }
+				: record;
+		const groups = (list) => (Array.isArray(list) ? list.map((group) => (isPlainObject(group) && Array.isArray(group.files) ? { ...group, files: group.files.map(file) } : group)) : list);
+		if (Array.isArray(body)) return body.filter((hit) => toJson(hit) !== null);
+		if (!isPlainObject(body)) return body;
+		const next = file(body);
+		return {
+			...next,
+			...(Array.isArray(next.files) ? { files: next.files.map(file) } : {}),
+			...('packages' in next ? { packages: groups(next.packages) } : {}),
+			...('team' in next ? { team: groups(next.team) } : {}),
+		};
+	}
+
 	function reply(response, status, body, extra = {}) {
-		let text = toJson(body);
+		let text = toJson(body) ?? toJson(soften(body));
 		if (text === null) {
 			status = 422;
 			text = JSON.stringify(
@@ -116,6 +141,19 @@ export function createApiServer({
 		}
 		if (request.headers.origin !== undefined || request.headers['sec-fetch-site'] !== undefined) {
 			return refuse(response, 403, 'FORBIDDEN', 'This API does not answer web pages.');
+		}
+
+		// The one thing answered without the token: proof that this listener
+		// holds it. A caller sends a number of its own choosing and gets back a
+		// keyed digest of it, which only the holder of the token can make. So a
+		// caller can check who is listening before it sends the token at all.
+		// Another program can take this port while the app is closed.
+		if (request.method === 'GET' && request.url.startsWith('/api/v1/proof?')) {
+			const nonce = request.url.slice('/api/v1/proof?nonce='.length);
+			if (!request.url.startsWith('/api/v1/proof?nonce=') || !/^[a-f0-9]{32,64}$/.test(nonce)) {
+				return refuse(response, 400, 'INVALID', '`nonce` must be 32 to 64 characters, 0 to 9 and a to f.');
+			}
+			return reply(response, 200, { proof: createHmac('sha256', String(await getToken())).update(nonce).digest('hex') });
 		}
 		const header = request.headers.authorization ?? '';
 		const given = header.startsWith('Bearer ') ? header.slice(7) : null;

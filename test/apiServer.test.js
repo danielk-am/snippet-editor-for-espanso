@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdtempSync, readFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -302,7 +303,7 @@ test('a reply JSON cannot carry is refused as a whole, never sent altered', asyn
 	const self = [];
 	self.push(self);
 	for (const value of [Infinity, -Infinity, NaN, self]) {
-		const { port } = await listening(t, { handle: async () => ({ status: 200, body: { matches: [{ priority: value }] } }), log: (error) => logged.push(error) });
+		const { port } = await listening(t, { handle: async () => ({ status: 200, body: { value: [{ priority: value }] } }), log: (error) => logged.push(error) });
 		const reply = await send(port);
 		assert.deepEqual(code(reply), [422, 'UNREPRESENTABLE'], String(value));
 		assert.match(reply.body.error.message, /JSON cannot carry/);
@@ -337,4 +338,52 @@ test('a port another program holds on every address counts as taken', async (t) 
 test('the reply to a failure inside the listener is exactly the plain error', async (t) => {
 	const { port } = await listening(t, { handle: async () => { throw new Error('secret detail'); }, log: () => {} });
 	assert.deepEqual((await send(port)).body, { error: { code: 'ERROR', message: 'Something went wrong inside the app.' } });
+});
+
+test('a listener can prove it is this app without being sent the token', async (t) => {
+	const { port, seen, setToken } = await listening(t);
+	const nonce = 'ab'.repeat(16);
+	const expected = (token) => createHmac('sha256', token).update(nonce).digest('hex');
+	const reply = await send(port, { token: null, path: `/api/v1/proof?nonce=${nonce}` });
+	assert.deepEqual([reply.status, reply.body], [200, { proof: expected(TOKEN) }]);
+	setToken('c'.repeat(64));
+	assert.deepEqual((await send(port, { token: null, path: `/api/v1/proof?nonce=${nonce}` })).body, { proof: expected('c'.repeat(64)) });
+	// The proof is asked for before any token is sent, so it must never reach the routes.
+	assert.equal(seen.length, 0);
+
+	for (const bad of ['', 'short', 'zz'.repeat(16), 'ab'.repeat(40), `${nonce}&nonce=${nonce}`]) {
+		assert.deepEqual(code(await send(port, { token: null, path: `/api/v1/proof?nonce=${bad}` })), [400, 'INVALID'], bad);
+	}
+	assert.deepEqual(code(await send(port, { token: null, path: `/api/v1/proof?nonce=${nonce}`, headers: { Origin: 'https://example.com' } })), [403, 'FORBIDDEN']);
+	assert.deepEqual(code(await send(port, { token: null, path: `/api/v1/proof?nonce=${nonce}`, headers: { Host: 'evil.example' } })), [403, 'FORBIDDEN']);
+	assert.deepEqual(code(await send(port, { token: null, method: 'POST', path: `/api/v1/proof?nonce=${nonce}`, body: {} })), [401, 'UNAUTHORIZED']);
+	assert.deepEqual(code(await send(port, { token: null, path: '/api/v1/state' })), [401, 'UNAUTHORIZED']);
+});
+
+test('one file holding a value JSON cannot carry is marked, and the rest of the reply still arrives', async (t) => {
+	const self = [];
+	self.push(self);
+	const NOTE = 'This file holds a value JSON cannot carry (a number that is not finite, or a list or mapping that contains itself), so its snippets are not listed here. Its text can still be read.';
+	const good = { id: 'local:base.yml', name: 'base.yml', matchCount: 1, parseErrors: [], matches: [{ trigger: ':a', replace: 'A' }] };
+	const odd = { id: 'local:odd.yml', name: 'odd.yml', matchCount: 1, parseErrors: [], matches: [{ trigger: ':o', replace: 'O', weight: Infinity }], text: 'matches:\n  - trigger: ":o"\n    replace: "O"\n    weight: .inf\n' };
+	const marked = { ...odd, matchCount: null, parseErrors: [NOTE], matches: null, notCarried: true };
+	const answer = async (body) => {
+		const { port } = await listening(t, { handle: async () => ({ status: 200, body }) });
+		return send(port);
+	};
+
+	// The list of everything.
+	const state = await answer({ matchDir: '/m', files: [good, odd], packages: [{ name: 'p', files: [{ ...odd, id: 'package:p:odd.yml' }] }], team: [{ name: 't', files: [good] }] });
+	assert.equal(state.status, 200);
+	assert.deepEqual(state.body.files, [good, marked]);
+	assert.deepEqual(state.body.packages[0].files, [{ ...marked, id: 'package:p:odd.yml' }]);
+	assert.deepEqual(state.body.team[0].files, [good]);
+
+	// One file on its own: its text is plain, and still sent.
+	assert.deepEqual((await answer(odd)).body, marked);
+	assert.deepEqual((await answer({ ...odd, matches: [{ trigger: ':c', vars: self }] })).body, { ...marked });
+
+	// Search: hits that cannot be carried are left out.
+	const hits = await answer([{ fileId: 'local:base.yml', index: 0, match: good.matches[0] }, { fileId: 'local:odd.yml', index: 0, match: odd.matches[0] }]);
+	assert.deepEqual([hits.status, hits.body], [200, [{ fileId: 'local:base.yml', index: 0, match: good.matches[0] }]]);
 });
