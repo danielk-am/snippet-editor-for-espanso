@@ -28,7 +28,7 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 		ollama: ready('ollama', 'Ollama', { models: [{ name: 'qwen3:8b', cloud: false }] }),
 		...status,
 	};
-	const checks = { count: 0 };
+	const checks = { count: 0, located: 0 };
 	const chat = createChat({
 		service: api.service,
 		router: createRouter({ service: api.service, log: () => {} }),
@@ -45,6 +45,7 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 				return Object.values(backends);
 			},
 			locate: async () => {
+				checks.located += 1;
 				await wait(locateDelay);
 				return program;
 			},
@@ -287,12 +288,23 @@ test('closing the app stops an answer under way and leaves nothing behind', opti
 });
 
 test('a stop that arrives while an answer is still starting ends it before any program runs', options, async (t) => {
-	const { chat, events, left } = await setup(t, { locateDelay: 300 });
-	const { turnId } = await chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
-	chat.stop(turnId);
-	while (!events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(20);
-	assert.deepEqual(events.map((event) => event.type), ['stopped']);
-	assert.deepEqual(left(), []);
+	// At once: the program is not even looked for.
+	const early = await setup(t, { locateDelay: 300 });
+	const first = await early.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	early.chat.stop(first.turnId);
+	while (!early.events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(20);
+	assert.deepEqual(early.events.map((event) => event.type), ['stopped']);
+	assert.equal(early.checks.located, 0);
+	assert.deepEqual(early.left(), []);
+
+	// A moment later, while the program is being looked for: it is stopped as soon as it starts.
+	const later = await setup(t, { locateDelay: 400 });
+	const second = await later.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	while (later.checks.located === 0) await wait(10);
+	later.chat.stop(second.turnId);
+	while (!later.events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(20);
+	assert.deepEqual(later.events.map((event) => event.type), ['stopped']);
+	assert.deepEqual(later.left(), []);
 });
 
 test('closing the app while a message is still being checked means the answer never starts', options, async (t) => {

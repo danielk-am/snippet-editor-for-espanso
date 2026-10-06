@@ -301,3 +301,27 @@ Seven real calls were made with Codex 0.160.1 on 2026-10-07, against throwaway f
 | 7, "run this shell command" | It said it could not. No command was seen. |
 
 Still not proven, as the README says: a whole answer from Claude Code, any run against a real Ollama, and finding the tools on Windows and Linux.
+
+## After an independent review
+
+A fresh reviewer, given the code and not my conclusions, attacked the finished branch. Each finding below came with a script or test that showed it. Each is fixed, with a test that fails without the fix, and the reviewer's own reproductions were run again afterwards.
+
+| Found | Fixed how |
+| --- | --- |
+| A lone carriage return, U+0085, U+2028 and U+2029 end a line for Espanso and not for the app's reader. A snippet that runs a command could sit on a comment line: no warning on the card, not listed by the app, live in Espanso. Confirmed against Espanso 2.4.1. | Fixed at the root, for every way of saving: a file that holds one is a file with a problem, the app never writes one, a card for such text is refused, a team package that holds one counts as running commands, and a card's rows split on them. |
+| A card drew 400 rows at most, and Apply wrote everything. Over 256 KB the check for commands was skipped. | Every row of a waiting card is on it, in a box that scrolls, with a count of lines added and removed. A whole-file change over 256 KB is not made into a card. |
+| Quitting mid-answer left the token file, the MCP config file and any program that ignored a polite stop. The service was never shut down. | Quitting waits, up to four seconds, for everything to be stopped. The runner stops a program's whole group when it ends. |
+| A chosen backend that stopped being ready was quietly swapped for another, and a message could be sent before the notice about where text goes was answered. Ollama defaulted to a cloud model. | A chosen backend is never swapped: the panel says it is not ready. Send waits for the notice. A local model is picked before a cloud one. |
+| One line (`#` and 80,000 spaces) took the Markdown reader 3 seconds, on every frame. | Two patterns rewritten, and a limit on marks that open nothing. A million such characters now read in a few milliseconds. |
+| Ollama had no limit on the whole answer, and one line with very many tool calls threw. | The same time limits as the others, a cap on thinking, on one line and on tools at once (20), and Stop no longer waits for a tool that is still working. |
+| A card worked out after its answer ended landed in the next answer. | A card carries the name of the answer that asked for it, and none is made once that answer is over. |
+| Both "stop if it does anything else" guards listed what was forbidden. | They now list what is allowed: the twelve tool names exactly, and for Codex its own three harmless helpers and its notes. Anything else stops the answer. Claude Code's first line must come before anything it writes. |
+| From a sheet or a full-width panel, "Open Settings" and "Show the file" changed a page that stayed covered. | The panel makes way first. |
+| Smaller: an answer could start after the app began closing; a team send did not re-check the repository or could carry a title the card did not show; a trigger or an earlier answer could close the prompt's frame; a numeric trigger made a card that could never apply; the unsaved-edits hold compared file ids exactly; the options menu had no arrow keys and closing the panel lost the keyboard's place. | Each fixed and tested. |
+
+Two points from the review are left as they are, for Daniel to decide:
+
+- Apply needs "Let AI tools change snippets", which is also the switch that lets any MCP client write with no card. A reviewed change should arguably not need the unreviewed route opened. This was Daniel's choice on 2026-10-06, so it stands until they say otherwise.
+- Claude Code's `--restricted` ignores settings files, and its help text says `CLAUDE.md` is skipped only with `--bare`, which cannot be used because it also skips the subscription sign-in. So a person's own `CLAUDE.md` probably travels with each message. Not checked, because Claude Code is signed out here.
+
+The review also listed tests that passed whether or not the code was right. Each now has a test that fails when the code is broken: 12 planted faults in the proposals, 9 in the chat, and 2 in the runner were all caught, and the window check now covers every row of a long card, the command warning, Dismiss, "Apply all", what the assistant is told about its cards, a reload mid-answer, and shutting down with an answer under way.

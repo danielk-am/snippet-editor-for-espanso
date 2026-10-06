@@ -184,7 +184,7 @@ How well an AI tool can use the tools was checked: ten questions with one right 
 
 Press Cmd+J (Ctrl+J on Windows and Linux), or the speech-bubble button at the top right, to open a chat panel beside your snippets. Ask in plain words: find a snippet, explain one, draft a new one, tidy the one you have open. The panel is told which file and snippet you have open.
 
-**It changes nothing by itself.** When it wants to add, change or delete something, you get a card that shows the lines that would change. Nothing is written until you press Apply, and Apply also needs "Let AI tools change snippets" switched on in Settings. If the file changed after the card was made, the app checks that the card still means the same thing. If it does not, nothing is written and the card tells you to ask again.
+**It changes nothing by itself.** When it wants to add, change or delete something, you get a card. Every line the change would add or remove is on that card, in a box that scrolls when there are many. Nothing is written until you press Apply, and Apply also needs "Let AI tools change snippets" switched on in Settings. If the file changed after the card was made, the app checks that the card still means the same thing. If it does not, nothing is written and the card tells you to ask again.
 
 It answers through one of three tools on your own computer. The app holds no key and never signs in for you.
 
@@ -198,11 +198,14 @@ It answers through one of three tools on your own computer. The app holds no key
 
 How it is kept in bounds:
 
-- **Only the snippet tools.** Each message starts the backend fresh. Claude Code is started with its own tools off. Its first line of output lists the tools it has, and if that list holds anything the app did not give it, the answer is stopped before it begins. Codex is started with its shell, web search, sub-agents and image tools off, in a read-only sandbox, and the answer is stopped if it is seen to run a command, change a file or search the web.
+- **Only the snippet tools.** Each message starts the backend fresh. Claude Code is started with its own tools off. Its first line of output lists the tools it has. Nothing it writes is taken before that line, and if the list holds anything but the app's twelve tools, the answer is stopped before it begins. Codex is started with its shell, web search, sub-agents and image tools off, in a read-only sandbox. With either, the answer is stopped the moment it is seen to do anything the app does not know to be harmless: a command, a changed file, a web search, a tool that is not one of the twelve, or a kind of step the app has not seen before.
+- **The assistant's own tools cannot write.** In chat they only read, and a change is handed over as a proposal. Should one ever try to write, it is refused before it reaches the app's routes.
 - **A listener that cannot write.** Claude Code and Codex reach your snippets through a listener on this computer that exists only while an answer is under way, with a token made for that answer. It can read, and it can hand over a proposal. It has no route that changes anything.
-- **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request. Whatever it makes of one, it can still only propose.
+- **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request, and a file name or trigger cannot pass itself off as part of your message. Whatever the assistant makes of one, it can still only propose.
+- **Who answers is your choice.** The first backend found ready becomes the choice, shown in the footer. If it stops being ready, the panel says so. It does not move on to another by itself. With Ollama, a model that stays on your computer is picked before a cloud one. The first time a backend would send your text away, the panel says where, and nothing is sent until you have pressed OK.
+- **Nothing is left running.** An answer has a time limit, and Stop ends it at once. Quitting the app waits, up to four seconds, for an answer under way to be stopped, with its program and its listener.
 - **An answer is shown as text.** Nothing in it is a link, and nothing in it can run as part of the page.
-- **Commands carry a warning.** A snippet with a `shell` or `script` variable runs a command each time it is used. A card for one says so above Apply.
+- **Commands carry a warning.** A snippet with a `shell` or `script` variable runs a command each time it is used. A card for one says so above Apply. A whole-file change over 256 KB is not made into a card at all: it is too long to check and too long to read.
 - **History stays here.** The last 20 conversations, up to 100 messages each, are kept in the window's own storage. "Clear history" removes them. Nothing is added to Claude Code's or Codex's own history.
 
 What was checked, and what was not:
@@ -211,6 +214,9 @@ What was checked, and what was not:
 - **Claude Code was checked as far as its tool list.** Started signed out, it lists exactly the twelve snippet tools. A whole answer from Claude Code has not been run: it was signed out on the computer this was built on. How its answers are read is tested against output written from Anthropic's documentation.
 - **Ollama has not been run.** It was not installed on that computer. That backend is written from Ollama's API reference and tested against a stand-in.
 - **Finding the three tools on Windows and Linux has not been run** on those systems.
+- **Your own instruction files may travel.** Codex adds your `AGENTS.md` to each message itself (seen). Claude Code may do the same with your `CLAUDE.md` (not checked). The app cannot switch either off without touching that tool's sign-in, which it never does.
+
+An independent review of this piece found eleven things, each with a reproduction. All are fixed, and the reproductions were run again. The two that mattered most: a snippet that runs a command could be hidden from a card behind a line break only Espanso reads (see "How it treats your files"), and quitting mid-answer could leave a program and its token file behind.
 
 ## How it treats your files
 
@@ -224,6 +230,7 @@ Espanso's match folder is the only store. There is no database, so nothing can d
 - **No overwriting newer changes.** Each write is checked against a fingerprint of the file as the editor opened it, and once more just before the swap. If another program changed the file, the write is refused and you are asked to reload.
 - **No half-written files.** Files are replaced atomically. A symlinked match file keeps its link, and the file keeps its permissions.
 - **Changes on disk are picked up** while the app is open.
+- **Line breaks only Espanso reads.** Espanso ends a line at four characters that most YAML readers, this app's among them, take for ordinary text: a carriage return with no line feed after it, and U+0085, U+2028 and U+2029 (checked against Espanso 2.4.1). Text after one of them on a comment line is a comment to most tools and a live snippet to Espanso. So a file that holds one is shown as a file with a problem, naming the line, and can be mended in the raw editor. The app never writes one: in a snippet's own text they are written as escapes, in a description they become spaces, and anywhere else the save is refused. A team package that holds one counts as a package that may run commands.
 - **One bad file never blocks the rest.** A file with YAML errors, a broken alias, the wrong encoding, or one that cannot be read is listed with its problem, and the other files open as usual.
 - **Package content is treated as untrusted.** A package file is read only if it really lives under `packages/`, so a link inside a package cannot show a file from elsewhere on your disk. Your own match files may be links.
 
