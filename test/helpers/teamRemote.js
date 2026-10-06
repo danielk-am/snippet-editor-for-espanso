@@ -35,15 +35,15 @@ export function createRemote(root = fs.mkdtempSync(path.join(os.tmpdir(), 'snipp
 		root,
 		url,
 		env,
-		// Writes files (a string is its content, null removes it, { link } makes
-		// a symbolic link), commits and pushes. Returns the commit.
+		// Writes files (text or bytes are its content, null removes it, { link }
+		// makes a symbolic link), commits and pushes. Returns the commit.
 		commit(files, message = 'Change') {
 			for (const [name, content] of Object.entries(files)) {
 				const file = path.join(seed, name);
 				fs.mkdirSync(path.dirname(file), { recursive: true });
 				fs.rmSync(file, { recursive: true, force: true });
 				if (content === null) continue;
-				if (typeof content === 'object') fs.symlinkSync(content.link, file);
+				if (typeof content === 'object' && !Buffer.isBuffer(content)) fs.symlinkSync(content.link, file);
 				else fs.writeFileSync(file, content);
 			}
 			git(seed, 'add', '--all');
@@ -56,6 +56,30 @@ export function createRemote(root = fs.mkdtempSync(path.join(os.tmpdir(), 'snipp
 			git(seed, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},${name}`);
 			git(seed, 'commit', '--quiet', '-m', 'Add a submodule');
 			git(seed, 'push', '--quiet', 'origin', 'HEAD:main');
+		},
+		// Adds one entry straight into the commit, without a file on this
+		// computer's disk. So two names that differ only in capitals can both
+		// exist, as they can in a repository made on another system.
+		addEntry(name, content, mode = '100644') {
+			const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: seed, env, input: content, encoding: 'utf8' }).trim();
+			git(seed, 'update-index', '--add', '--cacheinfo', `${mode},${blob},${name}`);
+			git(seed, 'commit', '--quiet', '-m', `Add ${name}`);
+			git(seed, 'push', '--quiet', 'origin', 'HEAD:main');
+		},
+		// The team renames its main branch.
+		renameDefault(name) {
+			git(seed, 'branch', '-m', name);
+			git(seed, 'commit', '--quiet', '--allow-empty', '-m', `Now on ${name}`);
+			git(seed, 'push', '--quiet', 'origin', name);
+			git(url, 'symbolic-ref', 'HEAD', `refs/heads/${name}`);
+			git(url, 'update-ref', '-d', 'refs/heads/main');
+			return git(seed, 'rev-parse', 'HEAD');
+		},
+		// The team rewrites history on the main branch.
+		rewrite(message = 'Rewritten') {
+			git(seed, 'commit', '--quiet', '--amend', '--allow-empty', '-m', message);
+			git(seed, 'push', '--quiet', '--force', 'origin', 'HEAD:main');
+			return git(seed, 'rev-parse', 'HEAD');
 		},
 		head: (ref = 'main') => git(url, 'rev-parse', ref),
 		branches: () => git(url, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').split('\n').filter(Boolean).sort(),

@@ -14,7 +14,7 @@ export const PACKAGE_NAME = /^[a-z0-9][a-z0-9-]{0,79}$/;
 export const MANIFEST = '_manifest.yml';
 
 const MEGABYTE = 1024 * 1024;
-const LIMITS = { packages: 200, files: 50, fileBytes: 2 * MEGABYTE, totalBytes: 12 * MEGABYTE };
+const LIMITS = { packages: 200, files: 50, fileBytes: 2 * MEGABYTE, manifestBytes: 64 * 1024, totalBytes: 12 * MEGABYTE };
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -44,17 +44,22 @@ function runsCommands(data) {
 	return Array.isArray(data.matches) && data.matches.some((match) => isPlainObject(match) && risky(match.vars));
 }
 
-// What a match file holds, read leniently: this is a listing, not a save.
+// What a file holds, read leniently: this is a listing, not a save.
+//
+// A file this app cannot read counts as one that may run commands. Espanso
+// reads some YAML this parser refuses, so "could not check" must never be
+// shown as "nothing to worry about".
 function scan(bytes) {
+	const unread = { matchCount: null, runs: true };
 	const text = bytes.toString('utf8');
-	if (!Buffer.from(text, 'utf8').equals(bytes)) return { matchCount: null, runs: false };
+	if (!Buffer.from(text, 'utf8').equals(bytes)) return unread;
 	try {
 		const doc = parseDocument(text, { uniqueKeys: false });
-		if (doc.errors.length) return { matchCount: null, runs: false };
+		if (doc.errors.length) return unread;
 		const data = doc.toJS();
 		return { matchCount: Array.isArray(data?.matches) ? data.matches.length : 0, runs: runsCommands(data) };
 	} catch {
-		return { matchCount: null, runs: false };
+		return unread;
 	}
 }
 
@@ -99,18 +104,24 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 	// What a connection or a proposal left behind when it was cut short.
 	async function cleanUp() {
 		for (const entry of await fs.readdir(dir).catch(() => [])) {
-			if (/^(repo\.git\.tmp-|work-)/.test(entry)) await fs.rm(path.join(dir, entry), { recursive: true, force: true });
+			if (/^(repo\.git\.tmp-|work-|index-)/.test(entry)) await fs.rm(path.join(dir, entry), { recursive: true, force: true });
 		}
-		if (await cloned()) await run(['worktree', 'prune']).catch(() => {});
 	}
 
 	async function fetch() {
-		const branch = await defaultBranch();
-		try {
-			await run(['fetch', '--prune', '--no-tags', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`], { timeout: 60_000 });
-		} catch (error) {
-			// A repository with no commits yet has no branch to fetch.
-			if (!/couldn't find remote ref/i.test(error.detail ?? '')) throw error;
+		// Which branch the team calls its main one today. Teams rename it, and
+		// a repository that was empty gets its first branch later.
+		const listed = await run(['ls-remote', '--symref', 'origin', 'HEAD'], { timeout: 60_000 });
+		const named = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(listed)?.[1];
+		if (named) {
+			if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(named) || named.includes('..')) throw fail('GIT_FAILED', "The repository's main branch has a name the app cannot use.");
+			if (named !== (await defaultBranch())) await run(['symbolic-ref', 'HEAD', `refs/heads/${named}`]);
+			try {
+				await run(['fetch', '--prune', '--no-tags', 'origin', `+refs/heads/${named}:refs/heads/${named}`], { timeout: 60_000 });
+			} catch (error) {
+				// Named, but with no commits on it yet.
+				if (!/couldn't find remote ref/i.test(error.detail ?? '')) throw error;
+			}
 		}
 		await fs.writeFile(stampFile, now().toISOString());
 	}
@@ -121,7 +132,8 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		if (await cloned()) return fetch();
 		const staging = `${repoDir}.tmp-${randomBytes(4).toString('hex')}`;
 		try {
-			await git(['clone', '--quiet', '--bare', '--single-branch', '--no-tags', '--', address.url, staging], { cwd: dir, timeout: 120_000 });
+			// The remote is named here, whatever name the person's git would give it.
+			await git(['clone', '--quiet', '--bare', '--single-branch', '--no-tags', '--origin', 'origin', '--', address.url, staging], { cwd: dir, timeout: 120_000 });
 			await fs.rename(staging, repoDir);
 		} catch (error) {
 			await fs.rm(staging, { recursive: true, force: true });
@@ -196,9 +208,11 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 			else if (entry.mode === '120000') note(`${file} was left out: it is a link.`);
 			else if (entry.mode === '160000') note(`${file} was left out: it is a submodule.`);
 			else if (!isYaml(file)) continue; // A readme, a licence: not Espanso's business.
-			else if (file !== MANIFEST && !isSafeFileName(file)) note(`${file} was left out: that is not a match file name.`);
+			else if (file === MANIFEST) {
+				if (entry.size > max.manifestBytes) pkg.manifestTooLarge = true;
+				else pkg.manifest = { sha: entry.sha, size: entry.size };
+			} else if (!isSafeFileName(file)) note(`${file} was left out: that is not a match file name.`);
 			else if (entry.size > max.fileBytes) note(`${file} was left out: it is larger than the app opens.`);
-			else if (file === MANIFEST) pkg.manifest = entry.sha;
 			else pkg.files.push({ name: file, sha: entry.sha, size: entry.size });
 		}
 
@@ -207,26 +221,38 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		const wanted = [];
 		for (const pkg of inside.values()) {
 			pkg.files.sort(byName);
+			// Many disks hold one file per name whatever its capitals, so only
+			// one of two such files could be installed. The first is offered.
+			const taken = new Map();
+			pkg.files = pkg.files.filter((file) => {
+				const first = taken.get(file.name.toLowerCase());
+				if (first) pkg.problems.push(`${file.name} was left out: ${first} has the same name in other capitals.`);
+				else taken.set(file.name.toLowerCase(), file.name);
+				return !first;
+			});
 			if (pkg.files.length > max.files) {
 				pkg.files = pkg.files.slice(0, max.files);
 				pkg.problems.push(`Only the first ${max.files} files are included.`);
 			}
-			const cost = pkg.files.reduce((sum, file) => sum + file.size, 0);
+			const cost = pkg.files.reduce((sum, file) => sum + file.size, pkg.manifest?.size ?? 0);
 			pkg.read = cost <= budget;
 			if (!pkg.read) continue;
 			budget -= cost;
-			wanted.push(...pkg.files.map((file) => file.sha), ...(pkg.manifest ? [pkg.manifest] : []));
+			wanted.push(...pkg.files.map((file) => file.sha), ...(pkg.manifest ? [pkg.manifest.sha] : []));
 		}
 		const blobs = await readBlobs([...new Set(wanted)]);
 
 		const files = new Map();
 		const packages = [...inside.values()].map((pkg) => {
-			files.set(pkg.name, [...(pkg.manifest ? [{ name: MANIFEST, sha: pkg.manifest }] : []), ...pkg.files.map(({ name, sha }) => ({ name, sha }))]);
-			const manifest = readManifest(pkg.manifest && blobs.get(pkg.manifest));
-			let runs = false;
+			files.set(pkg.name, [...(pkg.manifest ? [{ name: MANIFEST, sha: pkg.manifest.sha }] : []), ...pkg.files.map(({ name, sha }) => ({ name, sha }))]);
+			const manifestBytes = pkg.manifest && pkg.read ? blobs.get(pkg.manifest.sha) : null;
+			const manifest = pkg.manifestTooLarge ? { data: {}, error: 'Its manifest is too large to read.' } : readManifest(manifestBytes);
+			// The manifest is installed too, and a match file can import it, so
+			// it is checked for commands like any other file.
+			let runs = manifestBytes ? scan(manifestBytes).runs : false;
 			const listed = pkg.files.map((file) => {
 				const found = pkg.read ? scan(blobs.get(file.sha) ?? Buffer.alloc(0)) : { matchCount: null, runs: false };
-				if (pkg.read && found.matchCount === null) pkg.problems.push(`${file.name} has YAML errors.`);
+				if (pkg.read && found.matchCount === null) pkg.problems.push(`${file.name} has YAML errors, so it could not be checked for commands.`);
 				runs ||= found.runs;
 				return { name: file.name, matchCount: found.matchCount, size: file.size };
 			});
@@ -253,12 +279,21 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 	const oneLine = (value, most) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= most && !/[\r\n]/.test(value);
 	const stamp = () => now().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 
-	// What the commit holds at one path: null, or its entry.
-	const entryAt = async (commit, file) => parseTree(await run(['ls-tree', '-z', commit, '--', file]))[0] ?? null;
+	// The entries directly inside one folder of a commit, by their own names.
+	const entriesIn = async (commit, folder) =>
+		parseTree(await run(['ls-tree', '-z', commit, ...(folder ? [`${folder}/`] : [])])).map((entry) => ({ ...entry, name: entry.path.slice(folder ? folder.length + 1 : 0) }));
+	// A name that differs from the wanted one only in capital letters. On many
+	// disks the two would be one file, so such a pair is never created.
+	const sameButForCapitals = (entries, wanted) => entries.find((entry) => entry.name !== wanted && entry.name.toLowerCase() === wanted.toLowerCase());
+	const clash = (where, other, wanted) => fail('INVALID', `${where} already has ${other.name}, which differs from ${wanted} only in capital letters. Use that name, or another one.`);
 
 	// Sends one file to a package as a new branch. The main branch is never
 	// pushed, and nothing is forced: the only thing that reaches the team is a
 	// branch someone can open a pull request from, or ignore.
+	//
+	// The commit is built inside git, with no files checked out. So whatever
+	// the repository holds (a link, a filter, a hook), nothing of it is ever
+	// written to or run on this computer.
 	async function propose({ package: name, fileName, text, summary, title, description }) {
 		await needCloned();
 		if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) {
@@ -274,15 +309,23 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		const commit = await head(branch);
 		if (!commit) throw fail('INVALID', 'This repository is empty. Add a first commit on GitHub, then propose again.');
 
-		// The path must be folders all the way down. A link there would have
-		// the file written wherever the link points.
-		const [root, folder, existing] = await Promise.all([entryAt(commit, 'packages'), entryAt(commit, `packages/${name}`), entryAt(commit, `packages/${name}/${fileName}`)]);
-		if ((root && root.type !== 'tree') || (folder && folder.type !== 'tree')) {
-			throw fail('INVALID', `The repository has something other than a folder at packages/${name}, such as a link.`);
-		}
+		// The path must be real folders all the way down, with no other name
+		// beside it that differs only in capitals.
+		const notAFolder = () => fail('INVALID', `The repository has something other than a folder at packages/${name}, such as a link.`);
+		const top = await entriesIn(commit, '');
+		const root = top.find((entry) => entry.name === 'packages');
+		if (root && root.type !== 'tree') throw notAFolder();
+		if (!root && sameButForCapitals(top, 'packages')) throw clash('The repository', sameButForCapitals(top, 'packages'), 'packages');
+		const folders = root ? await entriesIn(commit, 'packages') : [];
+		const folder = folders.find((entry) => entry.name === name);
+		if (folder && folder.type !== 'tree') throw notAFolder();
+		if (!folder && sameButForCapitals(folders, name)) throw clash('The repository', sameButForCapitals(folders, name), name);
+		const files = folder ? await entriesIn(commit, `packages/${name}`) : [];
+		const existing = files.find((entry) => entry.name === fileName);
 		if (existing && (existing.type !== 'blob' || existing.mode === '120000')) {
 			throw fail('INVALID', `${fileName} is a link in the team repository, so it cannot be replaced from here.`);
 		}
+		if (!existing && sameButForCapitals(files, fileName)) throw clash('The package', sameButForCapitals(files, fileName), fileName);
 
 		const created = !folder;
 		if (created) {
@@ -299,24 +342,25 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 			proposal = `${base}-${attempt}`;
 		}
 
-		const work = path.join(dir, `work-${randomBytes(4).toString('hex')}`);
-		const inWork = (args, options) => git(args, { cwd: work, ...options });
+		// A private index: the list of files the new commit will hold.
+		const index = path.join(dir, `index-${randomBytes(4).toString('hex')}`);
+		const staged = (args) => run(args, { env: { GIT_INDEX_FILE: index } });
+		const stage = async (file, content) => {
+			const blob = (await run(['hash-object', '-w', '--stdin'], { input: content })).trim();
+			await staged(['update-index', '--add', '--cacheinfo', `100644,${blob},${file}`]);
+		};
 		try {
-			await run(['worktree', 'add', '--quiet', '-b', proposal, work, commit], { timeout: 60_000 });
-			const target = path.join(work, 'packages', name);
-			await fs.mkdir(target, { recursive: true });
-			await fs.writeFile(path.join(target, fileName), text);
+			await staged(['read-tree', commit]);
+			await stage(`packages/${name}/${fileName}`, text);
 			if (created) {
-				const author = await inWork(['config', 'user.name']).then((out) => out.trim(), () => '');
-				await fs.writeFile(path.join(target, MANIFEST), stringify({ name, title: title.trim(), description: description.trim(), version: '0.1.0', author }, { lineWidth: 0 }));
+				const author = await run(['config', 'user.name']).then((out) => out.trim(), () => '');
+				await stage(`packages/${name}/${MANIFEST}`, stringify({ name, title: title.trim(), description: description.trim(), version: '0.1.0', author }, { lineWidth: 0 }));
 			}
-			await inWork(['add', '--', `packages/${name}`]);
-			// Nothing staged: the package holds this file already, byte for byte
-			// or once git has normalised its line endings.
-			if (!(await inWork(['status', '--porcelain'])).trim()) throw fail('INVALID', 'The team package already has this file as it is.');
-			await inWork(['commit', '--quiet', '-m', `${summary.trim()}\n\nProposed with Snippet Editor for Espanso.`], { timeout: 60_000 });
-			const sha = (await inWork(['rev-parse', 'HEAD'])).trim();
-			await run(['push', '--quiet', 'origin', `refs/heads/${proposal}:refs/heads/${proposal}`], { timeout: 60_000 });
+			const tree = (await staged(['write-tree'])).trim();
+			if (tree === (await run(['rev-parse', `${commit}^{tree}`])).trim()) throw fail('INVALID', 'The team package already has this file as it is.');
+			const sha = (await run(['commit-tree', tree, '-p', commit, '-m', `${summary.trim()}\n\nProposed with Snippet Editor for Espanso.`], { timeout: 60_000 })).trim();
+			// One commit, to one new branch. No "+", no --force.
+			await run(['push', '--quiet', 'origin', `${sha}:refs/heads/${proposal}`], { timeout: 60_000 });
 			return {
 				branch: proposal,
 				commit: sha,
@@ -324,10 +368,8 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 				compareUrl: address.webUrl ? `${address.webUrl}/compare/${branch}...${proposal}?expand=1` : null,
 			};
 		} finally {
-			await run(['worktree', 'remove', '--force', work]).catch(() => {});
-			await fs.rm(work, { recursive: true, force: true });
-			await run(['worktree', 'prune']).catch(() => {});
-			await run(['branch', '--quiet', '-D', proposal]).catch(() => {});
+			await fs.rm(index, { force: true });
+			await fs.rm(`${index}.lock`, { force: true });
 		}
 	}
 
@@ -336,19 +378,21 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		connect: () => inTurn(connect),
 		propose: (input = {}) => inTurn(() => propose(input)),
 		fetch: () => inTurn(async () => (await needCloned(), fetch())),
-		status: () => inTurn(status),
-		packages: () => inTurn(async () => (({ packages, problems }) => ({ packages, problems }))(await listing())),
+		// Reading does not wait its turn. Git lets a reader work beside a fetch,
+		// and a slow network must not hold up a look at what is already here.
+		status,
+		packages: async () => (({ packages, problems }) => ({ packages, problems }))(await listing()),
 
-		// One package with its files, as they are in one commit, for installing.
-		// Read in one turn, so a fetch cannot slip between the two.
-		packageFiles: (name) =>
-			inTurn(async () => {
-				const { commit, packages, files } = await listing();
-				const wanted = files.get(name);
-				if (!wanted) throw fail('NOT_FOUND', `The team repository has no package named ${name}.`);
-				const blobs = await readBlobs(wanted.map((file) => file.sha));
-				return { commit, package: packages.find((pkg) => pkg.name === name), files: wanted.map((file) => ({ name: file.name, bytes: blobs.get(file.sha) })) };
-			}),
+		// One package with its files, for installing. Both come from one
+		// listing of one commit, and the files are read by their own ids, so a
+		// fetch that lands meanwhile cannot mix two versions.
+		async packageFiles(name) {
+			const { commit, packages, files } = await listing();
+			const wanted = files.get(name);
+			if (!wanted) throw fail('NOT_FOUND', `The team repository has no package named ${name}.`);
+			const blobs = await readBlobs(wanted.map((file) => file.sha));
+			return { commit, package: packages.find((pkg) => pkg.name === name), files: wanted.map((file) => ({ name: file.name, bytes: blobs.get(file.sha) })) };
+		},
 
 		disconnect: () =>
 			inTurn(async () => {

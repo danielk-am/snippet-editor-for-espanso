@@ -194,7 +194,7 @@ test('what cannot be installed safely is left out and reported', async () => {
 	assert.deepEqual(mixed.problems, [
 		'.hidden.yml was left out: that is not a match file name.',
 		'big.yml was left out: it is larger than the app opens.',
-		'broken.yml has YAML errors.',
+		'broken.yml has YAML errors, so it could not be checked for commands.',
 		'linked.yml was left out: it is a link.',
 		'Subfolders were left out.',
 		'vendored was left out: it is a submodule.',
@@ -219,7 +219,7 @@ test('lists are cut at their limits, and say so', async () => {
 	assert.deepEqual(packages[0].files.map((file) => file.name), ['part1.yml', 'part2.yml']);
 	assert.deepEqual(packages[0].problems, ['Only the first 2 files are included.']);
 
-	const tight = setup({ remote, limits: { totalBytes: 150 } });
+	const tight = setup({ remote, limits: { totalBytes: 300 } });
 	await tight.repo.connect();
 	const listed = (await tight.repo.packages()).packages;
 	assert.equal(listed[0].matchCount, 3);
@@ -266,13 +266,15 @@ test('disconnecting removes the copy', async () => {
 	assert.deepEqual(await repo.status(), { branch: null, commit: null, fetchedAt: null });
 });
 
-test('work asked for at the same moment runs one piece at a time', async () => {
+test('fetches asked for at the same moment run one at a time, and reading beside them is safe', async () => {
 	const { repo, remote } = setup();
 	await repo.connect();
 	remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'One at a time']) });
-	const [, listed, , { files }] = await Promise.all([repo.fetch(), repo.packages(), repo.fetch(), repo.packageFiles('goodbyes')]);
+	const [, listed, , early] = await Promise.all([repo.fetch(), repo.packages(), repo.fetch(), repo.packageFiles('goodbyes')]);
 	assert.equal(listed.packages.length, 2);
-	assert.equal(files[1].bytes.toString('utf8'), MATCHES([':bye', 'One at a time']));
+	// A read that ran beside the fetch saw one whole version, old or new.
+	assert.ok([MATCHES([':bye', 'Goodbye for now'], [':cheers', 'Cheers,']), MATCHES([':bye', 'One at a time'])].includes(early.files[1].bytes.toString('utf8')));
+	assert.equal((await repo.packageFiles('goodbyes')).files[1].bytes.toString('utf8'), MATCHES([':bye', 'One at a time']));
 });
 
 // --- proposing ------------------------------------------------------------------
@@ -450,4 +452,217 @@ test('an empty repository cannot take a proposal yet', async () => {
 		assert.equal(error.code, 'INVALID');
 		assert.match(error.message, /empty/);
 	});
+});
+
+// --- added after review -----------------------------------------------------------
+
+const SHELL_VAR = '    vars:\n      - name: out\n        type: shell\n        params:\n          cmd: "echo hi"\n';
+
+test('a command hidden where the listing did not look still marks the package', async () => {
+	const remote = createRemote();
+	remote.commit({
+		// In the manifest, which a match file can import.
+		'packages/in-manifest/_manifest.yml': `${MANIFEST('in-manifest')}matches:\n  - trigger: ":hidden"\n    replace: "{{out}}"\n${SHELL_VAR}`,
+		'packages/in-manifest/package.yml': 'imports:\n  - "_manifest.yml"\nmatches: []\n',
+		// In a file this app cannot read as YAML. Espanso may still read it.
+		'packages/unreadable/_manifest.yml': MANIFEST('unreadable'),
+		'packages/unreadable/package.yml': 'matches:\n  - trigger: "open\n',
+		// Not in the first snippet, nor its first variable.
+		'packages/later/_manifest.yml': MANIFEST('later'),
+		'packages/later/package.yml': `${MATCHES([':one', 'plain'])}  - trigger: ":two"\n    replace: "{{out}}"\n    vars:\n      - name: when\n        type: date\n        params:\n          format: "%Y"\n      - name: out\n        type: script\n        params:\n          args: ["python3", "x.py"]\n`,
+		'packages/plain/_manifest.yml': MANIFEST('plain'),
+		'packages/plain/package.yml': MATCHES([':plain', 'p']),
+	});
+	remote.addEntry('packages/not-text/_manifest.yml', MANIFEST('not-text'));
+	remote.commit({ 'packages/not-text/package.yml': Buffer.from([0x6d, 0x61, 0x74, 0x63, 0x68, 0x65, 0x73, 0x3a, 0x20, 0xff, 0xfe, 0x0a]) });
+	const { repo } = setup({ remote });
+	await repo.connect();
+	const byName = Object.fromEntries((await repo.packages()).packages.map((pkg) => [pkg.name, pkg]));
+	assert.deepEqual(Object.fromEntries(Object.entries(byName).map(([name, pkg]) => [name, pkg.runsCommands])), { 'in-manifest': true, later: true, 'not-text': true, plain: false, unreadable: true });
+	assert.deepEqual(byName.unreadable.problems, ['package.yml has YAML errors, so it could not be checked for commands.']);
+	assert.deepEqual(byName['not-text'].problems, ['package.yml has YAML errors, so it could not be checked for commands.']);
+});
+
+test('a proposal never touches this computer\'s disk outside the app\'s copy, whatever links the repository holds', async () => {
+	// Links whose names differ from the proposal's path only in capital
+	// letters. On a disk that ignores capitals, a file written to the path
+	// would land wherever the link points.
+	const make = (files) => {
+		const remote = seeded();
+		const outside = join(remote.root, 'outside');
+		mkdirSync(outside);
+		writeFileSync(join(outside, 'target.yml'), 'untouched\n');
+		writeFileSync(join(outside, '_manifest.yml'), 'untouched\n');
+		remote.commit(files(outside));
+		return { remote, outside };
+	};
+	const untouched = (outside) => {
+		assert.deepEqual(readdirSync(outside).sort(), ['_manifest.yml', 'target.yml']);
+		assert.equal(readFileSync(join(outside, 'target.yml'), 'utf8'), 'untouched\n');
+		assert.equal(readFileSync(join(outside, '_manifest.yml'), 'utf8'), 'untouched\n');
+	};
+	const input = { text: FAREWELLS, summary: 'Through a link', title: 'Linked', description: 'A link in disguise' };
+
+	const fileLink = make((outside) => ({ 'packages/goodbyes/Base.yml': { link: join(outside, 'target.yml') } }));
+	const a = setup({ remote: fileLink.remote, now: AT });
+	await a.repo.connect();
+	await rejectsWith(a.repo.propose({ ...input, package: 'goodbyes', fileName: 'base.yml' }), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.equal(error.message, 'The package already has Base.yml, which differs from base.yml only in capital letters. Use that name, or another one.');
+	});
+	untouched(fileLink.outside);
+	assert.deepEqual(fileLink.remote.branches(), ['main']);
+
+	const folderLink = make((outside) => ({ 'packages/Shipping': { link: outside } }));
+	const c = setup({ remote: folderLink.remote, now: AT });
+	await c.repo.connect();
+	await rejectsWith(c.repo.propose({ ...input, package: 'shipping', fileName: 'target.yml' }), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.equal(error.message, 'The repository already has Shipping, which differs from shipping only in capital letters. Use that name, or another one.');
+	});
+	untouched(folderLink.outside);
+
+	// No packages folder at all, but a link called Packages.
+	const rootLink = createRemote();
+	const outside = join(rootLink.root, 'outside');
+	mkdirSync(outside);
+	writeFileSync(join(outside, 'target.yml'), 'untouched\n');
+	writeFileSync(join(outside, '_manifest.yml'), 'untouched\n');
+	rootLink.commit({ Packages: { link: outside }, 'README.md': '# Team\n' });
+	const b = setup({ remote: rootLink, now: AT });
+	await b.repo.connect();
+	await rejectsWith(b.repo.propose({ ...input, package: 'shipping', fileName: 'target.yml' }), (error) => assert.equal(error.code, 'INVALID'));
+	untouched(outside);
+	assert.deepEqual(rootLink.branches(), ['main']);
+});
+
+test('a proposal is refused when packages itself is a link or a file, or when a name clashes in capitals with a real file', async () => {
+	for (const entry of [{ link: '/tmp' }, 'just a file\n']) {
+		const remote = createRemote();
+		remote.commit({ packages: entry, 'README.md': '# Team\n' });
+		const { repo } = setup({ remote, now: AT });
+		await repo.connect();
+		await rejectsWith(repo.propose({ package: 'shipping', fileName: 'x.yml', text: FAREWELLS, summary: 'x', title: 'Shipping', description: 'Shipping replies' }), (error) => {
+			assert.equal(error.code, 'INVALID');
+			assert.match(error.message, /other than a folder/);
+		});
+		assert.deepEqual(remote.branches(), ['main']);
+	}
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	await rejectsWith(repo.propose({ package: 'goodbyes', fileName: 'Package.yml', text: FAREWELLS, summary: 'x' }), (error) => assert.match(error.message, /already has package\.yml, which differs from Package\.yml only in capital letters/));
+	assert.deepEqual(remote.branches(), ['main']);
+});
+
+test('a proposal is pushed to its own new branch and nowhere else, never forced', async () => {
+	const { remote, dataDir, git, address } = setup();
+	const calls = [];
+	const spying = (args, options) => (calls.push(args), git(args, options));
+	const repo = createTeamRepo({ dataDir, address, git: spying, now: AT });
+	await repo.connect();
+	await repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' });
+	const pushes = calls.filter((args) => args.includes('push'));
+	assert.equal(pushes.length, 1);
+	const [push] = pushes;
+	assert.ok(!push.some((arg) => arg === '--force' || arg === '-f' || arg.startsWith('--force') || arg === '--mirror' || arg === '--all'), push.join(' '));
+	const refspec = push.at(-1);
+	assert.match(refspec, new RegExp(`^[a-f0-9]{40}:refs/heads/${BRANCH}$`));
+	assert.ok(!refspec.startsWith('+'));
+	// Nothing was checked out, and no branch was made in the app's copy.
+	assert.ok(!calls.some((args) => args.includes('worktree') || args.includes('checkout') || args.includes('add')), 'a proposal must not check files out');
+	assert.equal(remote.head(), remote.head(`${BRANCH}~1`));
+});
+
+test('when the team renames its main branch, the app follows it', async () => {
+	const { repo, remote } = setup({ now: AT });
+	await repo.connect();
+	const moved = remote.renameDefault('trunk');
+	await repo.fetch();
+	assert.deepEqual([(await repo.status()).branch, (await repo.status()).commit], ['trunk', moved]);
+	assert.equal((await repo.packages()).packages.length, 2);
+	const proposed = await repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' });
+	assert.equal(remote.head(`${proposed.branch}~1`), moved);
+
+	// An empty repository whose first commit lands on a branch of another name.
+	const late = createRemote();
+	const context = setup({ remote: late });
+	await context.repo.connect();
+	assert.equal((await context.repo.status()).commit, null);
+	late.commit({ 'packages/first/_manifest.yml': MANIFEST('first'), 'packages/first/package.yml': MATCHES([':f', 'First']) });
+	const first = late.renameDefault('trunk');
+	await context.repo.fetch();
+	assert.deepEqual([(await context.repo.status()).branch, (await context.repo.status()).commit], ['trunk', first]);
+});
+
+test('when the team rewrites history, the next fetch takes the new history', async () => {
+	const { repo, remote } = setup();
+	await repo.connect();
+	const rewritten = remote.rewrite();
+	await repo.fetch();
+	assert.equal((await repo.status()).commit, rewritten);
+});
+
+test('the copy works whatever name the person\'s git gives a remote by default', async () => {
+	const remote = seeded();
+	writeFileSync(join(remote.root, 'gitconfig'), '[user]\n\tname = Test Person\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[clone]\n\tdefaultRemoteName = upstream\n');
+	const { repo } = setup({ remote, now: AT });
+	await repo.connect();
+	const commit = remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Later']) });
+	await repo.fetch();
+	assert.equal((await repo.status()).commit, commit);
+	assert.equal((await repo.propose({ package: 'goodbyes', fileName: 'farewells.yml', text: FAREWELLS, summary: 'Add farewells' })).branch, BRANCH);
+});
+
+test('a very large manifest is not read, and counts against what one listing may read', async () => {
+	const remote = createRemote();
+	remote.commit({
+		'packages/heavy/_manifest.yml': `${MANIFEST('heavy')}notes: "${'x'.repeat(80 * 1024)}"\n`,
+		'packages/heavy/package.yml': MATCHES([':h', 'Heavy']),
+		'packages/light/_manifest.yml': MANIFEST('light'),
+		'packages/light/package.yml': MATCHES([':l', 'Light']),
+	});
+	const { repo } = setup({ remote });
+	await repo.connect();
+	const byName = Object.fromEntries((await repo.packages()).packages.map((pkg) => [pkg.name, pkg]));
+	assert.deepEqual([byName.heavy.title, byName.heavy.manifestError, byName.heavy.matchCount], ['heavy', 'Its manifest is too large to read.', 1]);
+	assert.equal(byName.light.title, 'Light');
+	// Nothing over the limit is handed over for install either.
+	assert.deepEqual((await repo.packageFiles('heavy')).files.map((file) => file.name), ['package.yml']);
+
+	// Room for both packages' match files, but not for the second one's manifest as well.
+	const tight = setup({ remote, limits: { totalBytes: 110 } });
+	await tight.repo.connect();
+	const listed = (await tight.repo.packages()).packages;
+	assert.deepEqual(listed.map((pkg) => [pkg.name, pkg.matchCount]), [['heavy', 1], ['light', null]]);
+});
+
+test('two files whose names differ only in capitals: the first is offered, the other is left out and reported', async () => {
+	const remote = seeded();
+	remote.addEntry('packages/goodbyes/Package.yml', MATCHES([':other', 'Other']));
+	remote.addEntry('packages/GoodByes/package.yml', MATCHES([':x', 'x']));
+	const { repo } = setup({ remote });
+	await repo.connect();
+	const { packages } = await repo.packages();
+	const goodbyes = packages.find((pkg) => pkg.name === 'goodbyes');
+	assert.deepEqual(goodbyes.files.map((file) => file.name), ['Package.yml']);
+	assert.deepEqual(goodbyes.problems, ['package.yml was left out: Package.yml has the same name in other capitals.']);
+	assert.deepEqual((await repo.packageFiles('goodbyes')).files.map((file) => file.name), ['_manifest.yml', 'Package.yml']);
+});
+
+test('reading the status and the packages does not wait for a fetch that is under way', async () => {
+	const { remote, dataDir, git, address } = setup();
+	let release;
+	const held = new Promise((resolve) => (release = resolve));
+	const slow = async (args, options) => (args.includes('fetch') || args.includes('ls-remote') ? (await held, git(args, options)) : git(args, options));
+	const repo = createTeamRepo({ dataDir, address, git: slow });
+	// The first connection clones, which this stand-in does not hold up.
+	await repo.connect();
+	const fetching = repo.fetch();
+	const started = Date.now();
+	assert.equal((await repo.status()).commit, remote.head());
+	assert.equal((await repo.packages()).packages.length, 2);
+	assert.equal((await repo.packageFiles('goodbyes')).files.length, 2);
+	assert.ok(Date.now() - started < 2000, `reads took ${Date.now() - started} ms behind a fetch`);
+	release();
+	await fetching;
 });

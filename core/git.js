@@ -49,28 +49,34 @@ function explain(stderr) {
 }
 
 export function createGit({ program = 'git', allowLocal = false, env = process.env, maxBuffer = 16 * 1024 * 1024 } = {}) {
-	const childEnv = {
-		...env,
-		GIT_TERMINAL_PROMPT: '0',
-		// ext:: runs a command and file: reads any folder; neither is offered.
-		GIT_ALLOW_PROTOCOL: allowLocal ? 'https:ssh:file' : 'https:ssh',
-		GCM_INTERACTIVE: 'never',
-		// Git's own wording, in one language, so its failures can be told apart.
-		LC_ALL: 'C',
+	// `extra` is what one call adds, such as its own index file. The settings
+	// that keep git from asking questions always win over it.
+	const environment = (extra = {}) => {
+		const childEnv = {
+			...env,
+			...extra,
+			GIT_TERMINAL_PROMPT: '0',
+			// ext:: runs a command and file: reads any folder; neither is offered.
+			GIT_ALLOW_PROTOCOL: allowLocal ? 'https:ssh:file' : 'https:ssh',
+			GCM_INTERACTIVE: 'never',
+			// Git's own wording, in one language, so its failures can be told apart.
+			LC_ALL: 'C',
+		};
+		delete childEnv.GIT_ASKPASS;
+		delete childEnv.SSH_ASKPASS;
+		return childEnv;
 	};
-	delete childEnv.GIT_ASKPASS;
-	delete childEnv.SSH_ASKPASS;
 
 	// A hook set up on this computer has no business running inside the app.
 	const fixed = ['-c', `core.hooksPath=${os.devNull}`, '-c', 'protocol.ext.allow=never'];
 	// Its own process group, so git's helpers can be stopped along with it.
 	const grouped = process.platform !== 'win32';
 
-	return function git(args, { cwd, timeout = 15_000, input, binary = false } = {}) {
+	return function git(args, { cwd, timeout = 15_000, input, binary = false, env: extra } = {}) {
 		return new Promise((resolve, reject) => {
 			let child;
 			try {
-				child = spawn(program, [...fixed, ...args], { cwd, env: childEnv, windowsHide: true, detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
+				child = spawn(program, [...fixed, ...args], { cwd, env: environment(extra), windowsHide: true, detached: grouped, stdio: ['pipe', 'pipe', 'pipe'] });
 			} catch (error) {
 				return reject(new GitError('failed', `Git failed: ${error.message}`));
 			}

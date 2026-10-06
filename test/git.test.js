@@ -54,6 +54,12 @@ test('git can never stop to ask: prompts are off, askpass helpers are gone, inpu
 	assert.equal(await createGit({ program: standIn('cat') })([], { input: 'given\n' }), 'given\n');
 });
 
+test('one call can add to the environment, but cannot switch the questions back on', posix, async () => {
+	const git = createGit({ program: standIn('printf "%s|%s|%s" "$GIT_INDEX_FILE" "$GIT_TERMINAL_PROMPT" "${GIT_ASKPASS:-none}"'), env: { PATH: process.env.PATH } });
+	assert.equal(await git([], { env: { GIT_INDEX_FILE: '/tmp/index-1', GIT_TERMINAL_PROMPT: '1', GIT_ASKPASS: '/usr/bin/ask' } }), '/tmp/index-1|0|none');
+	assert.equal(await git([]), '|0|none');
+});
+
 test('local folders are allowed as a transport only when the caller says so', posix, async () => {
 	const allowed = await createGit({ program: standIn('printf "%s" "$GIT_ALLOW_PROTOCOL"'), allowLocal: true })([]);
 	assert.equal(allowed, 'https:ssh:file');
