@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const DEFAULTS = { matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187, teamRepository: null };
+const DEFAULTS = { matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187, teamRepository: null, aiWrite: false };
 
 function clean(raw) {
 	const settings = { ...DEFAULTS };
@@ -16,6 +16,8 @@ function clean(raw) {
 	if (Number.isInteger(raw?.apiPort) && raw.apiPort >= 1024 && raw.apiPort <= 65535) {
 		settings.apiPort = raw.apiPort;
 	}
+	// AI tools may change snippets only when this was switched on.
+	if (raw?.aiWrite === true) settings.aiWrite = true;
 	// Kept as text only. Whether it is an address the app accepts is decided
 	// where it is used, each time, not here.
 	if (typeof raw?.teamRepository === 'string' && raw.teamRepository && raw.teamRepository.length <= 300) {
