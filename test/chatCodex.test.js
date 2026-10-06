@@ -85,6 +85,12 @@ test('a tool that failed is marked so: by its status, by its error, or by a repl
 	assert.deepEqual(events.map((event) => [event.id, event.status]), [['a', 'failed'], ['b', 'failed'], ['c', 'failed'], ['d', 'done']]);
 });
 
+test('a tool is announced once, however many times Codex mentions it before it ends', () => {
+	const call = { server: 'snippets', tool: 'snippets_get_file', arguments: {}, result: null, error: null, status: 'in_progress' };
+	const events = run([item('started', 't', 'mcp_tool_call', call), item('updated', 't', 'mcp_tool_call', call), item('completed', 't', 'mcp_tool_call', { ...call, status: 'completed', result: { content: [], structured_content: {} } })]);
+	assert.deepEqual(events.map((event) => event.status), ['started', 'done']);
+});
+
 test('Codex\'s own helper tools and its notes to itself are not shown', () => {
 	const events = run([
 		item('started', 'i1', 'mcp_tool_call', { server: 'codex', tool: 'list_mcp_resources', arguments: {}, status: 'in_progress' }),
