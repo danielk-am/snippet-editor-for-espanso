@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApiClient, dataDirFor } from '../mcp/client.mjs';
 import { sparePort, startApi } from './helpers/apiFixture.js';
 
@@ -84,9 +87,10 @@ test('a token replaced while the client runs is picked up, and one the app refus
 	assert.notEqual(readFileSync(join(dataDir, 'api-token'), 'utf8').trim(), before);
 	assert.equal((await client.request('GET', '/state')).status, 200);
 
-	// A token file the app no longer honours.
+	// A token file that is not the app's token: the listener cannot prove it
+	// holds it, so nothing is sent.
 	writeFileSync(join(dataDir, 'api-token'), 'b'.repeat(64) + '\n');
-	const error = await unreachable(client.request('GET', '/state'), /refused/);
+	const error = await unreachable(client.request('GET', '/state'), /not reachable/);
 	assert.ok(!error.message.includes('b'.repeat(64)) && !JSON.stringify(error).includes('b'.repeat(64)));
 });
 
@@ -114,4 +118,61 @@ test('with the API switched off, the token is not sent to whatever else holds th
 	writeFileSync(join(dataDir, 'api-token'), 'a'.repeat(64) + '\n');
 	await unreachable(createApiClient({ dataDir }).request('GET', '/state'), /not reachable/);
 	assert.equal(arrived, 0);
+});
+
+// --- added after review -----------------------------------------------------------
+
+test('another program on the app\'s port is never sent the token, whatever it answers', async (t) => {
+	// The app is closed, or could not open its port, and something else has it.
+	for (const answer of [
+		(response) => response.end('{"files":[]}'),
+		(response) => response.end('{"proof":"' + 'a'.repeat(64) + '"}'),
+		(response) => response.writeHead(401).end('{"error":{"code":"UNAUTHORIZED","message":"Send the API token"}}'),
+		(response) => response.writeHead(404).end('{}'),
+	]) {
+		const received = [];
+		const impostor = http.createServer((request, response) => {
+			received.push({ url: request.url, authorization: request.headers.authorization });
+			response.setHeader('Content-Type', 'application/json');
+			answer(response);
+		});
+		await new Promise((resolve) => impostor.listen(0, '127.0.0.1', resolve));
+		t.after(() => impostor.close());
+		const dataDir = mkdtempSync(join(tmpdir(), 'snippet-editor-mcpclient-'));
+		writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: true, apiPort: impostor.address().port }));
+		writeFileSync(join(dataDir, 'api-token'), 'a'.repeat(64) + '\n');
+
+		await unreachable(createApiClient({ dataDir }).request('GET', '/state'), /not reachable/);
+		await unreachable(createApiClient({ dataDir }).request('POST', '/files', { body: { name: 'x.yml' } }), /not reachable/);
+		assert.ok(received.length >= 2, 'the client should have asked for proof');
+		assert.ok(received.every((request) => request.authorization === undefined && request.url.startsWith('/api/v1/proof?nonce=')), JSON.stringify(received));
+		assert.ok(!JSON.stringify(received).includes('a'.repeat(64)));
+	}
+});
+
+test('a proxy set in the environment is not used: the token and the snippets stay on this computer', async (t) => {
+	const { dataDir } = await startApi(t);
+	let viaProxy = 0;
+	const proxy = net.createServer((socket) => {
+		viaProxy += 1;
+		socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
+	});
+	await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+	t.after(() => proxy.close());
+	const address = `http://127.0.0.1:${proxy.address().port}`;
+	const script = join(mkdtempSync(join(tmpdir(), 'snippet-editor-mcpclient-')), 'call.mjs');
+	writeFileSync(
+		script,
+		`import { createApiClient } from ${JSON.stringify(fileURLToPath(new URL('../mcp/client.mjs', import.meta.url)))};
+const reply = await createApiClient({ dataDir: process.env.DATA }).request('GET', '/state');
+console.log(reply.status, reply.body.files.length);
+`
+	);
+	const output = await new Promise((resolve) =>
+		execFile(process.execPath, [script], { env: { PATH: process.env.PATH, DATA: dataDir, NODE_USE_ENV_PROXY: '1', HTTP_PROXY: address, http_proxy: address, HTTPS_PROXY: address, ALL_PROXY: address }, timeout: 20_000 }, (error, stdout, stderr) =>
+			resolve(`${stdout.trim()}${error ? ` | ${stderr.trim().split('\n').at(-1)}` : ''}`)
+		)
+	);
+	assert.equal(output, '200 4');
+	assert.equal(viaProxy, 0);
 });
