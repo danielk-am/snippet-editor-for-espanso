@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { loadToken, replaceToken, tokensMatch } from '../core/apiToken.js';
 
 const file = () => join(mkdtempSync(join(tmpdir(), 'snippet-editor-token-')), 'data', 'api-token');
@@ -45,4 +45,16 @@ test('tokens match only when they are the same text', () => {
 	assert.equal(tokensMatch('a'.repeat(63), token), false);
 	assert.equal(tokensMatch('', token), false);
 	for (const given of [undefined, null, 123, {}]) assert.equal(tokensMatch(given, token), false);
+});
+
+test('a token file that others could read is closed to them when the token is written', { skip: process.platform === 'win32' }, async () => {
+	const path = file();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, 'not a token\n');
+	chmodSync(path, 0o644);
+	await loadToken(path);
+	assert.equal(statSync(path).mode & 0o777, 0o600);
+	chmodSync(path, 0o644);
+	await replaceToken(path);
+	assert.equal(statSync(path).mode & 0o777, 0o600);
 });

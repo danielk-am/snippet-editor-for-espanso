@@ -22,7 +22,11 @@ export function createListenerControl({ service, router }) {
 		return run;
 	};
 
-	const currentToken = async () => (token ??= await loadToken(service.tokenFile));
+	// The file is the record: it is read at every start, so a token deleted or
+	// replaced by hand takes effect then. While the listener runs, the token
+	// in use is the one it started with.
+	const readToken = async () => (token = await loadToken(service.tokenFile));
+	const currentToken = async () => (server.running && token ? token : readToken());
 
 	async function restart() {
 		const { apiEnabled, apiPort } = service.settings();
@@ -30,7 +34,7 @@ export function createListenerControl({ service, router }) {
 		problem = '';
 		if (!apiEnabled) return;
 		try {
-			await currentToken();
+			await readToken();
 		} catch {
 			problem = 'The API token could not be saved, so the API is not running.';
 			return;

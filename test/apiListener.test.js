@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -146,4 +146,52 @@ test('a port that is not a whole number from 1024 to 65535 is refused', async (t
 	}
 	await assert.rejects(listener.set({ enabled: 'yes', port: 30000 }), (error) => error.code === 'INVALID');
 	assert.equal(service.settings().apiEnabled, false);
+});
+
+// --- added after review ---------------------------------------------------------
+
+test('the token file is read again at every start', async (t) => {
+	const { listener, service, token, get, port } = await setup(t);
+	await listener.set({ enabled: true, port });
+	const first = token();
+
+	// Deleted while the listener was off: a new one is made, and the old one is dead.
+	await listener.set({ enabled: false, port });
+	rmSync(service.tokenFile);
+	await listener.set({ enabled: true, port });
+	const second = token();
+	assert.notEqual(second, first);
+	assert.equal((await get(port, first)).status, 401);
+	assert.equal((await get(port, second)).status, 200);
+
+	// Put there by hand: that is the token from the next start on.
+	await listener.set({ enabled: false, port });
+	const mine = 'd'.repeat(64);
+	writeFileSync(service.tokenFile, mine + '\n');
+	await listener.set({ enabled: true, port });
+	assert.equal((await get(port, second)).status, 401);
+	assert.equal((await get(port, mine)).status, 200);
+	assert.equal(await listener.textToCopy('token'), mine);
+});
+
+test('nothing the control hands back carries the token', async (t) => {
+	const { listener, token, port } = await setup(t);
+	const results = [await listener.set({ enabled: true, port }), await listener.status(), await listener.apply()];
+	const before = token();
+	results.push(await listener.replaceToken());
+	const after = token();
+	results.push(await listener.status(), await listener.set({ enabled: false, port }));
+	const text = JSON.stringify(results);
+	assert.ok(!text.includes(before) && !text.includes(after));
+	assert.deepEqual(Object.keys(results[3]).sort(), ['address', 'enabled', 'port', 'problem', 'running']);
+});
+
+test('changing the port closes the old one', async (t) => {
+	const { listener, token, get, port } = await setup(t);
+	const other = await sparePort();
+	await listener.set({ enabled: true, port });
+	const status = await listener.set({ enabled: true, port: other });
+	assert.deepEqual([status.running, status.port, status.address], [true, other, `http://127.0.0.1:${other}/api/v1`]);
+	await assert.rejects(get(port, token()));
+	assert.equal((await get(other, token())).status, 200);
 });
