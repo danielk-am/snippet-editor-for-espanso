@@ -1338,7 +1338,9 @@ pre,
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  /* Above the notices (60): a dialog asks a question, and a passing notice
+     must not cover it. */
+  z-index: 70;
   display: grid;
   place-items: start center;
   padding: 14vh 16px 16px;

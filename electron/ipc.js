@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
-import { clipboard, dialog, shell } from 'electron';
+import { clipboard as systemClipboard, dialog, shell } from 'electron';
 
 // One handler per channel in shared/channels.js. Failures travel back as
 // data, because Electron strips custom fields (the error code) from a thrown
 // error on its way to the renderer.
-export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender }) {
+// `clipboard` can be swapped for a stand-in, so a test can see what was
+// copied without touching the real clipboard.
+export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, clipboard = systemClipboard }) {
 	const handle = (channel, fn) =>
 		ipcMain.handle(channel, async (event, ...args) => {
 			try {

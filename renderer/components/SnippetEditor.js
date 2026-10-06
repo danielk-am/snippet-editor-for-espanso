@@ -47,6 +47,9 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 	const [rawInvalid, setRawInvalidState] = useState({});
 	const [preview, setPreview] = useState('');
 	const [saving, setSaving] = useState(false);
+	// `saving` only changes on the next draw, so a second click in the same
+	// instant would still see it as false. This is checked at once.
+	const busy = useRef(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [copyTarget, setCopyTarget] = useState(localFiles.find((candidate) => !candidate.importOnly)?.id ?? localFiles[0]?.id ?? '');
 
@@ -100,12 +103,13 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 	};
 
 	const save = async () => {
-		if (saving || readOnly || stale) return;
+		if (busy.current || saving || readOnly || stale) return;
 		setAttempted(true);
 		if (problems.length || hasRawErrors) {
 			toast({ tone: 'error', title: 'Not saved yet', description: problems[0]?.message ?? 'Fix the YAML errors first.' });
 			return;
 		}
+		busy.current = true;
 		setSaving(true);
 		try {
 			if (isNew) {
@@ -117,15 +121,19 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 				navigate({ view: 'snippet', fileId: file.id, index: at }, { force: true });
 			} else {
 				const saved = await api.updateMatch(refOf(file), { index, match: toSave, version: file.version });
+				// The window's picture of the file is brought up to date before
+				// the editor says "Saved". Whatever is done next, such as adding
+				// another snippet to this file, then starts from the new version.
+				await refresh();
 				setBase(saved.matches[index]);
 				setDraft(matchToDraft(saved.matches[index]));
 				setAttempted(false);
 				toast({ title: 'Saved', description: `${file.name} is updated.` });
-				await refresh();
 			}
 		} catch (failure) {
 			fail(failure);
 		} finally {
+			busy.current = false;
 			setSaving(false);
 		}
 	};

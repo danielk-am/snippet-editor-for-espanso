@@ -67,7 +67,13 @@ window.__ui = {
 		const named = (el) =>
 			el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || (el.labels && el.labels.length) || (el.tagName === 'BUTTON' && el.textContent.trim());
 		const describe = (el) => el.tagName.toLowerCase() + '.' + el.className + ' "' + el.textContent.trim().slice(0, 30) + '"';
+		const layer = (selector) => {
+			const el = document.querySelector(selector);
+			return el ? Number(getComputedStyle(el).zIndex) : null;
+		};
 		return {
+			// A dialog asks a question; a passing notice must not sit on top of it.
+			buried: layer('.overlay') !== null && layer('.toasts') !== null && layer('.overlay') <= layer('.toasts'),
 			unnamed: controls.filter((el) => !named(el)).map(describe),
 			small: controls
 				.filter((el) => !el.matches('.sidebar__resize'))
@@ -89,6 +95,8 @@ const watchdog = setTimeout(() => {
 
 async function run() {
 	let win = null;
+	// What the app copies lands here, not on the real clipboard.
+	const copied = [];
 	const backend = await startBackend({
 		ipcMain,
 		userDataDir: app.getPath('userData'),
@@ -96,8 +104,19 @@ async function run() {
 		onChange: () => win?.webContents.send('data:changed'),
 		getWindow: () => win,
 		isTrustedSender,
+		clipboard: { writeText: (text) => copied.push(text) },
 	});
 	const services = backend.service;
+
+	// The window refreshes its picture of the folder after each save. That
+	// can be slowed here, so a step that acts on a stale picture fails every
+	// time instead of now and then.
+	const loadState = services.state.bind(services);
+	let stateDelay = 0;
+	services.state = async () => {
+		await sleep(stateDelay);
+		return loadState();
+	};
 
 	win = createMainWindow({ show: false, width: 1440, height: 900, webPreferences: { offscreen: true } });
 	win.webContents.on('console-message', (event) => {
@@ -125,6 +144,7 @@ async function run() {
 		check(audit.unnamed.length === 0, `${name}: controls without an accessible name: ${audit.unnamed.join(', ')}`);
 		check(audit.small.length === 0, `${name}: controls under 24px: ${audit.small.join(', ')}`);
 		check(!audit.overflow, `${name}: the page scrolls sideways`);
+		check(!audit.buried, `${name}: notices are drawn over the open dialog`);
 	};
 	const step = async (name, run) => {
 		try {
@@ -153,6 +173,7 @@ async function run() {
 	});
 
 	await step('edit and save a snippet', async () => {
+		stateDelay = 150;
 		await js(`document.querySelector('.snippet-row__open').click()`);
 		await waitFor(`document.querySelector('.editor textarea')?.value === 'Hello there'`, 'the editor to open on ;hello');
 		await shot('03-editor');
@@ -174,6 +195,7 @@ async function run() {
 		await js(`window.__ui.click('Add snippet')`);
 		await waitFor(`window.__ui.byText('Duplicate')`, 'the new snippet to open for editing');
 		check(onDisk('base.yml').includes('  - trigger: ";smoke"\n    replace: |-\n      Line one\n      Line two\n'), 'the new snippet was not written as expected');
+		stateDelay = 0;
 	});
 
 	await step('validation', async () => {
@@ -183,6 +205,19 @@ async function run() {
 		check(onDisk('base.yml').includes('";smoke"'), 'an invalid snippet was saved');
 		await js(`window.__ui.type('.editor input', ';smoke')`);
 		await waitFor(`!document.querySelector('.field__error')`, 'the message to clear once the trigger is back');
+	});
+
+	await step('a double click on Save saves once', async () => {
+		const backupsOf = () => fs.readdirSync(path.join(services.backupDir, 'local', 'base.yml')).length;
+		const before = backupsOf();
+		await js(`window.__ui.type('.editor textarea', 'Saved once')`);
+		await waitFor(`window.__ui.byText('Unsaved changes', '.badge')`, 'the edit to register');
+		await js(`{ const save = window.__ui.byText('Save'); save.click(); save.click(); } true;`);
+		await waitFor(`window.__ui.byText('Saved', '.action-bar__status')`, 'the save to finish');
+		await sleep(400);
+		check(onDisk('base.yml').includes('Saved once'), 'the edit did not reach base.yml');
+		check(backupsOf() === before + 1, `a double click on Save made ${backupsOf() - before} backups`);
+		check(!(await js(`Boolean(window.__ui.byText('The file changed on disk', '.toast__title'))`)), 'a double click on Save raised a conflict');
 	});
 
 	await step('form snippet with variables', async () => {
@@ -233,13 +268,44 @@ async function run() {
 		await waitFor(shown, 'Settings to show the API address');
 		await shot('09b-settings-api');
 
-		const token = fs.readFileSync(path.join(app.getPath('userData'), 'api-token'), 'utf8').trim();
-		check(!(await js(`document.body.innerHTML.includes(${JSON.stringify(token)})`)), 'the token is present in the page');
+		const readToken = () => fs.readFileSync(path.join(app.getPath('userData'), 'api-token'), 'utf8').trim();
+		let token = readToken();
+		const seen = [token];
 		check((await reach()) === 401, 'the API answered without a token');
 		check((await reach({ Authorization: `Bearer ${token}`, Origin: 'https://example.com' })) === 403, 'the API answered a web page');
 		const reply = await fetch(`${address}/state`, { headers: { Authorization: `Bearer ${token}` } });
 		const state = await reply.json();
 		check(reply.status === 200 && state.files.length === 4, `the API returned ${reply.status} with ${state.files?.length} files`);
+
+		// Copying is done by the main process. The page asks, and hears back
+		// only that it was done.
+		await js(`window.__ui.click('Copy token')`);
+		await waitFor(`window.__ui.byText('Token copied', '.toast__title')`, 'the token to be copied');
+		check(copied.at(-1) === token, 'Copy token did not copy the token');
+		await js(`window.__ui.click('Copy a curl example')`);
+		await waitFor(`window.__ui.byText('Example copied', '.toast__title')`, 'the example to be copied');
+		check(copied.at(-1) === `curl -H "Authorization: Bearer ${token}" ${address}/state`, `the example copied was ${copied.at(-1)}`);
+		const told = [await js(`Promise.all(['token', 'curl'].map((what) => window.snippetEditor.invoke('listener:copy', what))).then(JSON.stringify)`)];
+		check(told[0] === JSON.stringify([{ ok: true, data: true }, { ok: true, data: true }]), `asking for a copy answered ${told[0]}`);
+
+		await js(`window.__ui.click('Replace token')`);
+		await waitFor(`document.querySelector('.dialog')`, 'the question before replacing the token');
+		await shot('09d-settings-api-replace');
+		await js(`[...document.querySelectorAll('.dialog__foot button')].at(-1).click()`);
+		await waitFor(`window.__ui.byText('Token replaced', '.toast__title')`, 'the token to be replaced');
+		check(readToken() !== token, 'Replace token left the token as it was');
+		check((await reach({ Authorization: `Bearer ${token}` })) === 401, 'the replaced token still worked');
+		token = readToken();
+		seen.push(token);
+		told.push(await js(`Promise.all(['listener:get', 'listener:replaceToken'].map((channel) => window.snippetEditor.invoke(channel))).then(JSON.stringify)`));
+		token = readToken();
+		seen.push(token);
+		told.push(await js(`window.snippetEditor.invoke('listener:set', { enabled: true, port: ${apiPort} }).then(JSON.stringify)`));
+		check(new Set(seen).size === 3, 'replacing the token did not change it each time');
+		check((await reach({ Authorization: `Bearer ${token}` })) === 200, 'the newest token did not work');
+		const page = await js(`document.documentElement.outerHTML`);
+		check(!seen.some((secret) => page.includes(secret)), 'a token is present in the page');
+		check(!seen.some((secret) => told.join().includes(secret)), 'the main process told the page a token');
 
 		// A port another program holds: Settings says so and the window carries on.
 		const blocker = net.createServer();
