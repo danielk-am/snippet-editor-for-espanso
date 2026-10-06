@@ -7,7 +7,9 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createApiClient, dataDirFor } from '../mcp/client.mjs';
+import { createRouter } from '../core/apiRouter.js';
+import { openChannel } from '../core/chat/channel.js';
+import { createApiClient, createChatClient, dataDirFor } from '../mcp/client.mjs';
 import { sparePort, startApi } from './helpers/apiFixture.js';
 
 const unreachable = async (promise, pattern) => {
@@ -194,4 +196,93 @@ test('if the app goes away in the middle of a call, the call fails plainly', asy
 	writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: true, apiPort: quitting.address().port }));
 	writeFileSync(join(dataDir, 'api-token'), token + '\n');
 	await unreachable(createApiClient({ dataDir }).request('PUT', '/files/x/raw', { body: { text: 'matches: []\n', version: 'v' } }), /^Snippet Editor is not reachable\./);
+});
+
+// --- in chat: the listener a message is given --------------------------------------------
+
+const ENDED = /^This chat has ended\. The person can send their message again\.$/;
+
+async function chat(t, onProposal = async () => ({ id: 'p1' })) {
+	const api = await startApi(t, { enabled: false });
+	const channel = await openChannel({ dir: join(api.root, 'chat'), router: createRouter({ service: api.service, log: () => {} }), onProposal, log: () => {} });
+	t.after(() => channel.close());
+	return { ...api, channel, client: createChatClient({ sessionFile: channel.file }) };
+}
+
+test('in chat, the client finds the app through the file it is given, with the app\'s own API off', async (t) => {
+	const { client } = await chat(t);
+	const state = await client.request('GET', '/state');
+	assert.equal(state.status, 200);
+	assert.ok(state.body.files.some((file) => file.id === 'local:base.yml'));
+	assert.equal((await client.request('GET', '/search', { query: { q: 'hello', limit: 5, unused: undefined } })).body[0].fileId, 'local:base.yml');
+	assert.equal((await client.request('GET', '/files/local%3Anone.yml')).status, 404);
+});
+
+test('in chat, the file is read for every call, so the client follows the listener it names', async (t) => {
+	const first = await chat(t);
+	const second = await chat(t);
+	const sessionFile = join(first.root, 'session.json');
+	writeFileSync(sessionFile, readFileSync(first.channel.file));
+	const client = createChatClient({ sessionFile });
+	assert.equal((await client.request('GET', '/state')).body.matchDir, first.matchDir);
+	writeFileSync(sessionFile, readFileSync(second.channel.file));
+	assert.equal((await client.request('GET', '/state')).body.matchDir, second.matchDir);
+});
+
+test('in chat, a proposal is handed to the app, and its id or the app\'s objection comes back', async (t) => {
+	const seen = [];
+	const { client } = await chat(t, async (proposal) => {
+		seen.push(proposal);
+		if (proposal.args.name === 'taken.yml') throw Object.assign(new Error('A file named taken.yml exists. Choose another name, or change the existing file.'), { code: 'REFUSED' });
+		if (proposal.args.name === 'fault.yml') throw new Error('disk on fire');
+		return { id: 'p7' };
+	});
+	assert.deepEqual(await client.propose({ tool: 'snippets_create_file', args: { name: 'new.yml' } }), { id: 'p7' });
+	assert.deepEqual(seen, [{ tool: 'snippets_create_file', args: { name: 'new.yml' } }]);
+	assert.deepEqual(await client.propose({ tool: 'snippets_create_file', args: { name: 'taken.yml' } }), { error: 'A file named taken.yml exists. Choose another name, or change the existing file.' });
+	assert.deepEqual(await client.propose({ tool: 'snippets_create_file', args: { name: 'fault.yml' } }), { error: 'Something went wrong inside the app.' });
+});
+
+test('in chat, a file that is gone, damaged or not a session means the chat has ended', async (t) => {
+	const { channel, root } = await chat(t);
+	const sessionFile = join(root, 'session.json');
+	const client = createChatClient({ sessionFile });
+	await unreachable(client.request('GET', '/state'), ENDED);
+	// Some of these name the live listener, so only the check on the file stands between them and a call.
+	const live = (rest) => JSON.stringify({ port: channel.port, ...rest });
+	for (const content of ['', 'not json', '[]', '{"port":"80","token":"x"}', '{"port":80}', '{"port":70000,"token":"x"}', live({}), live({ token: '' }), live({ token: 5 })]) {
+		writeFileSync(sessionFile, content);
+		await unreachable(client.request('GET', '/state'), ENDED);
+		await unreachable(client.propose({ tool: 'snippets_create_file', args: { name: 'x.yml' } }), ENDED);
+	}
+	// The answer is over: the listener has closed, and its file with it.
+	const direct = createChatClient({ sessionFile: channel.file });
+	writeFileSync(sessionFile, readFileSync(channel.file));
+	await channel.close();
+	await unreachable(direct.request('GET', '/state'), ENDED);
+	await unreachable(client.request('GET', '/state'), ENDED);
+});
+
+test('in chat, the token is not sent to a listener that cannot prove it holds it', async (t) => {
+	const received = [];
+	const impostor = http.createServer((request, response) => {
+		received.push({ url: request.url, authorization: request.headers.authorization });
+		response.setHeader('Content-Type', 'application/json');
+		response.end('{"proof":"' + 'b'.repeat(64) + '"}');
+	});
+	await new Promise((resolve) => impostor.listen(0, '127.0.0.1', resolve));
+	t.after(() => impostor.close());
+	const dir = mkdtempSync(join(tmpdir(), 'snippet-editor-chatclient-'));
+	const sessionFile = join(dir, 'session.json');
+	writeFileSync(sessionFile, JSON.stringify({ port: impostor.address().port, token: 'c'.repeat(64) }));
+	const client = createChatClient({ sessionFile });
+	await unreachable(client.request('GET', '/state'), ENDED);
+	await unreachable(client.propose({ tool: 'snippets_create_file', args: { name: 'x.yml' } }), ENDED);
+	assert.equal(received.length, 2);
+	assert.ok(received.every((request) => request.authorization === undefined && request.url.startsWith('/api/v1/proof?nonce=')), JSON.stringify(received));
+});
+
+test('in chat, the switch is not the client\'s to answer for: it reports nothing it cannot know', async (t) => {
+	const { client } = await chat(t);
+	assert.deepEqual(await client.settings(), { apiEnabled: true, apiPort: null, aiWrite: false });
 });

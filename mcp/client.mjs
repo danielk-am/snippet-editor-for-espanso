@@ -30,8 +30,57 @@ export function dataDirFor({ env = process.env, platform = process.platform, hom
 const unreachable = (message) => Object.assign(new Error(message), { code: 'UNREACHABLE' });
 const NOT_REACHABLE = 'Snippet Editor is not reachable. Open the app and switch on "API for other tools" in its Settings.';
 
-export function createApiClient({ dataDir }) {
+// One request to 127.0.0.1, answered as a status and parsed JSON. `gone` is
+// what to say when nothing, or something else, is listening there.
+function createSender(gone) {
 	const direct = new http.Agent();
+	return function send({ port, method, target, headers = {}, body, timeout }) {
+		return new Promise((resolve, reject) => {
+			const request = http.request({ host: '127.0.0.1', port, method, path: target, headers, agent: direct, signal: AbortSignal.timeout(timeout) }, (response) => {
+				const chunks = [];
+				response.on('data', (chunk) => chunks.push(chunk));
+				response.on('error', reject);
+				response.on('end', () => {
+					try {
+						resolve({ status: response.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+					} catch {
+						// Something else is listening on that port.
+						reject(unreachable(gone));
+					}
+				});
+			});
+			request.on('error', (error) => reject(error.code === 'UNREACHABLE' ? error : unreachable(error.name === 'AbortError' || error.code === 'ABORT_ERR' ? 'Snippet Editor did not answer in time.' : gone)));
+			request.end(body);
+		});
+	};
+}
+
+// A call to the app's routes on `port`, once the listener there has shown
+// that it holds `token`.
+async function call(send, { port, token, method, apiPath, query = {}, body, timeout, gone, refused }) {
+	// Proof first: only the app can answer this for a number chosen here.
+	const nonce = randomBytes(16).toString('hex');
+	const proof = await send({ port, method: 'GET', target: `/api/v1/proof?nonce=${nonce}`, timeout });
+	const expected = createHmac('sha256', token).update(nonce).digest();
+	const given = Buffer.from(typeof proof.body?.proof === 'string' ? proof.body.proof : '', 'hex');
+	if (proof.status !== 200 || given.length !== expected.length || !timingSafeEqual(given, expected)) throw unreachable(gone);
+
+	const search = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString();
+	const payload = body === undefined ? undefined : JSON.stringify(body);
+	const reply = await send({
+		port,
+		method,
+		target: `/api/v1${apiPath}${search ? `?${search}` : ''}`,
+		headers: { Authorization: `Bearer ${token}`, ...(payload === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }) },
+		body: payload,
+		timeout,
+	});
+	if (reply.status === 401) throw unreachable(refused);
+	return reply;
+}
+
+export function createApiClient({ dataDir }) {
+	const send = createSender(NOT_REACHABLE);
 
 	// Read each time: the person can change a switch while the server runs.
 	async function settings() {
@@ -48,28 +97,7 @@ export function createApiClient({ dataDir }) {
 		};
 	}
 
-	// One request to 127.0.0.1, answered as a status and parsed JSON.
-	function send({ port, method, target, headers = {}, body, timeout }) {
-		return new Promise((resolve, reject) => {
-			const request = http.request({ host: '127.0.0.1', port, method, path: target, headers, agent: direct, signal: AbortSignal.timeout(timeout) }, (response) => {
-				const chunks = [];
-				response.on('data', (chunk) => chunks.push(chunk));
-				response.on('error', reject);
-				response.on('end', () => {
-					try {
-						resolve({ status: response.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
-					} catch {
-						// Something else is listening on that port.
-						reject(unreachable(NOT_REACHABLE));
-					}
-				});
-			});
-			request.on('error', (error) => reject(error.code === 'UNREACHABLE' ? error : unreachable(error.name === 'AbortError' || error.code === 'ABORT_ERR' ? 'Snippet Editor did not answer in time.' : NOT_REACHABLE)));
-			request.end(body);
-		});
-	}
-
-	async function request(method, apiPath, { query = {}, body, timeout = 15_000 } = {}) {
+	async function request(method, apiPath, { query, body, timeout = 15_000 } = {}) {
 		const { apiEnabled, apiPort } = await settings();
 		// With its API off the app is not listening, and whatever else holds
 		// that port must not be sent the token.
@@ -79,26 +107,56 @@ export function createApiClient({ dataDir }) {
 		const token = await fs.readFile(path.join(dataDir, 'api-token'), 'utf8').then((text) => text.trim(), () => '');
 		if (!token) throw unreachable(NOT_REACHABLE);
 
-		// Proof first: only the app can answer this for a number chosen here.
-		const nonce = randomBytes(16).toString('hex');
-		const proof = await send({ port: apiPort, method: 'GET', target: `/api/v1/proof?nonce=${nonce}`, timeout });
-		const expected = createHmac('sha256', token).update(nonce).digest();
-		const given = Buffer.from(typeof proof.body?.proof === 'string' ? proof.body.proof : '', 'hex');
-		if (proof.status !== 200 || given.length !== expected.length || !timingSafeEqual(given, expected)) throw unreachable(NOT_REACHABLE);
-
-		const search = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString();
-		const payload = body === undefined ? undefined : JSON.stringify(body);
-		const reply = await send({
+		return call(send, {
 			port: apiPort,
+			token,
 			method,
-			target: `/api/v1${apiPath}${search ? `?${search}` : ''}`,
-			headers: { Authorization: `Bearer ${token}`, ...(payload === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }) },
-			body: payload,
+			apiPath,
+			query,
+			body,
 			timeout,
+			gone: NOT_REACHABLE,
+			refused: 'Snippet Editor refused the token. Open the app and check "API for other tools" in its Settings.',
 		});
-		if (reply.status === 401) throw unreachable('Snippet Editor refused the token. Open the app and check "API for other tools" in its Settings.');
-		return reply;
 	}
 
 	return { settings, request };
+}
+
+// In the app's own chat, each message has a listener of its own, and the app
+// names it in a file whose path it gives this program. The listener is gone
+// when the answer ends, so a call that finds nothing there means just that.
+const ENDED = 'This chat has ended. The person can send their message again.';
+
+export function createChatClient({ sessionFile }) {
+	const send = createSender(ENDED);
+
+	// Read for each call: the file is the one thing that says where to go.
+	async function session() {
+		try {
+			const raw = JSON.parse(await fs.readFile(sessionFile, 'utf8'));
+			if (Number.isInteger(raw?.port) && raw.port >= 1 && raw.port <= 65535 && typeof raw.token === 'string' && raw.token) return raw;
+		} catch {
+			// Gone or damaged: the same answer either way.
+		}
+		throw unreachable(ENDED);
+	}
+
+	async function request(method, apiPath, { query, body, timeout = 15_000 } = {}) {
+		const { port, token } = await session();
+		return call(send, { port, token, method, apiPath, query, body, timeout, gone: ENDED, refused: ENDED });
+	}
+
+	return {
+		// Whether changes are allowed is asked when the person presses Apply,
+		// inside the app. Nothing here writes, so nothing here needs to know.
+		settings: async () => ({ apiEnabled: true, apiPort: null, aiWrite: false }),
+		request,
+		// The change the model asked for, handed to the app to show as a card.
+		async propose({ tool, args }) {
+			const reply = await request('POST', '/chat/proposals', { body: { tool, args }, timeout: 30_000 });
+			if (reply.status === 201) return { id: reply.body.id };
+			return { error: reply.body?.error?.message ?? `The app answered ${reply.status}.` };
+		},
+	};
 }

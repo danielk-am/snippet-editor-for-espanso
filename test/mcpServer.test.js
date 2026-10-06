@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRouter } from '../core/apiRouter.js';
+import { openChannel } from '../core/chat/channel.js';
 import { startApi } from './helpers/apiFixture.js';
 
 const SERVER = fileURLToPath(new URL('../mcp/server.mjs', import.meta.url));
@@ -124,4 +127,54 @@ test('only protocol messages reach standard output, the token never does, and it
 	assert.equal(lines.length, 4);
 	for (const line of lines) assert.equal(JSON.parse(line).jsonrpc, '2.0');
 	assert.ok(!server.output().includes(token) && !server.errors().includes(token));
+});
+
+// --- started for the app's own chat ------------------------------------------------------
+
+test('started for a chat, it reads through that message\'s listener and hands every change over as a proposal', async (t) => {
+	// The app's own API is off and the switch for changes is off: chat needs neither.
+	const api = await startApi(t, { enabled: false, aiWrite: false });
+	const proposals = [];
+	const channel = await openChannel({
+		dir: join(api.root, 'chat'),
+		router: createRouter({ service: api.service, log: () => {} }),
+		onProposal: async (proposal) => {
+			proposals.push(proposal);
+			return { id: 'p1' };
+		},
+		log: () => {},
+	});
+	t.after(() => channel.close());
+	// The data folder it would otherwise use is empty, so nothing can come from there.
+	const server = start(t, mkdtempSync(join(tmpdir(), 'snippet-editor-nodata-')), { env: { SNIPPET_EDITOR_CHAT: channel.file } });
+
+	const hello = await server.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
+	assert.match(hello.result.instructions, /card/);
+	assert.doesNotMatch(hello.result.instructions, /API for other tools|Let AI tools change snippets/);
+	const call = async (id, name, args) => (await server.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })).result;
+
+	const listed = await server.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+	assert.equal(listed.result.tools.length, 12);
+	const add = listed.result.tools.find((tool) => tool.name === 'snippets_add_snippet');
+	assert.match(add.description, /In this chat the change is not made at once/);
+	assert.equal(Object.hasOwn(add.inputSchema.properties, 'accept_commands'), false);
+
+	const found = await call(3, 'snippets_search', { query: 'hello' });
+	assert.equal(found.structuredContent.items[0].file_id, 'local:base.yml');
+
+	const before = readFileSync(join(api.matchDir, 'base.yml'), 'utf8');
+	const file = (await call(4, 'snippets_get_file', { file_id: 'local:base.yml' })).structuredContent;
+	const args = { file_id: 'local:base.yml', snippet: { trigger: ';chat', replace: 'From chat' }, version: file.version };
+	const proposed = await call(5, 'snippets_add_snippet', args);
+	assert.deepEqual([proposed.isError, proposed.structuredContent.proposed, proposed.structuredContent.proposal_id], [false, true, 'p1']);
+	assert.deepEqual(proposals, [{ tool: 'snippets_add_snippet', args }]);
+	assert.equal(readFileSync(join(api.matchDir, 'base.yml'), 'utf8'), before);
+
+	await call(6, 'snippets_create_file', { name: 'chat.yml' });
+	assert.equal(existsSync(join(api.matchDir, 'chat.yml')), false);
+
+	// Once the answer is over the listener is gone, and a late call says so.
+	await channel.close();
+	const late = await call(7, 'snippets_search', { query: 'hello' });
+	assert.deepEqual([late.isError, late.content[0].text], [true, 'This chat has ended. The person can send their message again.']);
 });
