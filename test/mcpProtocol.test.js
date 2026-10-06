@@ -90,6 +90,8 @@ test('server/discover answers with the version, capabilities, instructions and t
 			supportedVersions: ['2026-07-28'],
 			capabilities: { tools: {} },
 			instructions: 'Search before you change anything.',
+			ttlMs: 3600000,
+			cacheScope: 'public',
 			_meta: SERVER_META,
 		},
 	});
@@ -97,7 +99,8 @@ test('server/discover answers with the version, capabilities, instructions and t
 
 test('a request that carries the newer version is served with no handshake', async () => {
 	const { send, calls } = setup();
-	assert.deepEqual(await send(modern(1, 'tools/list')), { jsonrpc: '2.0', id: 1, result: { resultType: 'complete', tools: TOOLS, _meta: SERVER_META } });
+	// The list of tools never changes, so a client may keep it; the newer shape must say so.
+	assert.deepEqual(await send(modern(1, 'tools/list')), { jsonrpc: '2.0', id: 1, result: { resultType: 'complete', tools: TOOLS, ttlMs: 3600000, cacheScope: 'public', _meta: SERVER_META } });
 	assert.deepEqual(await send(modern(2, 'tools/call', { name: 'snippets_search', arguments: { query: 'bye' } })), {
 		jsonrpc: '2.0',
 		id: 2,
@@ -113,7 +116,8 @@ test('a version the server does not speak is refused with the list of those it d
 	assert.deepEqual(reply, {
 		jsonrpc: '2.0',
 		id: 1,
-		error: { code: -32022, message: 'Unsupported protocol version', data: { supported: [...MODERN, ...LEGACY], requested: '1900-01-01' } },
+		// Only the versions this path serves: naming an older one here would send the client round in a circle.
+		error: { code: -32022, message: 'Unsupported protocol version', data: { supported: MODERN, requested: '1900-01-01' } },
 	});
 });
 
@@ -155,7 +159,6 @@ test('what is not a request gets the right error, and never stops the server', a
 	const { send } = setup();
 	assert.deepEqual(await send('{ not json'), { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
 	assert.deepEqual(await send('[]'), { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
-	assert.equal((await send([request(1, 'ping')])).error.code, -32600);
 	assert.equal((await send('"text"')).error.code, -32600);
 	assert.deepEqual(await send({ jsonrpc: '2.0', id: 7 }), { jsonrpc: '2.0', id: 7, error: { code: -32600, message: 'Invalid Request' } });
 	assert.equal((await send({ jsonrpc: '1.0', id: 8, method: 'ping' })).error.code, -32600);
@@ -234,4 +237,85 @@ test('served over streams: one JSON object per line, in whatever order the answe
 	assert.equal(byId['3'].result.content[0].text, 'a\nb');
 	assert.equal(byId['null'].error.code, -32700);
 	assert.equal(replies.at(-1).result.content[0].text, 'slow');
+});
+
+// --- added after review -----------------------------------------------------------
+
+const LS = String.fromCharCode(0x2028);
+const PS = String.fromCharCode(0x2029);
+
+test('a request may hold the two Unicode line separators, and no reply ever does', async () => {
+	// JSON allows both characters raw inside a string, and JavaScript's own
+	// JSON writer leaves them raw. A line reader that treats them as line
+	// ends would cut such a request in two.
+	const seen = [];
+	const { protocol } = setup({ call: async (name, args) => (seen.push(args.query), { content: [{ type: 'text', text: `found ${args.query}` }], isError: false }) });
+	const input = new PassThrough();
+	const output = new PassThrough();
+	let written = '';
+	output.on('data', (chunk) => (written += chunk));
+	const done = protocol.serve({ input, output });
+	input.write(JSON.stringify(initialize()) + '\n');
+	const query = `good${LS}bye${PS}now`;
+	const line = JSON.stringify(request(2, 'tools/call', { name: 'snippets_search', arguments: { query } }));
+	assert.ok(line.includes(LS), 'the test needs the raw character on the line');
+	input.write(line + '\n');
+	input.end();
+	await done;
+
+	assert.deepEqual(seen, [query]);
+	assert.ok(!written.includes(LS) && !written.includes(PS), 'a reply carried a raw line separator');
+	const replies = written.trimEnd().split('\n').map((text) => JSON.parse(text));
+	assert.deepEqual(replies.map((reply) => reply.id).sort(), [1, 2]);
+	assert.equal(replies.find((reply) => reply.id === 2).result.content[0].text, `found ${query}`);
+});
+
+test('the 2025-03-26 version takes several requests in one message, and answers them in one', async () => {
+	const { send } = setup();
+	await send(initialize('2025-03-26'));
+	const replies = await send([request(2, 'tools/list'), { jsonrpc: '2.0', method: 'notifications/initialized' }, request(3, 'ping'), request(4, 'no/such')]);
+	assert.deepEqual(replies.map((reply) => [reply.id, Boolean(reply.result), reply.error?.code]), [[2, true, undefined], [3, true, undefined], [4, false, -32601]]);
+	// Nothing but notifications: nothing to answer.
+	assert.equal(await send([{ jsonrpc: '2.0', method: 'notifications/initialized' }]), null);
+	assert.deepEqual(await send([]), { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+});
+
+test('every other version refuses several requests in one message', async () => {
+	for (const version of ['2025-11-25', '2025-06-18', '2024-11-05']) {
+		const { send } = setup();
+		await send(initialize(version));
+		assert.deepEqual(await send([request(2, 'ping')]), { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } }, version);
+	}
+	assert.equal((await setup().send([request(1, 'ping')])).error.code, -32600);
+});
+
+test('a cancellation for a call that is not running is ignored, and a later call with that id is answered', async () => {
+	const { send } = setup();
+	await send(initialize());
+	assert.equal(await send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 7 } }), null);
+	assert.equal((await send(request(7, 'tools/call', { name: 'snippets_search', arguments: {} }))).result.isError, false);
+	// And once a cancelled call has ended, its id is free again.
+	let release;
+	const held = new Promise((resolve) => (release = resolve));
+	const slow = setup({ call: async (name, args) => (args.slow ? (await held, { content: [], isError: false }) : { content: [{ type: 'text', text: 'again' }], isError: false }) });
+	await slow.send(initialize());
+	const first = slow.protocol.handleLine(JSON.stringify(request(9, 'tools/call', { name: 'snippets_search', arguments: { slow: true } })));
+	await slow.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 9 } });
+	release();
+	assert.equal(await first, null);
+	assert.equal((await slow.send(request(9, 'tools/call', { name: 'snippets_search', arguments: {} }))).result.content[0].text, 'again');
+});
+
+test('when the input ends, the server does not wait long for a call that is stuck', async () => {
+	const { protocol } = setup({ call: () => new Promise(() => {}) });
+	const input = new PassThrough();
+	const output = new PassThrough();
+	output.resume();
+	const done = protocol.serve({ input, output, grace: 200 });
+	input.write(JSON.stringify(initialize()) + '\n');
+	input.write(JSON.stringify(request(2, 'tools/call', { name: 'snippets_search', arguments: {} })) + '\n');
+	const started = Date.now();
+	input.end();
+	await done;
+	assert.ok(Date.now() - started >= 150 && Date.now() - started < 2000, `ended after ${Date.now() - started} ms`);
 });
