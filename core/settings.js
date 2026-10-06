@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const DEFAULTS = { matchDirOverride: null, maxBackups: 20 };
+const DEFAULTS = { matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187 };
 
 function clean(raw) {
 	const settings = { ...DEFAULTS };
@@ -10,6 +10,11 @@ function clean(raw) {
 	}
 	if (Number.isInteger(raw?.maxBackups) && raw.maxBackups >= 1 && raw.maxBackups <= 500) {
 		settings.maxBackups = raw.maxBackups;
+	}
+	// The listener is on only when it was switched on, never by accident.
+	if (raw?.apiEnabled === true) settings.apiEnabled = true;
+	if (Number.isInteger(raw?.apiPort) && raw.apiPort >= 1024 && raw.apiPort <= 65535) {
+		settings.apiPort = raw.apiPort;
 	}
 	return settings;
 }
