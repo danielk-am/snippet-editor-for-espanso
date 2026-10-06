@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { applyMatchUpdate, insertMatch } from '../core/matchFile.js';
+import { createTeamPackages } from '../core/teamPackages.js';
 
 let version;
 try {
@@ -36,13 +37,38 @@ edited = insertMatch(edited, { triggers: [':t1', ':t2'], replace: 'tab\there "qu
 edited = insertMatch(edited, { trigger: ':lines', replace: 'Line one\nLine two' });
 fs.writeFileSync(path.join(root, 'match', 'edited.yml'), edited);
 
-const listed = JSON.parse(
-	execFileSync('espanso', ['match', 'list', '--json'], {
-		encoding: 'utf8',
-		env: { ...process.env, ESPANSO_CONFIG_DIR: root, ESPANSO_PACKAGE_DIR: path.join(root, 'packages'), ESPANSO_RUNTIME_DIR: path.join(root, 'runtime') },
-	})
-);
+// A team package, installed the way the app installs one: in match/team/,
+// with the app's marker file beside the match files.
+await createTeamPackages({ matchDir: path.join(root, 'match') }).install({
+	name: 'farewells',
+	files: [
+		{ name: '_manifest.yml', bytes: Buffer.from('name: farewells\ntitle: Farewells\n') },
+		{ name: 'package.yml', bytes: Buffer.from('matches:\n  - trigger: ":farewell"\n    replace: "Farewell from the team"\n') },
+	],
+	repository: 'https://github.com/example/team-snippets.git',
+	commit: '0'.repeat(40),
+	tree: '0'.repeat(40),
+});
+
+const env = { ...process.env, ESPANSO_CONFIG_DIR: root, ESPANSO_PACKAGE_DIR: path.join(root, 'packages'), ESPANSO_RUNTIME_DIR: path.join(root, 'runtime') };
+const listed = JSON.parse(execFileSync('espanso', ['match', 'list', '--json'], { encoding: 'utf8', env }));
+
+// Espanso's own package commands must keep working with a team package in
+// place. They stop for every package if a folder in Espanso's packages
+// folder lacks its source file, which is why team packages are kept apart.
+let packageList;
+fs.mkdirSync(path.join(root, 'match', 'packages'), { recursive: true });
+try {
+	execFileSync('espanso', ['package', 'list'], { encoding: 'utf8', env: { ...env, ESPANSO_PACKAGE_DIR: path.join(root, 'match', 'packages') }, stdio: ['ignore', 'pipe', 'pipe'] });
+	packageList = 'works';
+} catch (error) {
+	packageList = String(error.stderr || error.message).trim().split('\n')[0];
+}
 fs.rmSync(root, { recursive: true, force: true });
+if (packageList !== 'works') {
+	console.log(`Espanso ${version} could not list its packages with a team package installed: ${packageList}`);
+	process.exit(1);
+}
 
 // What Espanso should report, written out by hand.
 const expected = [
@@ -53,6 +79,7 @@ const expected = [
 	{ triggers: [':spaces'], replace: '  kept  ' },
 	{ triggers: [':t1', ':t2'], replace: 'tab\there "quoted" #hash' },
 	{ triggers: [':lines'], replace: 'Line one\nLine two' },
+	{ triggers: [':farewell'], replace: 'Farewell from the team' },
 ];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const missing = expected.filter((want) => !listed.some((got) => same(got.triggers, want.triggers) && got.replace === want.replace));
@@ -60,4 +87,4 @@ if (missing.length) {
 	console.log(`Espanso ${version} did not read these as written:\n${JSON.stringify(missing, null, 1)}\n--- it read ---\n${JSON.stringify(listed, null, 1)}`);
 	process.exit(1);
 }
-console.log(`Espanso ${version} read every snippet as written (${expected.length} checked).`);
+console.log(`Espanso ${version} read every snippet as written (${expected.length} checked), and its package list still works beside a team package.`);

@@ -174,6 +174,20 @@ Connecting and disconnecting a repository are settings. Like the match folder, t
 - **Packaged-app test** must pass unchanged.
 - Tests are written first and watched to fail.
 
+## Changed while building
+
+| Change | Why |
+| --- | --- |
+| `GET /team` answers 200 with `connected: false` when no repository is connected. The other four routes answer 409. | It is a question about state, and the window asks it on every visit. |
+| Removing an installed package works with no repository connected. Installed packages the repository does not offer are listed as `installedOnly`. | A copy can outlive its source and must still be removable. |
+| At most 12 MB is read in one listing, not 64 MB. | It fits inside the git runner's limit in one call. Beyond it, a package is listed without counts and cannot be installed from the app. |
+| Files are staged under one short underscore name and renamed, not staged in a temporary folder. | Checked against Espanso: it loads hidden and underscore-named folders too, so a staged copy would be loaded as a duplicate. A staging name built from the file's own could be too long for the disk. |
+| "Propose to team" shows on a file only while a repository is connected. `/state` gains `teamConnected`. | It leaves the page as it was for people who use no team repository. |
+| A saved address is checked again each time the app starts. | The settings file can be edited by hand. |
+| The check for an unchanged file is made after the file is staged in git, not by comparing bytes first. | One check covers both an identical file and one that differs only in line endings git normalises. |
+
+Also fixed, though it was not part of this piece: dialogs sat left of centre when their text ran long. The proposal dialog names the repository, which made it plain.
+
 ## Not in this piece
 
 - Pushing to the main branch, by any route.

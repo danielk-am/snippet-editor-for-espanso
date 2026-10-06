@@ -65,6 +65,7 @@ The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sid
 - **Packages are read-only.** Copy a package snippet into one of your own files to change it.
 - **Light, dark or system theme.**
 - **API for other tools.** Scripts on the same computer can read and change snippets over HTTP. It is off until you switch it on. See "API for other tools" below.
+- **Team snippets.** Connect a GitHub repository of shared packages, install the ones you want, and propose your own files back as a pull request. See "Team snippets" below.
 
 ## API for other tools
 
@@ -103,6 +104,40 @@ How it is guarded:
 - Any program running under your account can read that file. The token keeps out other people and web pages, not software you choose to run.
 - Requests from web pages are refused, so a site open in your browser cannot use it.
 - The window does not use the HTTP side at all. It takes the same routes over the app's internal channel, so the token never enters the page.
+
+## Team snippets
+
+A team can keep its shared snippets in one GitHub repository. Connect it in Settings with its address, such as `acme/team-snippets` or `git@github.com:acme/team-snippets.git`. The app uses the `git` on your computer and the sign-in git already has. It saves no password or token.
+
+The repository holds one folder per package:
+
+```
+packages/
+  goodbyes/
+    _manifest.yml     name, title, description, version, author
+    package.yml       one or more match files
+```
+
+- **Install.** The Team packages page lists every package. Installing one copies it to `match/team/<name>/`, where Espanso loads it. Installed team files are read-only in the app. You can copy a snippet into one of your own files to change it.
+- **Update.** The app checks the repository when it starts and when you press "Check for updates", and marks the packages that changed. Nothing is updated until you press Update.
+- **Runs commands.** An Espanso snippet can run a shell command or a script when you use it. A package that holds one is marked "Runs commands", and installing or updating it asks first.
+- **Propose.** "Propose to team", on one of your own files, pushes that file to a new branch named `snippet-editor/<package>-<date>-<time>`. The app then offers GitHub's page for opening a pull request from that branch. It never pushes to the main branch.
+
+What the app does with git: it keeps a bare copy of the repository in its data folder and reads packages straight from the commit, so a symbolic link or a submodule in the repository is skipped, not followed. Git is run without a shell, with a time limit, and can never stop to ask for a password. If git would have asked, the app says so and you check your access in a terminal.
+
+Over the API, team snippets are under `/api/v1/team`:
+
+| Method | Path | Does |
+| --- | --- | --- |
+| GET | `/team` | The repository, its packages, and which are installed or have updates |
+| POST | `/team/refresh` | Fetch, then the same reply |
+| PUT | `/team/packages/{name}/installed` | Install or update; `acceptCommands: true` for a package that runs commands |
+| DELETE | `/team/packages/{name}/installed` | Remove the installed copy |
+| POST | `/team/proposals` | Push a proposal branch: `fileId`, `package`, `summary`, and `title` and `description` for a new package |
+
+Connecting and disconnecting a repository are done in the window only. Installed team files are read through the ordinary routes, with ids such as `team:goodbyes:package.yml`.
+
+Team packages go in `match/team/`, not in Espanso's own `match/packages/`. Checked with Espanso 2.4.1: it loads `match/team/` like any other match files, and a folder in `match/packages/` without Espanso's own source file makes `espanso package list` fail for every package.
 
 ## How it treats your files
 
@@ -148,7 +183,7 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | Path | What it holds |
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
-| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, path resolution, settings. |
+| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repository, path resolution, settings. |
 | `shared/` | Pure modules used by both sides: the snippet and variable models, search, the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
@@ -168,7 +203,7 @@ Runs the unit tests with Node's built-in runner. One of them generates 1,500 mat
 npm run test:espanso
 ```
 
-Asks the real Espanso program to read files this app has written, in a temporary folder, and checks that it sees each snippet as written. It needs Espanso installed and skips itself if it is not. It passes with Espanso 2.4.1.
+Asks the real Espanso program to read files this app has written, in a temporary folder, and checks that it sees each snippet as written. It also installs a team package and checks that Espanso reads it and that Espanso's own package list still works. It needs Espanso installed and skips itself if it is not. It passes with Espanso 2.4.1.
 
 ```bash
 npm run test:ui
@@ -194,11 +229,12 @@ This is a reconstruction of Snippet Manager for Espanso, not a copy of its sourc
 
 Not rebuilt in this version:
 
-- Organisation sync with a reviewed Git repository, and proposing changes by pull request.
 - The MCP adapter.
 - The AI assistant panel.
 - The WordPress block editor content type.
 - The original branded icon. The packages use a new icon drawn from the sidebar mark.
+
+Team snippets were rebuilt afterwards, from the record of the original's data model: one repository, a folder per package with a `_manifest.yml`, read-only copies, and changes proposed by pull request. How the original stored its installed copies is not in those records, so that part is new here.
 
 One behaviour is a best guess. The original applied a file's trigger prefix to its snippets, and the records do not say exactly when. Here the prefix is offered as the start of each new trigger and existing triggers are never rewritten.
 
