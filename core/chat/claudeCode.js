@@ -10,6 +10,8 @@
 //   --permission-prompts    anything else is refused, with nobody asked
 // Its first line lists the tools it has. That list is read, and if it holds
 // anything the app did not give, the answer is stopped before it starts.
+// Nothing it writes or does is taken before that line, and a tool it uses
+// later that is not one of the snippet tools stops the answer too.
 
 const SERVER = 'snippets';
 const PREFIX = `mcp__${SERVER}__`;
@@ -50,6 +52,7 @@ export function claudeMcpConfig({ mcp, sessionFile }) {
 //   { type: 'error', code, message }            it ended some other way
 export function createClaudeParser() {
 	let ended = false;
+	let listed = false;
 	let anyText = false;
 	let needsBreak = false;
 	let currentId = null;
@@ -90,8 +93,26 @@ export function createClaudeParser() {
 			} else {
 				const server = Array.isArray(data.mcp_servers) ? data.mcp_servers.find((item) => item?.name === SERVER) : null;
 				if (!given.length || server?.status !== 'connected') end({ type: 'error', code: 'NO_TOOLS', message: 'Claude Code could not start the snippet tools.' });
+				else listed = true;
 			}
 			return out;
+		}
+
+		// Until it has said which tools it has, only its own notes and a
+		// failure to start are taken.
+		const fromTheModel = data.type === 'assistant' || data.type === 'user' || data.type === 'stream_event';
+		if (!listed && (fromTheModel || (data.type === 'result' && data.is_error !== true && data.subtype === 'success'))) {
+			end({ type: 'error', code: 'UNSAFE', message: 'Claude Code did not say which tools it has, so it was stopped.' });
+			return out;
+		}
+
+		// A tool that is not one of the app's, whoever in the answer uses it.
+		if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
+			const foreign = data.message.content.find((block) => block?.type === 'tool_use' && !(typeof block.name === 'string' && block.name.startsWith(PREFIX)));
+			if (foreign) {
+				end({ type: 'error', code: 'UNSAFE', message: `Claude Code used a tool this app did not give it (${String(foreign.name)}), so it was stopped.` });
+				return out;
+			}
 		}
 
 		// A sub-agent's messages are not the answer.
@@ -122,7 +143,7 @@ export function createClaudeParser() {
 					needsBreak = anyText;
 					say(block.text);
 				} else if (block?.type === 'tool_use' && typeof block.id === 'string' && !tools.has(block.id)) {
-					const name = typeof block.name === 'string' && block.name.startsWith(PREFIX) ? block.name.slice(PREFIX.length) : String(block.name);
+					const name = block.name.slice(PREFIX.length);
 					tools.set(block.id, name);
 					out.push({ type: 'tool', id: block.id, name, status: 'started' });
 					needsBreak = true;

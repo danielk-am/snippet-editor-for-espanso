@@ -10,14 +10,20 @@
 //     be called at all, the snippet tools included. The runner's code has no
 //     file, network or process access of its own.
 //   - The sandbox is read-only, so the patch tool that remains cannot write.
-// Codex does not say which tools it has. So the watch is on what it does: if
-// it runs a command, changes a file, searches the web or starts another
-// agent, the answer is stopped.
+// Codex does not say which tools it has. So the watch is on what it does.
+// Only what is known to be harmless is let pass: its messages, its notes to
+// itself, the snippet tools, and its own three ways of asking an MCP server
+// what it holds. Anything else stops the answer: a command, a changed file,
+// a web search, another agent, a tool on another server, or a kind of step
+// this app has not seen before.
 
 const SERVER = 'snippets';
 const MOST = 500;
 const OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'multi_agent', 'browser_use', 'computer_use', 'image_generation', 'goals', 'sleep_tool', 'tool_suggest', 'skill_search', 'view_image', 'memories'];
 const FORBIDDEN = { command_execution: 'ran a command', file_change: 'changed a file', web_search: 'searched the web', collab_tool_call: 'started another agent' };
+// Steps that change nothing and reach nothing.
+const QUIET = new Set(['reasoning', 'todo_list', 'error']);
+const OWN_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -85,10 +91,15 @@ export function createCodexParser() {
 		} else if (data.type === 'error') {
 			// Often a retry under way. Whether it mattered shows in how the turn ends.
 			if (typeof data.message === 'string') lastError = data.message;
-		} else if ((data.type === 'item.started' || data.type === 'item.updated' || data.type === 'item.completed') && isObject(data.item)) {
-			const { item } = data;
+		} else if (data.type === 'item.started' || data.type === 'item.updated' || data.type === 'item.completed') {
+			const item = isObject(data.item) ? data.item : {};
+			const unsafe = (what) => end({ type: 'error', code: 'UNSAFE', message: `Codex ${what}, so it was stopped.` });
 			if (Object.hasOwn(FORBIDDEN, item.type)) {
-				end({ type: 'error', code: 'UNSAFE', message: `Codex ${FORBIDDEN[item.type]}, which this app does not allow, so it was stopped.` });
+				unsafe(`${FORBIDDEN[item.type]}, which this app does not allow`);
+			} else if (item.type === 'mcp_tool_call' && !(item.server === SERVER && typeof item.tool === 'string') && !(item.server === 'codex' && OWN_TOOLS.has(item.tool))) {
+				unsafe(`used a tool this app did not give it (${String(item.server)}: ${String(item.tool)})`);
+			} else if (item.type !== 'agent_message' && item.type !== 'mcp_tool_call' && !QUIET.has(item.type)) {
+				unsafe(`did something this app does not know (${String(item.type)})`);
 			} else if (item.type === 'agent_message' && typeof item.text === 'string') {
 				const before = shown.get(item.id) ?? '';
 				if (item.text.startsWith(before) && item.text.length > before.length) {

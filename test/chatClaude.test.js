@@ -112,23 +112,45 @@ test('thinking, empty text and a sub-agent\'s messages are not shown', () => {
 	assert.deepEqual(events, [{ type: 'text', text: 'Shown.' }, { type: 'done' }]);
 });
 
-test('a tool is announced once, and a tool that is not a snippet tool keeps its name', () => {
+test('a tool is announced once, and ends as done or failed', () => {
 	const use = { type: 'tool_use', id: 't1', name: 'mcp__snippets__snippets_get_file', input: {} };
 	const events = run([
 		init(),
 		assistant('m1', [use]),
-		assistant('m1', [use, { type: 'tool_use', id: 't2', name: 'SomethingElse', input: {} }]),
+		assistant('m1', [use, { type: 'tool_use', id: 't2', name: 'mcp__snippets__snippets_add_snippet', input: {} }]),
 		{ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }, { type: 'tool_result', tool_use_id: 't2', is_error: true, content: 'no' }] }, parent_tool_use_id: null },
 		{ type: 'user', message: { role: 'user', content: 'a plain message' }, parent_tool_use_id: null },
 		success(''),
 	]);
 	assert.deepEqual(events, [
 		{ type: 'tool', id: 't1', name: 'snippets_get_file', status: 'started' },
-		{ type: 'tool', id: 't2', name: 'SomethingElse', status: 'started' },
+		{ type: 'tool', id: 't2', name: 'snippets_add_snippet', status: 'started' },
 		{ type: 'tool', id: 't1', name: 'snippets_get_file', status: 'done' },
-		{ type: 'tool', id: 't2', name: 'SomethingElse', status: 'failed' },
+		{ type: 'tool', id: 't2', name: 'snippets_add_snippet', status: 'failed' },
 		{ type: 'done' },
 	]);
+});
+
+test('a tool that is not one of the snippet tools, used in the middle of an answer, stops the answer', () => {
+	for (const name of ['Bash', 'mcp__other__snippets_search', 'mcp__snippets', 'WebFetch', 7, undefined]) {
+		const events = run([init(), start('m1'), delta('Before.'), assistant('m1', [{ type: 'tool_use', id: 't9', name, input: {} }]), delta('After.'), success('After.')]);
+		assert.deepEqual(events, [{ type: 'text', text: 'Before.' }, { type: 'error', code: 'UNSAFE', message: `Claude Code used a tool this app did not give it (${String(name)}), so it was stopped.` }], String(name));
+	}
+	// The same from a sub-agent, which the app does not give it either.
+	assert.equal(run([init(), assistant('m1', [{ type: 'tool_use', id: 't9', name: 'Bash', input: {} }], { parent_tool_use_id: 'x' })]).at(-1).code, 'UNSAFE');
+});
+
+test('until it has said which tools it has, nothing it writes or does is taken', () => {
+	const unsaid = { type: 'error', code: 'UNSAFE', message: 'Claude Code did not say which tools it has, so it was stopped.' };
+	assert.deepEqual(run([delta('text'), init(), success('text')]), [unsaid]);
+	assert.deepEqual(run([assistant('m1', [{ type: 'text', text: 'Hello.' }]), init()]), [unsaid]);
+	assert.deepEqual(run([{ type: 'user', message: { role: 'user', content: [] }, parent_tool_use_id: null }]), [unsaid]);
+	assert.deepEqual(run([{ type: 'assistant' }]), [unsaid]);
+	// What may come first: other notes from the program itself, and a failure to start.
+	assert.deepEqual(run([{ type: 'system', subtype: 'hook_started' }, { type: 'system', subtype: 'plugin_install', status: 'started' }, init(), delta('Fine.'), success('Fine.')]), [{ type: 'text', text: 'Fine.' }, { type: 'done' }]);
+	assert.deepEqual(run([{ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['The working folder is missing.'] }]), [{ type: 'error', code: 'FAILED', message: 'The working folder is missing.' }]);
+	// A result that claims success with no tools ever listed is not an answer.
+	assert.deepEqual(run([success('An answer from nowhere.')]), [unsaid]);
 });
 
 test('a result that is an error says what Claude Code said, and why when it is known', () => {
@@ -160,7 +182,7 @@ test('if Claude Code starts with any tool the app did not give it, or without th
 });
 
 test('what is not a line of JSON, or not a kind of line the app knows, is skipped', () => {
-	const events = run(['', 'not json', '[1,2]', '"text"', 'null', '{"type":"system","subtype":"api_retry","attempt":1}', '{"type":"rate_limit_event"}', '{"type":"assistant"}', '{"type":"user","message":null}', '{"type":"stream_event"}', JSON.stringify(init()), JSON.stringify(delta('Still here.')), JSON.stringify(success('Still here.'))]);
+	const events = run(['', 'not json', '[1,2]', '"text"', 'null', '{"type":"system","subtype":"api_retry","attempt":1}', '{"type":"rate_limit_event"}', JSON.stringify(init()), '{"type":"assistant"}', '{"type":"user","message":null}', '{"type":"stream_event"}', '{"type":"something_new","text":"x"}', JSON.stringify(delta('Still here.')), JSON.stringify(success('Still here.'))]);
 	assert.deepEqual(events, [{ type: 'text', text: 'Still here.' }, { type: 'done' }]);
 });
 

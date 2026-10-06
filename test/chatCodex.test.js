@@ -91,6 +91,25 @@ test('a tool is announced once, however many times Codex mentions it before it e
 	assert.deepEqual(events.map((event) => event.status), ['started', 'done']);
 });
 
+test('anything Codex does that the app does not know to be harmless stops the answer', () => {
+	const call = (server, tool) => item('started', 'x', 'mcp_tool_call', { server, tool, arguments: {}, result: null, error: null, status: 'in_progress' });
+	for (const [line, what] of [
+		[call('files', 'read_file'), 'used a tool this app did not give it (files: read_file)'],
+		[call('codex', 'run_anything'), 'used a tool this app did not give it (codex: run_anything)'],
+		[call('snippets', 7), 'used a tool this app did not give it (snippets: 7)'],
+		[item('started', 'x', 'browser_action', {}), 'did something this app does not know (browser_action)'],
+		[item('completed', 'x', 'image_generation', {}), 'did something this app does not know (image_generation)'],
+		[{ type: 'item.completed', item: { id: 'x' } }, 'did something this app does not know (undefined)'],
+	]) {
+		const events = run([message('m', 'Before.'), line, message('n', 'After.'), DONE]);
+		assert.deepEqual(events, [{ type: 'text', text: 'Before.' }, { type: 'error', code: 'UNSAFE', message: `Codex ${what}, so it was stopped.` }], what);
+	}
+	// Its three ways of asking an MCP server what it holds are its own, and harmless.
+	for (const tool of ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']) {
+		assert.deepEqual(run([call('codex', tool), message('m', 'Fine.'), DONE]), [{ type: 'text', text: 'Fine.' }, { type: 'done' }], tool);
+	}
+});
+
 test('Codex\'s own helper tools and its notes to itself are not shown', () => {
 	const events = run([
 		item('started', 'i1', 'mcp_tool_call', { server: 'codex', tool: 'list_mcp_resources', arguments: {}, status: 'in_progress' }),
@@ -143,7 +162,7 @@ test('a message that grows is shown as it grows, once, and messages are set apar
 
 test('what is not a line of JSON, or not a kind of line the app knows, is skipped, and only one ending is reported', () => {
 	const parser = createCodexParser();
-	const events = run(['', 'not json', '[]', 'null', '{"type":"thread.started","thread_id":"t"}', '{"type":"turn.started"}', '{"type":"item.completed"}', '{"type":"item.completed","item":null}', '{"type":"something.new","item":{"id":"q","type":"agent_message","text":"no"}}', JSON.stringify(message('m', 'Yes.')), JSON.stringify(DONE), JSON.stringify(DONE), JSON.stringify(message('z', 'late'))], parser);
+	const events = run(['', 'not json', '[]', 'null', '{"type":"thread.started","thread_id":"t"}', '{"type":"turn.started"}', '{"type":"something.new","item":{"id":"q","type":"agent_message","text":"no"}}', JSON.stringify(message('m', 'Yes.')), JSON.stringify(DONE), JSON.stringify(DONE), JSON.stringify(message('z', 'late'))], parser);
 	assert.deepEqual(events, [{ type: 'text', text: 'Yes.' }, { type: 'done' }]);
 	assert.equal(parser.ended, true);
 });

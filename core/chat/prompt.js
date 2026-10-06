@@ -22,12 +22,23 @@ const MAX_HISTORY = 24_000;
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// The frame below is made of a few tags. Text that came from a file, or from
+// an earlier answer, must not be able to close one or open another: a team
+// snippet's trigger could otherwise write itself a message from the person.
+const FRAME = /<(\/?(?:conversation_so_far|person|assistant|open_in_the_app|new_message)>)/g;
+const plain = (text) => text.replace(FRAME, '&lt;$1').replace(/(&lt;\/?(?:conversation_so_far|person|assistant|open_in_the_app|new_message))>/g, '$1&gt;');
+// A name or a trigger, as one short line.
+const short = (text) => {
+	const line = plain(text.replace(/\s+/g, ' ').trim());
+	return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+};
+
 // What is open in the window, as one sentence, or nothing.
 function openLine(context) {
 	if (!isObject(context) || typeof context.fileId !== 'string' || typeof context.fileName !== 'string') return '';
-	const file = `The person has the file ${context.fileName} open (file id ${context.fileId})`;
+	const file = `The person has the file ${short(context.fileName)} open (file id ${short(context.fileId)})`;
 	if (!Number.isInteger(context.index) || context.index < 0) return `${file}.`;
-	return `${file}, at the snippet in position ${context.index}${typeof context.trigger === 'string' && context.trigger ? ` (${context.trigger})` : ''}.`;
+	return `${file}, at the snippet in position ${context.index}${typeof context.trigger === 'string' && context.trigger.trim() ? ` (${short(context.trigger)})` : ''}.`;
 }
 
 // The new message, and before it as much of the conversation as fits.
@@ -46,9 +57,16 @@ function chosen(messages) {
 	return { earlier, latest: latest.text };
 }
 
+// For a command-line tool everything is one text, so everything in it that
+// is not the frame is made unable to pass for the frame.
+function framed(messages) {
+	const { earlier, latest } = chosen(messages);
+	return { earlier: earlier.map((message) => ({ role: message.role, text: plain(message.text) })), latest: plain(latest) };
+}
+
 // For Claude Code and Codex: one text, read from standard input.
 export function promptText({ messages, context } = {}) {
-	const { earlier, latest } = chosen(messages);
+	const { earlier, latest } = framed(messages);
 	const open = openLine(context);
 	const parts = [];
 	if (earlier.length) parts.push(['<conversation_so_far>', ...earlier.flatMap((message) => (message.role === 'user' ? ['<person>', message.text, '</person>'] : ['<assistant>', message.text, '</assistant>'])), '</conversation_so_far>'].join('\n'));
