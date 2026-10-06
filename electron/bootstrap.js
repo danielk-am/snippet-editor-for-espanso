@@ -22,8 +22,9 @@ export async function startBackend({ ipcMain, userDataDir, env, onChange, onChat
 		listener,
 		chat,
 		async dispose() {
-			await chat.dispose();
+			// First what cannot wait: a git under way is stopped at once.
 			service.dispose();
+			await chat.dispose();
 			await listener.stop();
 		},
 	};

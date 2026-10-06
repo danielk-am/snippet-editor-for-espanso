@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import { startBackend } from './bootstrap.js';
 import { mcpSetup } from './mcpSetup.js';
+import { quitWhenDisposed } from './quit.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 
 let win = null;
@@ -97,7 +98,9 @@ if (!app.requestSingleInstanceLock()) {
 		app.on('activate', () => {
 			if (BrowserWindow.getAllWindows().length === 0) open();
 		});
-		app.on('will-quit', () => backend.dispose());
+		// An answer under way is stopped, with its program and its listener,
+		// before the app goes.
+		quitWhenDisposed({ app, dispose: () => backend.dispose() });
 	});
 
 	app.on('window-all-closed', () => {
