@@ -156,6 +156,36 @@ try {
 
 child.kill();
 await sleep(500);
+
+// The MCP server that comes with the app, started the way Settings tells an
+// AI tool to start it: by the app's own program, from the folder unpacked
+// beside the app's archive. Nobody should need Node installed for this.
+const resources = process.platform === 'darwin' ? path.join(path.dirname(binary), '..', 'Resources') : path.join(path.dirname(binary), 'resources');
+const server = path.join(resources, 'app.asar.unpacked', 'mcp', 'server.mjs');
+check(fs.existsSync(server), `the MCP server is not unpacked beside the app's archive: ${path.relative(root, server)}`);
+if (fs.existsSync(server)) {
+	const answer = await new Promise((resolve) => {
+		const mcp = spawn(binary, [server], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SNIPPET_EDITOR_DATA_DIR: userData }, stdio: ['pipe', 'pipe', 'pipe'] });
+		let out = '';
+		let err = '';
+		const giveUp = setTimeout(() => (mcp.kill(), resolve(`no answer. ${err}`)), 15000);
+		mcp.stderr.on('data', (chunk) => (err += chunk));
+		mcp.stdout.on('data', (chunk) => {
+			out += chunk;
+			if (out.split('\n').length < 3) return;
+			clearTimeout(giveUp);
+			mcp.stdin.end();
+			resolve(out);
+		});
+		mcp.on('error', (error) => resolve(`could not start: ${error.message}`));
+		const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+		mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: meta } }) + '\n');
+		mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: { _meta: meta } }) + '\n');
+	});
+	check(answer.includes('"supportedVersions":["2026-07-28"]'), `the packaged MCP server did not answer server/discover: ${answer.slice(0, 300)}`);
+	check((answer.match(/"name":"snippets_/g) ?? []).length === 12, 'the packaged MCP server did not list its twelve tools');
+}
+
 fs.rmSync(sandbox, { recursive: true, force: true });
 console.log(failures.length ? `Packaged app: ${failures.length} failure(s)\n- ${failures.join('\n- ')}` : `Packaged app: all checks passed (${path.relative(root, binary)})`);
 process.exit(failures.length ? 1 : 0);

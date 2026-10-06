@@ -23,8 +23,15 @@ files:
   - core/**
   - shared/**
   - renderer/**
+  - mcp/**
   - build/icon.png
   - package.json
+
+# The MCP server is started by an AI tool as a program of its own, and a
+# program cannot be started from inside the archive. So this one folder is
+# left as plain files beside it.
+asarUnpack:
+  - mcp/**
 
 mac:
   category: public.app-category.productivity
