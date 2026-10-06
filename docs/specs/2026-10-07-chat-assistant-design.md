@@ -271,3 +271,33 @@ Each claim that stays unproven will be listed as such in the README, not left to
 - Screenshots of the panel in light and dark, wide and narrow, reviewed against the rest of the app.
 - Real calls with Codex, if you allow them.
 - An independent review, as for the other three pieces.
+
+## Changed while building
+
+| What the design said | What was built, and why |
+| --- | --- |
+| A list of Codex flags that switched off its shell. | Real calls showed more. With the shell alone off, Codex still had a web tool, a patch tool, sub-agents and an image tool, so each is switched off by name, and web search is disabled. Its tool runner stays on: with it off, no tool can be called at all. |
+| Codex's skills list travels with each message. | It is cut (one setting), because it is no use here and long. Your Codex instructions file still travels: Codex adds it itself. |
+| Nothing about watching what the tools do. | Two guards were added. Claude Code's first line lists its tools, and the answer is stopped if it lists any the app did not give. Codex does not list its tools, so the answer is stopped if it is seen to run a command, change a file, search the web or start another agent. |
+| Apply "runs the very same tool call the ordinary way". | Apply writes through the app's routes directly. The routes' own messages are written for a person. The tools' messages are written for a model. |
+| The listener answers reads, a YAML check and proposals. | It answers reads and proposals only. The YAML check runs inside the app. |
+| The panel becomes a sheet under 900 wide. | Under 1120 wide. With the sidebar open, the page beside the panel needs 520 to stay readable. |
+| A card shows a snippet as it is and as it would be. | It shows the lines that differ, with a little around them, and folds the rest. A card is drawn where the assistant proposed it within the answer. |
+| An answer's text is stopped at 1 MB by the process runner. | The 1 MB limit is on the assistant's text. The runner's own limit is 64 MB, because Claude Code prints about 300 bytes for every word it streams. |
+| Five backends states. | A sixth: a Claude Code older than 2.1.259 is "too old", because it does not know a flag the app relies on. |
+| Each card's failure is final. | Only "it no longer means the same" is final. A card that could not be applied for a passing reason (the switch is off, the disk, git) stays, with the reason, and can be applied again. |
+| Nothing about an install whose package changes. | An install is refused if the package began to run commands after its card was made: you agreed to what the card showed. |
+
+## What the real calls showed
+
+Seven real calls were made with Codex 0.160.1 on 2026-10-07, against throwaway folders only.
+
+| Call | Result |
+| --- | --- |
+| 1 to 3, with different flags | Settled the flags above. With the final set, Codex's own code runner has no file, network or process access, `/etc/hosts` could not be read, and nothing was written. |
+| 4, "find my snippet for saying thanks" | It searched and answered correctly in 13 seconds. |
+| 5, "add a snippet" | It read the file and proposed a card. Nothing was written until Apply, which wrote it. |
+| 6, a snippet that tried to give it orders | It summarised the snippet as text, proposed nothing and ran nothing. |
+| 7, "run this shell command" | It said it could not. No command was seen. |
+
+Still not proven, as the README says: a whole answer from Claude Code, any run against a real Ollama, and finding the tools on Windows and Linux.

@@ -67,6 +67,7 @@ The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sid
 - **API for other tools.** Scripts on the same computer can read and change snippets over HTTP. It is off until you switch it on. See "API for other tools" below.
 - **Team snippets.** Connect a GitHub repository of shared packages, install the ones you want, and propose your own files back as a pull request. See "Team snippets" below.
 - **AI tools.** An MCP server comes with the app, so an AI tool such as Claude or Codex can search and read your snippets, and change them once you allow it. See "AI tools (MCP)" below.
+- **Assistant.** A chat panel beside your snippets. It finds, explains and drafts, and every change it suggests is a card you apply yourself. See "Assistant" below.
 
 ## API for other tools
 
@@ -179,6 +180,38 @@ The server speaks both forms of MCP in use today: the older one that opens with 
 
 How well an AI tool can use the tools was checked: ten questions with one right answer each, given to a fresh agent with nothing but these tools. It answered 10 of 10. The questions and the result are in `test/mcp-eval/`.
 
+## Assistant
+
+Press Cmd+J (Ctrl+J on Windows and Linux), or the speech-bubble button at the top right, to open a chat panel beside your snippets. Ask in plain words: find a snippet, explain one, draft a new one, tidy the one you have open. The panel is told which file and snippet you have open.
+
+**It changes nothing by itself.** When it wants to add, change or delete something, you get a card that shows the lines that would change. Nothing is written until you press Apply, and Apply also needs "Let AI tools change snippets" switched on in Settings. If the file changed after the card was made, the app checks that the card still means the same thing. If it does not, nothing is written and the card tells you to ask again.
+
+It answers through one of three tools on your own computer. The app holds no key and never signs in for you.
+
+| Backend | What it needs | Where your messages, and the snippets it reads, go |
+| --- | --- | --- |
+| Claude Code | Installed, version 2.1.259 or newer, and signed in (`claude auth login`) | To Anthropic, under your own sign-in |
+| Codex | Installed and signed in (`codex login`). The copy inside the ChatGPT app works. | To OpenAI, under your own sign-in |
+| Ollama | Running on this computer, with a model that can use tools | Nowhere with a local model. To Ollama with a cloud model. |
+
+"Who answers", in the panel's footer and its menu, shows which of the three are ready and the one step each still needs. The assistant does not need "API for other tools" switched on.
+
+How it is kept in bounds:
+
+- **Only the snippet tools.** Each message starts the backend fresh. Claude Code is started with its own tools off. Its first line of output lists the tools it has, and if that list holds anything the app did not give it, the answer is stopped before it begins. Codex is started with its shell, web search, sub-agents and image tools off, in a read-only sandbox, and the answer is stopped if it is seen to run a command, change a file or search the web.
+- **A listener that cannot write.** Claude Code and Codex reach your snippets through a listener on this computer that exists only while an answer is under way, with a token made for that answer. It can read, and it can hand over a proposal. It has no route that changes anything.
+- **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request. Whatever it makes of one, it can still only propose.
+- **An answer is shown as text.** Nothing in it is a link, and nothing in it can run as part of the page.
+- **Commands carry a warning.** A snippet with a `shell` or `script` variable runs a command each time it is used. A card for one says so above Apply.
+- **History stays here.** The last 20 conversations, up to 100 messages each, are kept in the window's own storage. "Clear history" removes them. Nothing is added to Claude Code's or Codex's own history.
+
+What was checked, and what was not:
+
+- **Codex was checked for real**, with Codex 0.160.1: finding a snippet, proposing one and applying it, a snippet that tried to give the assistant orders (it summarised the snippet and proposed nothing), and a request to run a command (it said it could not).
+- **Claude Code was checked as far as its tool list.** Started signed out, it lists exactly the twelve snippet tools. A whole answer from Claude Code has not been run: it was signed out on the computer this was built on. How its answers are read is tested against output written from Anthropic's documentation.
+- **Ollama has not been run.** It was not installed on that computer. That backend is written from Ollama's API reference and tested against a stand-in.
+- **Finding the three tools on Windows and Linux has not been run** on those systems.
+
 ## How it treats your files
 
 Espanso's match folder is the only store. There is no database, so nothing can drift from what Espanso reads.
@@ -224,7 +257,8 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
 | `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repository, path resolution, settings. |
-| `mcp/` | The MCP server: the protocol, the twelve tools and the client for the app's API. It imports nothing from the rest of the app. |
+| `core/chat/` | The assistant behind the window: finding the backends, starting Claude Code and Codex and reading their output, the Ollama loop, proposals, and the listener an answer calls back on. |
+| `mcp/` | The MCP server: the protocol, the twelve tools and the client for the app's API. It imports nothing from the rest of the app. The assistant uses the same tools, in a mode where a change is handed over as a proposal. |
 | `shared/` | Pure modules used by both sides: the snippet and variable models, search, the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
@@ -250,7 +284,7 @@ Asks the real Espanso program to read files this app has written, in a temporary
 npm run test:ui
 ```
 
-Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token.
+Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token. The assistant is driven too, from "none is ready" to an applied card, with a stand-in for Codex that starts the app's real MCP server and calls no model.
 
 ## Colours and design
 
@@ -270,11 +304,12 @@ This is a reconstruction of Snippet Manager for Espanso, not a copy of its sourc
 
 Not rebuilt in this version:
 
-- The AI assistant panel.
 - The WordPress block editor content type.
 - The original branded icon. The packages use a new icon drawn from the sidebar mark.
 
 The MCP server was built afterwards too, as a new piece: nothing of the original's adapter is in those records beyond its existence.
+
+The assistant was built afterwards as well, and is also new. The records say the original had an assistant panel, and nothing about how it worked.
 
 Team snippets were rebuilt afterwards, from the record of the original's data model: one repository, a folder per package with a `_manifest.yml`, read-only copies, and changes proposed by pull request. How the original stored its installed copies is not in those records, so that part is new here.
 
