@@ -27,3 +27,6 @@ const protocol = createProtocol({
 process.stdout.on('error', () => process.exit(0));
 
 await protocol.serve({ input: process.stdin, output: process.stdout });
+// The client has gone. A call still waiting on the app must not keep this
+// process alive: whatever it asked the app to do, the app finishes or refuses.
+process.exit(0);

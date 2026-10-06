@@ -387,6 +387,32 @@ async function run() {
 		});
 		check(answer.includes('"supportedVersions":["2026-07-28"]'), `the server started from the copied setup answered: ${answer.slice(0, 200)}`);
 
+		// And it reaches the app: one real tool call, through the app's API.
+		await backend.listener.set({ enabled: true, port: apiPort });
+		const listed = await new Promise((resolve) => {
+			const child = spawn(setup.command, setup.args, { env: { ...process.env, ...setup.env, SNIPPET_EDITOR_DATA_DIR: app.getPath('userData') }, stdio: ['pipe', 'pipe', 'ignore'] });
+			let out = '';
+			const giveUp = setTimeout(() => (child.kill(), resolve('no answer')), 15000);
+			child.stdout.on('data', (chunk) => {
+				out += chunk;
+				if (out.split('\n').length < 3) return;
+				clearTimeout(giveUp);
+				child.stdin.end();
+				resolve(out.split('\n')[1]);
+			});
+			child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) + '\n');
+			child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'snippets_list_files', arguments: { source: 'local' } } }) + '\n');
+		});
+		await backend.listener.set({ enabled: false, port: apiPort });
+		check(listed.includes('"isError":false') && listed.includes('local:base.yml'), `a tool call through the copied setup answered: ${listed.slice(0, 300)}`);
+
+		// Codex takes the same setup in its own format.
+		await js(`window.__ui.click('TOML, for Codex', '[role=radio]')`);
+		await js(`window.__ui.click('Copy setup')`);
+		await waitFor(`document.querySelector('.code-block')?.textContent.startsWith('[mcp_servers.snippet-editor]')`, 'the Codex form of the setup');
+		await sleep(150);
+		check(copied.at(-1).startsWith('[mcp_servers.snippet-editor]\ncommand = ') && copied.at(-1).includes('ELECTRON_RUN_AS_NODE = "1"'), `the Codex setup copied was ${copied.at(-1).slice(0, 120)}`);
+
 		await js(`${toggle}.click()`);
 		await waitFor(`${toggle}.getAttribute('aria-checked') === 'false'`, 'the switch to turn off');
 		check(saved() === false, 'switching it off did not reach the settings file');

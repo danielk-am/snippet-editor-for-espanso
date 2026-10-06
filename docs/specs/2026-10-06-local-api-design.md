@@ -168,10 +168,16 @@ Each of these was decided during the build or after an independent review of it.
 | A double click on Save sends one request. | The second request used to be refused and reported as the file changing on disk. |
 | The editor says "Saved" only after the window has re-read the folder. | An action taken straight after a save could start from the old version and be refused. This also made the end-to-end test fail now and then. |
 
+Changed again while building the MCP server, after its review:
+
+| Change | Why |
+| --- | --- |
+| One route needs no token: `GET /api/v1/proof?nonce=...`, which answers a number the caller chose with a keyed digest of it. | Another program can hold the app's port while the app is closed. A caller can now check who is listening before it sends the token. The answer gives nothing away about the token or the snippets. |
+| A file holding a value JSON cannot carry is listed without its snippets and says why. Only other replies answer 422. | One such file used to make `/state` fail for every file. |
+
 Known limits, not fixed here:
 
 - A match file with tens of thousands of keys in one mapping is slow to open, in the window and over the API alike. The cost is in the YAML library's check for repeated keys. It was there before this work.
-- One file holding a value JSON cannot carry makes `/state` answer 422 over HTTP until that value is changed. Answering for the other files and marking that one would be better.
 
 ## Sketch of the next two pieces
 

@@ -125,10 +125,12 @@ function ApiCard() {
 function AiCard() {
 	const toast = useToast();
 	const [ai, setAi] = useState(null);
+	const [format, setFormat] = useState('json');
 	useEffect(() => {
 		api.ai().then(setAi, () => {});
 	}, []);
 	if (!ai) return null;
+	const setup = format === 'toml' ? ai.setupToml : ai.setup;
 
 	const change = async (write) => {
 		try {
@@ -146,7 +148,7 @@ function AiCard() {
 			<${Switch}
 				title="Let AI tools change snippets"
 				description=${ai.write
-					? 'On. AI tools can add, change and delete snippets, install team packages and send proposals. Every change needs the version of the file it read, and keeps a backup.'
+					? 'On. AI tools can add, change and delete snippets, install team packages and send proposals. Every change needs the version of the file it read, and keeps a backup. A snippet can run a command on your computer: an AI tool must say you agreed before it writes one, so read what it asks you to approve.'
 					: 'Off. AI tools can search and read, and nothing else.'}
 				checked=${ai.write}
 				onChange=${change}
@@ -154,13 +156,23 @@ function AiCard() {
 			${ai.setup &&
 			html`
 				<p class="field__help">To connect an AI tool, add this to its MCP settings. It holds paths only, no password or token.</p>
-				<pre class="code-block" tabindex="0" aria-label="MCP setup">${ai.setup}</pre>
+				${ai.warning && html`<${Alert} tone="warning" icon="alert" title=${ai.warning} />`}
+				<${Segmented}
+					label="Format of the setup"
+					options=${[
+						{ id: 'json', label: 'JSON, for Claude and most tools' },
+						{ id: 'toml', label: 'TOML, for Codex' },
+					]}
+					value=${format}
+					onChange=${setFormat}
+				/>
+				<pre class="code-block" tabindex="0" aria-label="MCP setup">${setup}</pre>
 				<div class="setting__actions">
 					<${Button}
 						variant="outline"
 						icon="copy"
 						onClick=${async () => {
-							await api.copy(ai.setup);
+							await api.copy(setup);
 							toast({ title: 'Setup copied' });
 						}}
 					>

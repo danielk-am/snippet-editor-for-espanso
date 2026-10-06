@@ -174,7 +174,27 @@ env:      ELECTRON_RUN_AS_NODE=1
 | The token is read from its file for every request. There is no retry on a refused token. | Reading it each time already picks up a replaced token, and no test could tell a retry from that. |
 | With "API for other tools" switched off, the server sends nothing at all. | Another program could hold that port, and it must not be sent the token. |
 | The tool descriptions say more than first drafted. | The fresh agent in the usability check answered every question, and its notes on what cost it an extra call were folded in. |
-| A reply that is too long even at one item is a tool error. | Cutting inside one snippet would hand an AI tool half a snippet to write back. |
+| A reply that is too long even at one item is a tool error, which names the item and where to carry on. | Cutting inside one snippet would hand an AI tool half a snippet to write back. |
+
+### After an independent review
+
+Nothing critical was found. Six larger faults and thirteen smaller ones were, and are fixed, each with a test.
+
+| Change | Why |
+| --- | --- |
+| The client asks the app's listener to prove it holds the token before sending the token, and uses a connection of its own that no proxy setting can redirect. | With the app closed, another program on its port was handed the token. With a proxy set in the environment, the token and the snippets went to the proxy. |
+| A line ends at a line feed only, and replies escape the two Unicode line separators. | A request holding one, as text pasted from a web page can, was cut in two and never answered. |
+| In the newer shape, `server/discover` and `tools/list` say how long they may be kept. The 2025-03-26 version takes several requests in one message. | Both are required by those revisions. |
+| Long raw YAML comes in parts, and the version comes only with the last part. | A cut reply carried the version, so an AI tool could replace a file with its first part. |
+| A snippet that runs a command is written only when the call says the person agreed, with `accept_commands`. YAML that cannot be checked needs the same. | With the switch on, an AI tool could write a snippet that runs a shell command, with no step where anyone was asked. The flag is the AI tool's word, not proof: the check that counts is the approval prompt your AI tool shows you, which now carries that word in plain sight. |
+| The setup comes as JSON or as TOML for Codex, and warns when the app runs from a place that will not last. | Codex does not take the JSON block. A setup copied from a disk image or an AppImage stops working. |
+| The list of team packages is paged. Errors are capped at 1,500 characters. Four error texts point at the right next call. Changing a snippet and updating a team package are marked as replacing. A snippet needs a trigger. | Each was shown to mislead or to break the 25,000 character rule. |
+| When the client goes away, the server stops within two seconds. | A stuck call kept it alive for up to 150 seconds. |
+
+Left as they are:
+
+- A call that is cancelled after the app has started a write still changes the file. The version check makes a retry safe.
+- On Linux, the AppImage build cannot offer a lasting setup. The tar.gz build can.
 
 ## Not in this piece
 

@@ -176,3 +176,22 @@ console.log(reply.status, reply.body.files.length);
 	assert.equal(output, '200 4');
 	assert.equal(viaProxy, 0);
 });
+
+test('if the app goes away in the middle of a call, the call fails plainly', async (t) => {
+	const { createHmac } = await import('node:crypto');
+	const token = 'a'.repeat(64);
+	// Proves itself like the app, then drops the connection on the real request.
+	const quitting = http.createServer((request, response) => {
+		if (request.url.startsWith('/api/v1/proof?nonce=')) {
+			response.setHeader('Content-Type', 'application/json');
+			return response.end(JSON.stringify({ proof: createHmac('sha256', token).update(request.url.split('=')[1]).digest('hex') }));
+		}
+		request.socket.destroy();
+	});
+	await new Promise((resolve) => quitting.listen(0, '127.0.0.1', resolve));
+	t.after(() => quitting.close());
+	const dataDir = mkdtempSync(join(tmpdir(), 'snippet-editor-mcpclient-'));
+	writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: true, apiPort: quitting.address().port }));
+	writeFileSync(join(dataDir, 'api-token'), token + '\n');
+	await unreachable(createApiClient({ dataDir }).request('PUT', '/files/x/raw', { body: { text: 'matches: []\n', version: 'v' } }), /^Snippet Editor is not reachable\./);
+});

@@ -96,12 +96,13 @@ A file `{id}` is the `id` from `/state`, such as `local:base.yml`, percent-encod
 
 Errors always have the same shape: `{ "error": { "code": "CONFLICT", "message": "…" } }`.
 
-Limits: a request body can be up to 4 MB, a match file up to 2 MB, and the YAML helpers take up to 256 KB of text. Over a limit, the answer is `413`. YAML can hold two things JSON cannot: a number that is not finite, and a list or mapping that contains itself. A reply that would include one is refused with `422` and the code `UNREPRESENTABLE`, so a script is never handed data that differs from the file.
+Limits: a request body can be up to 4 MB, a match file up to 2 MB, and the YAML helpers take up to 256 KB of text. Over a limit, the answer is `413`. YAML can hold two things JSON cannot: a number that is not finite, and a list or mapping that contains itself. A file that holds one is listed without its snippets and says why, and its text can still be read. Any other reply that would include one is refused with `422` and the code `UNREPRESENTABLE`. Either way, a script is never handed data that differs from the file.
 
 How it is guarded:
 
 - It listens on `127.0.0.1` only, so other computers cannot reach it.
-- Every route needs the token. It is kept in `api-token` in the app's data folder, readable only by you. Replace it in Settings at any time.
+- Every route that reads or changes anything needs the token. It is kept in `api-token` in the app's data folder, readable only by you. Replace it in Settings at any time.
+- One route needs no token: `GET /api/v1/proof?nonce=...`. A caller sends a number of its own and gets back a digest that only the holder of the token can make. So a tool can check it is talking to this app before it sends the token. Another program can take the app's port while the app is closed.
 - Any program running under your account can read that file. The token keeps out other people and web pages, not software you choose to run.
 - Requests from web pages are refused, so a site open in your browser cannot use it.
 - The window does not use the HTTP side at all. It takes the same routes over the app's internal channel, so the token never enters the page.
@@ -144,7 +145,7 @@ Team packages go in `match/team/`, not in Espanso's own `match/packages/`. Check
 
 The app comes with an MCP server: a small program an AI tool starts, which lets it work with your snippets. It holds no snippets of its own. Every tool call goes to the app's local API, so the app must be open with "API for other tools" switched on.
 
-To connect an AI tool, open Settings, go to "AI tools" and press "Copy setup". Paste the block into the AI tool's MCP settings. It names the app's own program and the server file, so you do not need Node installed. It holds no password or token: the server reads the API token from the app's data folder itself.
+To connect an AI tool, open Settings, go to "AI tools" and press "Copy setup". Paste the block into the AI tool's MCP settings. The block comes as JSON, for Claude and most tools, or as TOML, for Codex. It names the app's own program and the server file, so you do not need Node installed. It holds no password or token: the server reads the API token from the app's data folder itself.
 
 From a source checkout, the server also runs with:
 
@@ -168,7 +169,9 @@ Reading and searching work from the start. The tools that change something are r
 | `snippets_propose_to_team` | Send one of your files to the team repository as a proposal branch | Yes |
 
 - Every change needs the version of the file the AI tool last read. If the file changed since, the change is refused and the tool is told to read it again. So an AI tool cannot overwrite something it has not seen.
-- A reply is at most 25,000 characters. Long lists come in pages.
+- A snippet can run a command on your computer when it is used. An AI tool can write one only by saying, in the call itself, that you agreed. Your AI tool shows you that call to approve, so read it.
+- A reply is at most 25,000 characters. Long lists come in pages, and long YAML comes in parts. The version a change needs comes only with the last part, so a file cannot be replaced by a piece of itself.
+- The server talks to the app on this computer directly. It ignores any proxy set in the environment, and it asks the app to prove itself before sending the token.
 - Deleting a file, removing a team package, connecting a repository and everything in Settings stay in the window.
 - The switch governs this MCP server. Another program on your computer that holds the API token can still change snippets through the API.
 

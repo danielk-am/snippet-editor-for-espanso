@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { clipboard as systemClipboard, dialog, shell } from 'electron';
 import { isTeamLink } from '../core/teamAddress.js';
-import { mcpSetupText } from './mcpSetup.js';
+import { mcpSetupText, mcpSetupToml, mcpSetupWarning } from './mcpSetup.js';
 
 // One handler per channel in shared/channels.js. Failures travel back as
 // data, because Electron strips custom fields (the error code) from a thrown
@@ -74,7 +74,12 @@ export function registerIpc({ ipcMain, service, router, listener, getWindow, isT
 
 	// What AI tools may do is a setting too. `setup` is the block an AI tool
 	// needs to start the MCP server that comes with this copy of the app.
-	const ai = () => ({ write: service.settings().aiWrite, setup: mcp ? mcpSetupText(mcp) : '' });
+	const ai = () => ({
+		write: service.settings().aiWrite,
+		setup: mcp ? mcpSetupText(mcp) : '',
+		setupToml: mcp ? mcpSetupToml(mcp) : '',
+		warning: mcp ? mcpSetupWarning({ execPath: mcp.command }) : '',
+	});
 	handle('ai:get', ai);
 	handle('ai:set', async (input) => {
 		if (typeof input?.write !== 'boolean') throw Object.assign(new Error('`write` must be true or false.'), { code: 'INVALID' });
