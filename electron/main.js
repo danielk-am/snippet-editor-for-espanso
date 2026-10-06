@@ -1,6 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
-import { createService } from '../core/service.js';
-import { registerIpc } from './ipc.js';
+import { startBackend } from './bootstrap.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 
 let win = null;
@@ -64,11 +63,13 @@ if (!app.requestSingleInstanceLock()) {
 	});
 
 	app.whenReady().then(async () => {
-		const services = await createService({
+		const backend = await startBackend({
+			ipcMain,
 			userDataDir: app.getPath('userData'),
 			onChange: () => send('data:changed'),
+			getWindow: () => win,
+			isTrustedSender,
 		});
-		registerIpc({ ipcMain, services, getWindow: () => win, isTrustedSender });
 		// Run from source, macOS shows Electron's own icon in the Dock. The
 		// packaged app carries its icon in the bundle and needs no help.
 		if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(ICON_FILE);
@@ -78,7 +79,7 @@ if (!app.requestSingleInstanceLock()) {
 		app.on('activate', () => {
 			if (BrowserWindow.getAllWindows().length === 0) open();
 		});
-		app.on('will-quit', () => services.dispose());
+		app.on('will-quit', () => backend.dispose());
 	});
 
 	app.on('window-all-closed', () => {

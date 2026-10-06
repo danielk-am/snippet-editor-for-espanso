@@ -7,8 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, ipcMain } from 'electron';
-import { createService } from '../core/service.js';
-import { registerIpc } from '../electron/ipc.js';
+import { startBackend } from '../electron/bootstrap.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -76,12 +75,15 @@ const watchdog = setTimeout(() => {
 
 async function run() {
 	let win = null;
-	const services = await createService({
+	const backend = await startBackend({
+		ipcMain,
 		userDataDir: app.getPath('userData'),
 		env: { SNIPPET_EDITOR_MATCH_DIR: matchDir },
 		onChange: () => win?.webContents.send('data:changed'),
+		getWindow: () => win,
+		isTrustedSender,
 	});
-	registerIpc({ ipcMain, services, getWindow: () => win, isTrustedSender });
+	const services = backend.service;
 
 	win = createMainWindow({ show: false, width: 1440, height: 900, webPreferences: { offscreen: true } });
 	win.webContents.on('console-message', (event) => {
@@ -307,7 +309,7 @@ async function run() {
 	check(consoleProblems.length === 0, `console problems: ${consoleProblems.join(' | ')}`);
 	fs.writeFileSync(path.join(artifacts, 'report.json'), JSON.stringify({ failures, consoleProblems }, null, 2));
 	console.log(failures.length ? `UI smoke: ${failures.length} failure(s)\n- ${failures.join('\n- ')}` : 'UI smoke: all checks passed');
-	services.dispose();
+	await backend.dispose();
 	fs.rmSync(sandbox, { recursive: true, force: true });
 	clearTimeout(watchdog);
 	app.exit(failures.length ? 1 : 0);

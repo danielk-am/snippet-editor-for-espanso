@@ -3,22 +3,15 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const CHANNELS = new Set([
-	'state:load',
-	'file:read',
-	'file:create',
-	'file:delete',
-	'file:saveRaw',
-	'file:setHeader',
-	'match:create',
-	'match:update',
-	'match:delete',
-	'match:preview',
-	'yaml:parse',
-	'yaml:stringify',
+	'api:request',
 	'settings:chooseMatchDir',
 	'settings:resetMatchDir',
 	'shell:reveal',
 	'clipboard:write',
+	'listener:get',
+	'listener:set',
+	'listener:replaceToken',
+	'listener:copy',
 ]);
 const EVENTS = new Set(['data:changed', 'menu:command']);
 

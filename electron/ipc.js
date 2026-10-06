@@ -1,12 +1,10 @@
 import fs from 'node:fs/promises';
 import { clipboard, dialog, shell } from 'electron';
-import { parseDocument, stringify } from 'yaml';
-import { stringifyMatch } from '../core/matchFile.js';
 
 // One handler per channel in shared/channels.js. Failures travel back as
 // data, because Electron strips custom fields (the error code) from a thrown
 // error on its way to the renderer.
-export function registerIpc({ ipcMain, services, getWindow, isTrustedSender }) {
+export function registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender }) {
 	const handle = (channel, fn) =>
 		ipcMain.handle(channel, async (event, ...args) => {
 			try {
@@ -17,45 +15,35 @@ export function registerIpc({ ipcMain, services, getWindow, isTrustedSender }) {
 			}
 		});
 
-	handle('state:load', () => services.state());
-
-	handle('file:read', (ref) => services.store.readFile(ref));
-	handle('file:create', (input) => services.store.createFile(input));
-	handle('file:delete', (ref, input) => services.store.deleteFile(ref, input));
-	handle('file:saveRaw', (ref, input) => services.store.saveRaw(ref, input));
-	handle('file:setHeader', (ref, input) => services.store.setHeader(ref, input));
-
-	handle('match:create', (ref, input) => services.store.createMatch(ref, input));
-	handle('match:update', (ref, input) => services.store.updateMatch(ref, input));
-	handle('match:delete', (ref, input) => services.store.deleteMatch(ref, input));
-	handle('match:preview', (match) => stringifyMatch(match));
-
-	handle('yaml:parse', (text) => {
-		const doc = parseDocument(String(text ?? ''));
-		if (doc.errors.length) {
-			throw Object.assign(new Error(doc.errors[0].message.split('\n')[0]), { code: 'PARSE_ERROR' });
-		}
-		return doc.toJS() ?? null;
-	});
-	handle('yaml:stringify', (value) => stringify(value, { lineWidth: 0 }));
+	// The window's snippet work takes the same routes as the HTTP API, with
+	// the same checks and the same replies. Only the carrier differs: this
+	// channel instead of a socket, so the window needs no token.
+	handle('api:request', (request) =>
+		router({
+			method: String(request?.method ?? ''),
+			path: String(request?.path ?? ''),
+			query: request?.query,
+			body: request?.body,
+		})
+	);
 
 	handle('settings:chooseMatchDir', async () => {
 		const result = await dialog.showOpenDialog(getWindow(), {
 			title: 'Choose the Espanso match folder',
-			defaultPath: services.store.matchDir,
+			defaultPath: service.store.matchDir,
 			properties: ['openDirectory', 'createDirectory'],
 		});
 		if (result.canceled || !result.filePaths[0]) return { changed: false };
-		await services.setMatchDir(result.filePaths[0]);
+		await service.setMatchDir(result.filePaths[0]);
 		return { changed: true };
 	});
 	handle('settings:resetMatchDir', async () => {
-		await services.setMatchDir(null);
+		await service.setMatchDir(null);
 		return { changed: true };
 	});
 
 	handle('shell:reveal', async (target) => {
-		const dir = target === 'backups' ? services.backupDir : target === 'matchDir' ? services.store.matchDir : null;
+		const dir = target === 'backups' ? service.backupDir : target === 'matchDir' ? service.store.matchDir : null;
 		if (!dir) throw Object.assign(new Error('Nothing to show.'), { code: 'INVALID' });
 		if (target === 'backups') await fs.mkdir(dir, { recursive: true });
 		const failure = await shell.openPath(dir);
@@ -65,6 +53,16 @@ export function registerIpc({ ipcMain, services, getWindow, isTrustedSender }) {
 
 	handle('clipboard:write', (text) => {
 		clipboard.writeText(String(text ?? ''));
+		return true;
+	});
+
+	// The HTTP listener is controlled from the window only. Copying the token
+	// happens here, so the token itself never enters the page.
+	handle('listener:get', () => listener.status());
+	handle('listener:set', (input) => listener.set(input));
+	handle('listener:replaceToken', () => listener.replaceToken());
+	handle('listener:copy', async (what) => {
+		clipboard.writeText(await listener.textToCopy(what));
 		return true;
 	});
 }
