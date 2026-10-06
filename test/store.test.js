@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -382,4 +382,65 @@ test('backups made in the same instant are still kept newest-first', async () =>
 	assert.equal(backups.length, 2);
 	assert.ok(read(dir, backups[0]).includes('replace: "one"'));
 	assert.ok(read(dir, backups[1]).includes('replace: "two"'));
+});
+
+test('a write that would make the file too large to open again is refused', async () => {
+	const { matchDir, backupDir } = sandbox();
+	const store = createStore({ matchDir, backupDir, maxFileBytes: 2048 });
+	const before = read(matchDir, 'base.yml');
+	const file = await store.readFile(local('base.yml'));
+	const big = 'x'.repeat(3000);
+	await rejectsWithCode(store.saveRaw(local('base.yml'), { text: `matches:\n  - trigger: ":a"\n    replace: "${big}"\n`, version: file.version }), 'TOO_LARGE');
+	await rejectsWithCode(store.createMatch(local('base.yml'), { match: { trigger: ':big', replace: big }, version: file.version }), 'TOO_LARGE');
+	await rejectsWithCode(store.updateMatch(local('base.yml'), { index: 0, match: { trigger: ';hello', replace: big }, version: file.version }), 'TOO_LARGE');
+	assert.equal(read(matchDir, 'base.yml'), before);
+	assert.equal(existsSync(join(backupDir, 'local', 'base.yml')), false);
+	// Still open, still editable: the refusal left nothing behind.
+	const again = await store.readFile(local('base.yml'));
+	assert.deepEqual([again.unreadable, again.version], [undefined, file.version]);
+});
+
+test('a description the header cannot hold is refused when creating a file, with the reason', async () => {
+	const { store, matchDir } = sandbox();
+	await assert.rejects(store.createFile({ name: 'work.yml', description: 'prefix: x' }), (error) => {
+		assert.equal(error.code, 'INVALID');
+		assert.match(error.message, /description cannot start with/);
+		return true;
+	});
+	assert.equal(existsSync(join(matchDir, 'work.yml')), false);
+});
+
+test('reading one file that cannot be opened describes it instead of failing', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {
+	const { store, matchDir } = sandbox();
+	const path = join(matchDir, 'base.yml');
+	chmodSync(path, 0o000);
+	try {
+		const file = await store.readFile(local('base.yml'));
+		assert.deepEqual([file.unreadable, file.readOnly, file.matches, file.parseErrors], [true, true, null, ['This file cannot be read: permission denied.']]);
+		await rejectsWithCode(store.saveRaw(local('base.yml'), { text: 'matches: []\n', version: file.version }), 'READ_ONLY');
+		await rejectsWithCode(store.deleteFile(local('base.yml'), { version: file.version }), 'READ_ONLY');
+	} finally {
+		chmodSync(path, 0o644);
+	}
+});
+
+test('a folder with a file name is described, not opened', async () => {
+	const { store, matchDir } = sandbox();
+	mkdirSync(join(matchDir, 'folder.yml'));
+	const file = await store.readFile(local('folder.yml'));
+	assert.deepEqual([file.unreadable, file.parseErrors], [true, ['This is a folder, not a file.']]);
+	await rejectsWithCode(store.saveRaw(local('folder.yml'), { text: 'matches: []\n', version: '' }), 'READ_ONLY');
+	assert.equal(statSync(join(matchDir, 'folder.yml')).isDirectory(), true);
+});
+
+test('file names with control characters are refused', async () => {
+	const { store, matchDir } = sandbox();
+	const before = readdirSync(matchDir).sort();
+	// A line break, a tab, an escape and a delete character.
+	for (const code of [10, 9, 27, 127]) {
+		const name = `a${String.fromCharCode(code)}b.yml`;
+		await rejectsWithCode(store.createFile({ name }), 'INVALID_NAME');
+		await rejectsWithCode(store.readFile(local(name)), 'INVALID_NAME');
+	}
+	assert.deepEqual(readdirSync(matchDir).sort(), before);
 });

@@ -29,13 +29,22 @@ export class StoreError extends Error {
 const MANIFEST = '_manifest.yml';
 const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+// Line breaks, tabs and the like: legal in a file name on most systems, and
+// never what anyone meant to type.
+const hasControlCharacter = (name) =>
+	[...name].some((character) => {
+		const code = character.codePointAt(0);
+		return code < 0x20 || code === 0x7f;
+	});
+
 function isSafeFileName(name) {
 	return (
 		typeof name === 'string' &&
 		name.length > 0 &&
 		name.length <= 255 &&
 		!name.startsWith('.') &&
-		!/[\\/\0]/.test(name) &&
+		!/[\\/]/.test(name) &&
+		!hasControlCharacter(name) &&
 		/\.ya?ml$/i.test(name)
 	);
 }
@@ -109,30 +118,37 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 	const unreadable = (ref, id, stat, message) =>
 		describe(ref, id, stat, { matchCount: null, parseErrors: [message], matches: null, text: '', readOnly: true, unreadable: true });
 
+	const megabytes = Math.round((maxFileBytes / MEGABYTE) * 10) / 10;
+
 	async function load(ref) {
 		const { id, filePath } = resolve(ref);
 		const gone = () => new StoreError('NOT_FOUND', `${ref.name} is no longer in the match folder.`);
 		if (ref.source === 'package' && !(await insidePackages(filePath))) throw gone();
 
+		// A file that is there but cannot be opened is described, not thrown:
+		// asked for on its own it answers as it does in the list of files.
+		const refused = (error, stat) => {
+			if (error.code === 'ENOENT') throw gone();
+			if (Object.hasOwn(READ_FAILURES, error.code)) return unreadable(ref, id, stat, READ_FAILURES[error.code]);
+			throw error;
+		};
+
 		let stat;
 		try {
 			stat = await fs.stat(filePath);
 		} catch (error) {
-			if (error.code === 'ENOENT') throw gone();
-			throw error;
+			return refused(error, null);
 		}
-		if (!stat.isFile()) throw Object.assign(new Error('Not a file'), { code: 'EISDIR' });
+		if (!stat.isFile()) return unreadable(ref, id, stat, READ_FAILURES.EISDIR);
 		if (stat.size > maxFileBytes) {
-			const limit = Math.round((maxFileBytes / MEGABYTE) * 10) / 10;
-			return unreadable(ref, id, stat, `This file is too large to open here (over ${limit} MB).`);
+			return unreadable(ref, id, stat, `This file is too large to open here (over ${megabytes} MB).`);
 		}
 
 		let bytes;
 		try {
 			bytes = await fs.readFile(filePath);
 		} catch (error) {
-			if (error.code === 'ENOENT') throw gone();
-			throw error;
+			return refused(error, stat);
 		}
 		// Text in another encoding would be damaged by reading and writing it
 		// as UTF-8, so such a file is shown but never rewritten.
@@ -355,6 +371,11 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 			}
 			if (nextText === current.text) return current;
 
+			// Saved, the file could not be opened here again, or changed back.
+			if (Buffer.byteLength(nextText) > maxFileBytes) {
+				throw new StoreError('TOO_LARGE', `That would make ${ref.name} larger than ${megabytes} MB, which is too large to open here.`);
+			}
+
 			const errors = parseMatchFile(nextText).errors;
 			if (errors.length) throw new StoreError('PARSE_ERROR', errors.join(' '));
 
@@ -382,10 +403,16 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		async createFile({ name, description = '', prefix = '' } = {}) {
 			const ref = { source: 'local', name };
 			const { filePath } = resolve(ref);
+			let text;
+			try {
+				text = newFileText({ description, prefix });
+			} catch (error) {
+				throw new StoreError('INVALID', error.message);
+			}
 			await fs.mkdir(matchDir, { recursive: true });
 			const taken = (await fs.readdir(matchDir)).some((existing) => existing.toLowerCase() === name.toLowerCase());
 			if (taken) throw new StoreError('EXISTS', `A file named ${name} already exists.`);
-			await fs.writeFile(filePath, newFileText({ description, prefix }), { flag: 'wx' });
+			await fs.writeFile(filePath, text, { flag: 'wx' });
 			return load(ref);
 		},
 
