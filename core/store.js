@@ -37,7 +37,7 @@ const hasControlCharacter = (name) =>
 		return code < 0x20 || code === 0x7f;
 	});
 
-function isSafeFileName(name) {
+export function isSafeFileName(name) {
 	return (
 		typeof name === 'string' &&
 		name.length > 0 &&

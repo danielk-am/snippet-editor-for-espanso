@@ -37,7 +37,7 @@ const PATTERNS = [
 	['identity', /please tell me who you are|author identity unknown|empty ident name|unable to auto-detect email/i],
 	['denied', /\[remote rejected\]|permission to \S+ denied|protected branch|hook declined|deny updating|returned error: 403/i],
 	['auth', /could not read username|could not read password|authentication failed|permission denied \(publickey|terminal prompts disabled|host key verification failed|invalid username or password|returned error: 401/i],
-	['unreachable', /repository not found|does not appear to be a git repository|could not resolve host|could not read from remote repository|unable to access|connection refused|connection timed out|network is unreachable|returned error: 404/i],
+	['unreachable', /repository not found|repository '.*' does not exist|does not appear to be a git repository|could not resolve host|could not read from remote repository|unable to access|connection refused|connection timed out|network is unreachable|returned error: 404/i],
 ];
 
 function explain(stderr) {

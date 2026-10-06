@@ -93,6 +93,7 @@ test('each way git fails is told apart and worded plainly', posix, async () => {
 		['unreachable', 'remote: Repository not found.\nfatal: repository not found'],
 		['unreachable', "fatal: unable to access 'https://github.invalid/a/b.git/': Could not resolve host: github.invalid"],
 		['unreachable', "fatal: '/tmp/nowhere.git' does not appear to be a git repository"],
+		['unreachable', "fatal: repository '/tmp/nowhere.git' does not exist"],
 		['identity', 'Author identity unknown\n\n*** Please tell me who you are.\n\nfatal: unable to auto-detect email address (got x@y.(none))'],
 		['denied', " ! [remote rejected] snippet-editor/x -> snippet-editor/x (pre-receive hook declined)\nerror: failed to push some refs to 'github.com:acme/team.git'"],
 		['denied', "remote: Permission to acme/team.git denied to someone.\nfatal: unable to access 'https://github.com/acme/team.git/': The requested URL returned error: 403"],
