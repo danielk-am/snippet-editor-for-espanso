@@ -272,7 +272,7 @@ function App() {
 	const openMatch = routeFile && route.view === 'snippet' && Number.isInteger(route.index) ? routeFile.matches?.[route.index] : null;
 	const chatContext = routeFile ? { fileId: routeFile.id, fileName: routeFile.name, ...(openMatch ? { index: route.index, trigger: matchTriggers(openMatch)[0] ?? '' } : {}) } : null;
 
-	return html`<div class="app" data-sidebar=${sidebarState} data-chat=${chatState} style=${{ '--sidebar-width': `${width}px`, '--chat-width': `${chatPrefs.width}px` }}>
+	return html`<div class="app" data-sidebar=${sidebarState} data-chat=${chatState} data-chat-covers=${chatPrefs.open && chatSheet ? '' : undefined} style=${{ '--sidebar-width': `${width}px`, '--chat-width': `${chatPrefs.width}px` }}>
 		<${Sidebar}
 			state=${state}
 			route=${route}

@@ -7,11 +7,13 @@ import { Badge, Button } from '../lib/ui.js';
 
 const ICONS = { add: 'plus', update: 'pencil', delete: 'trash', 'create-file': 'file', 'replace-file': 'code', install: 'download', send: 'pull-request' };
 const SHOWN = 14;
+// Opened up, a card still shows only so much. The file itself shows the rest.
+const MOST = 400;
 const SIGN = { add: '+', remove: '−', same: ' ' };
 
 function Lines({ rows }) {
 	const [all, setAll] = useState(false);
-	const visible = all ? rows : rows.slice(0, SHOWN);
+	const visible = rows.slice(0, all ? MOST : SHOWN);
 	return html`<div class="proposal__diff">
 		<div class="proposal__rows" role="group" aria-label="What would change">
 			${visible.map((row) =>
@@ -25,7 +27,8 @@ function Lines({ rows }) {
 							</div>`
 			)}
 		</div>
-		${rows.length > SHOWN && html`<button class="link proposal__more" onClick=${() => setAll(!all)}>${all ? 'Show less' : `Show all ${rows.length} lines`}</button>`}
+		${all && rows.length > MOST && html`<p class="proposal__note">${(rows.length - MOST).toLocaleString('en-US')} more lines are not shown here.</p>`}
+		${rows.length > SHOWN && html`<button class="link proposal__more" onClick=${() => setAll(!all)}>${all ? 'Show less' : `Show ${rows.length > MOST ? `the first ${MOST} of ${rows.length.toLocaleString('en-US')}` : `all ${rows.length}`} lines`}</button>`}
 	</div>`;
 }
 

@@ -1842,6 +1842,7 @@ li:first-child > .file-row {
   width: 8px;
   cursor: col-resize;
   touch-action: none;
+  -webkit-app-region: no-drag;
 }
 
 .chat__resize::after {
@@ -2590,6 +2591,12 @@ li:first-child > .file-row {
 
   [data-platform='darwin'] .chat__header {
     padding-left: 84px;
+  }
+
+  /* What the sheet covers is out of reach of the keyboard too. */
+  .app[data-chat-covers] .main,
+  .app[data-chat-covers] .sidebar {
+    visibility: hidden;
   }
 }
 

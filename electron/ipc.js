@@ -103,7 +103,9 @@ export function registerIpc({ ipcMain, service, router, listener, chat, getWindo
 	handle('chat:status', () => chat.status());
 	handle('chat:send', (input) => chat.send(input));
 	handle('chat:stop', (turnId) => {
-		chat.stop(String(turnId ?? ''));
+		// With no name, whatever is under way: a window that has just loaded.
+		if (turnId === null || turnId === undefined) chat.stopAny();
+		else chat.stop(String(turnId));
 		return true;
 	});
 	handle('chat:apply', (id) => chat.apply(String(id ?? '')));

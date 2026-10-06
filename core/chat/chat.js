@@ -26,14 +26,16 @@ import { createRunner } from './run.js';
 // three endings, nothing of it is left running or on disk.
 
 const LABEL = { claude: 'Claude Code', codex: 'Codex', ollama: 'Ollama' };
-const LIMITS = { idleMs: 120_000, totalMs: 600_000, maxText: 1_000_000 };
+const LIMITS = { idleMs: 120_000, totalMs: 600_000, maxText: 1_000_000, statusMs: 60_000 };
+// An answer that ended this way says the backend itself needs looking at again.
+const BACKEND_FAULTS = new Set(['SIGNED_OUT', 'MISSING', 'OLD', 'NOT_RUNNING']);
 const TOO_LONG = { type: 'error', code: 'TOO_LONG', message: 'The answer was too long, so it was stopped.' };
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const count = (number) => number.toLocaleString('en-US');
 
 export function createChat({ service, router, dataDir, mcp, emit, backends = createBackends(), runner = createRunner(), ollama = createOllama(), log = console.error, limits = {} }) {
-	const { idleMs, totalMs, maxText } = { ...LIMITS, ...limits };
+	const { idleMs, totalMs, maxText, statusMs } = { ...LIMITS, ...limits };
 	const chatDir = path.join(dataDir, 'chat');
 	// Where the programs run: a folder with nothing in it, so no file there
 	// can hand them instructions or tools.
@@ -41,6 +43,14 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 	let active = null;
 	let closed = false;
 	let prepared = null;
+	// What the backends last said, and when. Looking takes over half a second,
+	// so a message uses a look from the last minute.
+	let known = null;
+	const look = async () => {
+		const list = await backends.status();
+		known = { at: Date.now(), list };
+		return list;
+	};
 
 	const proposals = createProposals({
 		router,
@@ -160,13 +170,14 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			log(error);
 			ending = { type: 'error', code: 'ERROR', message: 'Something went wrong inside the app.' };
 		}
+		if (BACKEND_FAULTS.has(ending.code)) known = null;
 		// Free before the ending is told, so the next message can follow it at once.
 		if (active === turn) active = null;
 		emit({ turnId: turn.id, ...ending });
 	}
 
 	return {
-		status: () => backends.status(),
+		status: look,
 
 		async send(input) {
 			if (closed) throw fail('CLOSED', 'The app is closing.');
@@ -182,7 +193,8 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			const turn = { id: randomBytes(8).toString('hex'), stopped: false, stop: () => {}, finished: null };
 			active = turn;
 			try {
-				const entry = (await backends.status()).find((item) => item.id === id);
+				const list = known && Date.now() - known.at < statusMs ? known.list : await look();
+				const entry = list.find((item) => item.id === id);
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
 				if (id === 'ollama' && !entry.models.some((model) => model.name === input.model)) throw fail('INVALID', "Choose one of Ollama's models first.");
 			} catch (error) {
@@ -196,6 +208,14 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 
 		stop(turnId) {
 			if (!active || active.id !== turnId) return;
+			active.stopped = true;
+			active.stop();
+		},
+
+		// For a window that has just loaded: it does not know the name of an
+		// answer its predecessor started, and nothing is listening for it.
+		stopAny() {
+			if (!active) return;
 			active.stopped = true;
 			active.stop();
 		},

@@ -237,6 +237,11 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 		}
 	};
 
+	// An answer the window before this one left under way has nobody to hear it.
+	useEffect(() => {
+		api.chatStop(null).catch(() => {});
+	}, []);
+
 	useEffect(
 		() =>
 			api.on('chat:event', (event) => {

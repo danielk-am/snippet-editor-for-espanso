@@ -28,6 +28,7 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 		ollama: ready('ollama', 'Ollama', { models: [{ name: 'qwen3:8b', cloud: false }] }),
 		...status,
 	};
+	const checks = { count: 0 };
 	const chat = createChat({
 		service: api.service,
 		router: createRouter({ service: api.service, log: () => {} }),
@@ -37,7 +38,13 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 			events.push(event);
 			tap(event);
 		},
-		backends: { status: async () => Object.values(backends), locate: async () => program },
+		backends: {
+			status: async () => {
+				checks.count += 1;
+				return Object.values(backends);
+			},
+			locate: async () => program,
+		},
 		ollama: ollama.ollama,
 		log: () => {},
 		...(limits ? { limits } : {}),
@@ -57,7 +64,7 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 	const ask = (backend, text, extra = {}) => answer({ backend, messages: [{ role: 'user', text }], ...extra });
 	const chatDir = join(api.dataDir, 'chat');
 	const left = () => (existsSync(chatDir) ? readdirSync(chatDir).filter((name) => name !== 'empty') : []);
-	return { ...api, chat, events, answer, ask, ollama, left, chatDir, read: (name) => readFileSync(join(api.matchDir, name), 'utf8') };
+	return { ...api, chat, events, answer, ask, ollama, left, chatDir, checks, backends, read: (name) => readFileSync(join(api.matchDir, name), 'utf8') };
 }
 
 const textOf = (events) => events.filter((event) => event.type === 'text').map((event) => event.text).join('');
@@ -196,7 +203,49 @@ test('the moment an answer is reported as ended, the next message can be sent', 
 	while (context.events.filter((event) => event.type === 'done').length < 2) await wait(20);
 });
 
+test('the backends are not all checked again for every message: a check from the last minute is used', async (t) => {
+	const context = await setup(t);
+	const hello = { backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] };
+	await context.answer(hello);
+	await context.answer(hello);
+	assert.equal(context.checks.count, 1);
+	// "Check again" in the panel always looks.
+	await context.chat.status();
+	assert.equal(context.checks.count, 2);
+	await context.answer(hello);
+	assert.equal(context.checks.count, 2);
+
+	// With no memory at all, every message looks first.
+	const fresh = await setup(t, { limits: { statusMs: 0 } });
+	await fresh.answer(hello);
+	await fresh.answer(hello);
+	assert.equal(fresh.checks.count, 2);
+});
+
+test('after an answer fails because of the backend itself, the next message looks again', options, async (t) => {
+	const context = await setup(t);
+	await context.ask('codex', 'SAY fine');
+	assert.equal(context.checks.count, 1);
+	await context.ask('codex', 'SIGNEDOUT');
+	// It is found signed out when looked at again, and the message is refused with what it needs.
+	context.backends.codex = { ...context.backends.codex, ready: false, state: 'signed-out', message: 'Codex is not signed in. Run this in a terminal, then press Check again.' };
+	await assert.rejects(context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY again' }] }), (error) => error.code === 'NOT_READY');
+	assert.equal(context.checks.count, 2);
+});
+
 // --- stopping ------------------------------------------------------------------------------
+
+test('a window that has just loaded stops whatever answer the last one left under way', options, async (t) => {
+	const { chat, events, left } = await setup(t);
+	chat.stopAny();
+	await chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY one\nHANG' }] });
+	while (!events.some((event) => event.type === 'text')) await wait(20);
+	chat.stopAny();
+	while (!events.some((event) => event.type === 'stopped')) await wait(20);
+	assert.deepEqual(left(), []);
+	chat.stopAny();
+});
+
 
 test('Stop ends the program and its MCP server, closes the listener, and keeps what was said', options, async (t) => {
 	const { chat, events, left } = await setup(t);
