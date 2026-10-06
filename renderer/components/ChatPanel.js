@@ -96,9 +96,14 @@ const STARTERS = [
 
 // --- who answers ----------------------------------------------------------------------------
 
-function Backends({ status, chosen, model, checking, onChoose, onModel, onCheck }) {
+function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, onCheck }) {
+	const lead = chosen
+		? 'Choose who answers.'
+		: wanted
+			? `${wanted.label} is not ready. Fix it and press Check again, or choose another.`
+			: 'The assistant answers through one of these. None is ready yet.';
 	return html`<div class="chat__setup">
-		<p class="chat__lead">${chosen ? 'Choose who answers.' : 'The assistant answers through one of these. None is ready yet.'}</p>
+		<p class="chat__lead">${lead}</p>
 		<ul class="backends">
 			${status.map(
 				(backend) => html`<li class="backend" data-ready=${backend.ready ? '' : undefined}>
@@ -155,15 +160,24 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	const box = useRef(null);
 	const drag = useRef(null);
 	const pinned = useRef(true);
+	const menuButton = useRef(null);
 
 	const conversation = conversations.find((item) => item.id === currentId) ?? null;
 
 	// --- keeping it ---------------------------------------------------------
 
+	const latest = useRef(null);
+	latest.current = { prefs, conversations, current: currentId };
 	useEffect(() => {
-		const timer = setTimeout(() => saveChat({ prefs, conversations, current: currentId }), 400);
+		const timer = setTimeout(() => saveChat(latest.current), 400);
 		return () => clearTimeout(timer);
 	}, [prefs, conversations, currentId]);
+	// A window that is closing or reloading saves what it has at once.
+	useEffect(() => {
+		const save = () => saveChat(latest.current);
+		window.addEventListener('pagehide', save);
+		return () => window.removeEventListener('pagehide', save);
+	}, []);
 
 	// --- who answers --------------------------------------------------------
 
@@ -182,11 +196,23 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	}, [open]);
 
 	const ready = (status ?? []).filter((backend) => backend.ready);
-	const chosen = ready.find((backend) => backend.id === prefs.backend) ?? ready[0] ?? null;
-	const model = chosen?.id === 'ollama' ? (chosen.models.find((item) => item.name === prefs.model) ?? chosen.models[0]) : null;
+	// The one the person chose, or, before any was chosen, the first that is
+	// ready. A chosen one that is not ready is never quietly swapped for
+	// another: a message would then go somewhere the person did not pick.
+	const wanted = (status ?? []).find((backend) => backend.id === prefs.backend) ?? null;
+	const chosen = wanted ? (wanted.ready ? wanted : null) : (ready[0] ?? null);
+	// With no model chosen, one that stays on this computer comes first.
+	const model = chosen?.id === 'ollama' ? (chosen.models.find((item) => item.name === prefs.model) ?? chosen.models.find((item) => !item.cloud) ?? chosen.models[0]) : null;
 	const sendsTo = !chosen ? null : chosen.id === 'ollama' ? (model?.cloud ? 'Ollama' : null) : chosen.sendsTo;
 	const mustTell = Boolean(sendsTo) && !prefs.told.includes(chosen.id);
 	const provider = chosen ? (model ? `Ollama · ${model.name}` : chosen.label) : status === null ? 'Checking…' : 'Not set up';
+
+	// The first one found ready becomes the person's choice there and then,
+	// shown in the footer. From then on it is theirs: if it stops being ready,
+	// the panel says so, and does not move on to another by itself.
+	useEffect(() => {
+		if (!prefs.backend && chosen) setPrefs({ backend: chosen.id });
+	}, [prefs.backend, chosen?.id]);
 
 	// --- an answer arriving -------------------------------------------------
 
@@ -258,7 +284,8 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 
 	async function send(text) {
 		const body = text.trim();
-		if (!body || working || !chosen) return;
+		// Not before the person has read where their text will go.
+		if (!body || working || !chosen || mustTell) return;
 		setNotice(null);
 		setHeld(null);
 		const question = { id: newId(), role: 'user', text: body };
@@ -372,14 +399,18 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 
 	useEffect(() => {
 		if (!menu) return undefined;
-		const close = (event) => {
-			if (event.type === 'keydown' ? event.key === 'Escape' : !event.target.closest?.('.chat__menu, .chat__menu-button')) setMenu(false);
+		// Opened, the menu takes the keyboard. Escape gives it back to its button.
+		menuButton.current?.querySelector('[role="menuitem"]')?.focus();
+		const away = (event) => {
+			if (event.type === 'keydown') {
+				if (event.key === 'Escape') closeMenu();
+			} else if (!event.target.closest?.('.chat__menu-wrap')) setMenu(false);
 		};
-		window.addEventListener('pointerdown', close);
-		window.addEventListener('keydown', close);
+		window.addEventListener('pointerdown', away);
+		window.addEventListener('keydown', away);
 		return () => {
-			window.removeEventListener('pointerdown', close);
-			window.removeEventListener('keydown', close);
+			window.removeEventListener('pointerdown', away);
+			window.removeEventListener('keydown', away);
 		};
 	}, [menu]);
 
@@ -389,6 +420,31 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 		if (next === undefined) return;
 		event.preventDefault();
 		setWidth(next);
+	};
+
+	// Closed from inside, the keyboard goes back to the button that opens it.
+	const close = () => {
+		onClose();
+		requestAnimationFrame(() => document.querySelector('.topbar [aria-pressed]')?.focus());
+	};
+	// To a page: when the assistant covers the page, it makes way first.
+	const leaveFor = (target) => {
+		if (sheet || prefs.wide) onClose();
+		navigate(target);
+	};
+
+	const closeMenu = () => {
+		setMenu(false);
+		menuButton.current?.querySelector('button')?.focus();
+	};
+	const onMenuKey = (event) => {
+		const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')];
+		const at = items.indexOf(document.activeElement);
+		const to = { ArrowDown: (at + 1) % items.length, ArrowUp: (at - 1 + items.length) % items.length, Home: 0, End: items.length - 1 }[event.key];
+		if (to !== undefined) {
+			event.preventDefault();
+			items[to].focus();
+		} else if (event.key === 'Tab') setMenu(false);
 	};
 
 	const startNew = () => {
@@ -455,6 +511,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 		body = html`<${Backends}
 			status=${status ?? []}
 			chosen=${chosen}
+			wanted=${chosen ? null : wanted}
 			model=${model}
 			checking=${checking}
 			onChoose=${(id) => setPrefs({ backend: id })}
@@ -490,8 +547,8 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 								blocked=${held === card.id ? 'Save or discard your edits to this file first.' : null}
 								onApply=${() => applyCard(conversation.id, message.id, card)}
 								onDismiss=${() => dismissCard(conversation.id, message.id, card)}
-								onShow=${() => navigate({ view: 'file', fileId: card.fileId })}
-								onOpenSettings=${() => navigate({ view: 'settings' })}
+								onShow=${() => leaveFor({ view: 'file', fileId: card.fileId })}
+								onOpenSettings=${() => leaveFor({ view: 'settings' })}
 								onOpenLink=${() => api.openTeamLink(card.link).catch((error) => setNotice(error.message))}
 							/>`
 						: html`<${Markdown} text=${text} />`
@@ -533,10 +590,10 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 			<h2 class="chat__title">${title}</h2>
 			<span class="spacer"></span>
 			<${IconButton} label="New conversation" icon="plus" disabled=${working} onClick=${startNew} />
-			<div class="chat__menu-wrap">
+			<div class="chat__menu-wrap" ref=${menuButton}>
 				<${IconButton} class="chat__menu-button" label="Assistant options" icon="more" aria-haspopup="menu" aria-expanded=${menu ? 'true' : 'false'} onClick=${() => setMenu(!menu)} />
 				${menu &&
-				html`<div class="chat__menu" role="menu">
+				html`<div class="chat__menu" role="menu" aria-label="Assistant options" onKeyDown=${onMenuKey}>
 					<button
 						role="menuitem"
 						onClick=${() => {
@@ -569,15 +626,14 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 						role="menuitem"
 						onClick=${() => {
 							setMenu(false);
-							if (sheet || prefs.wide) onClose();
-							navigate({ view: 'settings' });
+							leaveFor({ view: 'settings' });
 						}}
 					>
 						<${Icon} name="settings" />Settings
 					</button>
 				</div>`}
 			</div>
-			<${IconButton} label="Close the assistant" icon="x" onClick=${onClose} />
+			<${IconButton} label="Close the assistant" icon="x" onClick=${close} />
 		</header>
 
 		<div
@@ -640,7 +696,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 			></textarea>
 			<div class="chat__send">
 				<span class="chat__hint">Enter to send · Shift+Enter for a new line</span>
-				<${Button} type="submit" size="sm" icon="send" disabled=${!chosen || working || !draft.trim()}>Send<//>
+				<${Button} type="submit" size="sm" icon="send" disabled=${!chosen || working || mustTell || !draft.trim()}>Send<//>
 			</div>
 		</form>
 

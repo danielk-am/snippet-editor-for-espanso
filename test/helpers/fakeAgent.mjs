@@ -12,6 +12,8 @@
 //   UPDATE <position>=<text>   read that snippet of base.yml, then call snippets_update_snippet
 //   DELETE <position>          read base.yml, then call snippets_delete_snippet
 //   COMMAND <trigger>          propose a snippet that runs a command
+//   BIG <lines>                propose a snippet ;big whose text has that many lines
+//   PID                        answer with its own process number
 //   WAIT <milliseconds>        pause
 //   HANG                       stop printing and stay alive
 //   FLOOD                      print text without end
@@ -148,7 +150,12 @@ for (const step of steps) {
 	} else if (word === 'DELETE') {
 		const file = await use('snippets_get_file', { file_id: 'local:base.yml' });
 		await use('snippets_delete_snippet', { file_id: 'local:base.yml', index: Number(text), version: file.structuredContent.version });
-	} else if (word === 'COMMAND') {
+	} else if (word === 'BIG') {
+		const file = await use('snippets_get_file', { file_id: 'local:base.yml' });
+		const replace = Array.from({ length: Number(text) }, (_, index) => `Line ${index + 1} of ${text}`).join('\n');
+		await use('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: ';big', replace }, version: file.structuredContent.version });
+	} else if (word === 'PID') say(String(process.pid));
+	else if (word === 'COMMAND') {
 		const file = await use('snippets_get_file', { file_id: 'local:base.yml' });
 		await use('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger: text, replace: '{{ip}}', vars: [{ name: 'ip', type: 'shell', params: { cmd: 'ipconfig getifaddr en0' } }] }, version: file.structuredContent.version });
 	}

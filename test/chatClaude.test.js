@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { claudeArgs, claudeMcpConfig, createClaudeParser } from '../core/chat/claudeCode.js';
 
 const fixture = (name) => readFileSync(fileURLToPath(new URL(`./fixtures/chat/${name}`, import.meta.url)), 'utf8').split('\n').filter(Boolean);
-const run = (lines, parser = createClaudeParser()) => lines.flatMap((line) => parser.push(typeof line === 'string' ? line : JSON.stringify(line)));
+const NAMES = ['search', 'list_files', 'get_file', 'get_snippet', 'list_team_packages', 'add_snippet', 'update_snippet', 'delete_snippet', 'create_file', 'replace_file_yaml', 'install_team_package', 'propose_to_team'].map((name) => `snippets_${name}`);
+const run = (lines, parser = createClaudeParser({ tools: NAMES })) => lines.flatMap((line) => parser.push(typeof line === 'string' ? line : JSON.stringify(line)));
 const textOf = (events) => events.filter((event) => event.type === 'text').map((event) => event.text).join('');
 
 const TOOLS = ['search', 'list_files', 'get_file', 'get_snippet', 'list_team_packages', 'add_snippet', 'update_snippet', 'delete_snippet', 'create_file', 'replace_file_yaml', 'install_team_package', 'propose_to_team'].map((name) => `mcp__snippets__snippets_${name}`);
@@ -132,7 +133,7 @@ test('a tool is announced once, and ends as done or failed', () => {
 });
 
 test('a tool that is not one of the snippet tools, used in the middle of an answer, stops the answer', () => {
-	for (const name of ['Bash', 'mcp__other__snippets_search', 'mcp__snippets', 'WebFetch', 7, undefined]) {
+	for (const name of ['Bash', 'mcp__other__snippets_search', 'mcp__snippets', 'mcp__snippets__run_anything', 'mcp__snippets__evil__snippets_search', 'WebFetch', 7, undefined]) {
 		const events = run([init(), start('m1'), delta('Before.'), assistant('m1', [{ type: 'tool_use', id: 't9', name, input: {} }]), delta('After.'), success('After.')]);
 		assert.deepEqual(events, [{ type: 'text', text: 'Before.' }, { type: 'error', code: 'UNSAFE', message: `Claude Code used a tool this app did not give it (${String(name)}), so it was stopped.` }], String(name));
 	}
@@ -175,6 +176,9 @@ test('if Claude Code starts with any tool the app did not give it, or without th
 	assert.deepEqual(run([init({ tools: [], mcp_servers: [{ name: 'snippets', status: 'failed' }] })]), [{ type: 'error', code: 'NO_TOOLS', message: 'Claude Code could not start the snippet tools.' }]);
 	assert.deepEqual(run([init({ tools: [], mcp_servers: [] })]), [{ type: 'error', code: 'NO_TOOLS', message: 'Claude Code could not start the snippet tools.' }]);
 	assert.deepEqual(run([init({ tools: 'odd', mcp_servers: null })])[0].code, 'NO_TOOLS');
+	// A name that only starts like one of the app's: another server, or a tool the app does not have.
+	assert.deepEqual(run([init({ tools: [...TOOLS, 'mcp__snippets__evil__run'] })])[0].message, 'Claude Code started with tools this app did not give it (mcp__snippets__evil__run), so it was stopped.');
+	assert.equal(run([init({ tools: [...TOOLS, 'mcp__snippets__snippets_run_shell'] })])[0].code, 'UNSAFE');
 	// The server says it is there, and no tool came with it.
 	assert.deepEqual(run([init({ tools: [] })])[0].code, 'NO_TOOLS');
 	// After such an error nothing else is passed on.
@@ -187,7 +191,7 @@ test('what is not a line of JSON, or not a kind of line the app knows, is skippe
 });
 
 test('only one ending is reported', () => {
-	const parser = createClaudeParser();
+	const parser = createClaudeParser({ tools: NAMES });
 	const events = run([init(), delta('Done.'), success('Done.'), success('Done.'), delta('late')], parser);
 	assert.deepEqual(events, [{ type: 'text', text: 'Done.' }, { type: 'done' }]);
 	assert.equal(parser.ended, true);

@@ -37,6 +37,8 @@ fs.mkdirSync(path.join(sandbox, 'userData'), { recursive: true });
 fs.writeFileSync(path.join(sandbox, 'userData', 'settings.json'), JSON.stringify({ apiPort }));
 
 const failures = [];
+// The process number of an answer left under way on purpose, looked for after the app has shut its backend down.
+let leftRunning = null;
 const consoleProblems = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const check = (condition, message) => {
@@ -115,14 +117,16 @@ async function run() {
 	// The assistant's backends are stand-ins: a script that starts the app's
 	// real MCP server and prints what Codex would. No model is called. Which
 	// of them is ready can be changed while the test runs.
-	const chatReady = { codex: false };
+	const chatReady = { codex: false, ollama: false };
 	const chatEntry = (id, label, state, extra = {}) => ({ id, label, ready: state === 'ready', state, message: '', command: null, sendsTo: null, models: [], ...extra });
 	const chatStatus = () => [
 		chatEntry('claude', 'Claude Code', 'missing', { sendsTo: 'Anthropic', message: 'Claude Code is not installed on this computer.' }),
 		chatReady.codex
 			? chatEntry('codex', 'Codex', 'ready', { sendsTo: 'OpenAI' })
 			: chatEntry('codex', 'Codex', 'signed-out', { sendsTo: 'OpenAI', message: 'Codex is not signed in. Run this in a terminal, then press Check again.', command: '/opt/tools/codex login' }),
-		chatEntry('ollama', 'Ollama', 'not-running', { message: 'Ollama is not answering on this computer. Open Ollama, then press Check again.' }),
+		chatReady.ollama
+			? chatEntry('ollama', 'Ollama', 'ready', { models: [{ name: 'in-the-cloud:cloud', cloud: true }, { name: 'on-this-computer:8b', cloud: false }] })
+			: chatEntry('ollama', 'Ollama', 'not-running', { message: 'Ollama is not answering on this computer. Open Ollama, then press Check again.' }),
 	];
 	const backend = await startBackend({
 		ipcMain,
@@ -664,6 +668,14 @@ async function run() {
 			await js(`${inChat('Check again')}.click()`);
 			await waitFor(`document.querySelector('.chat__starter')`, 'the starters once a backend is ready');
 			check(await js(`document.querySelector('.chat__notice')?.textContent.includes('Codex sends your messages, and the snippets it reads, to OpenAI')`), 'nothing said where the text goes');
+			// Until that has been read, nothing can be sent.
+			await js(`window.__ui.type('.chat__box', 'Sent before the notice was read')`);
+			await sleep(100);
+			check(await js(`${inChat('Send')}.disabled`), 'a message could be sent before the notice was read');
+			await js(`document.querySelector('.chat__box').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+			await sleep(150);
+			check(!(await js(`Boolean(document.querySelector('.msg'))`)), 'Enter sent a message before the notice was read');
+			await js(`window.__ui.type('.chat__box', '')`);
 			await js(`${inChat('OK')}.click()`);
 			await waitFor(`!document.querySelector('.chat__notice')`, 'the notice to go once read');
 			check((await js(`document.querySelector('.chat__provider').textContent`)) === 'Codex', 'the footer does not name who answers');
@@ -714,9 +726,35 @@ async function run() {
 			await waitFor(`document.querySelectorAll('.proposal[data-status="applied"]').length === 2`, 'the second card to be applied after the save');
 			check(onDisk('base.yml').includes('Edited while a card waits') && onDisk('base.yml').includes('  - trigger: ";held"\n    replace: "Held back"\n'), 'the saved edit and the applied card are not both in the file');
 
+			// Three cards in one answer: every row of each is on its card, a
+			// command says so, one is dismissed and the other two applied at once.
+			await ask('BIG 450\nCOMMAND :ip\nADD ;third=Third');
+			await answered(3);
+			const cardsOf = `[...${lastAnswer}.querySelectorAll('.proposal')]`;
+			check((await js(`${cardsOf}.length`)) === 3, 'three cards were not shown for three changes');
+			const bigRows = await js(`[...${cardsOf}[0].querySelectorAll('.diff-row--add .diff-row__text')].map((el) => el.textContent)`);
+			check(bigRows.length === 452 && bigRows.at(-1).trim() === 'Line 450 of 450', `a long change is not all on its card: ${bigRows.length} rows, ending ${JSON.stringify(bigRows.at(-1))}`);
+			check((await js(`${cardsOf}[0].querySelector('.proposal__count').textContent`)) === '452 lines added', 'the card does not say how much it would add');
+			check((await js(`${cardsOf}[1].querySelector('.proposal__warning')?.textContent.trim()`)) === 'Runs a command on your computer each time it is used.', 'a snippet that runs a command carried no warning');
+			await shot('19j-assistant-three-cards');
+			const beforeThree = onDisk('base.yml');
+			await js(`[...${cardsOf}[1].querySelectorAll('.btn')].find((el) => el.textContent.trim() === 'Dismiss').click()`);
+			await waitFor(`${cardsOf}[1].dataset.status === 'dismissed'`, 'the command card to be dismissed');
+			check(!(await js(`Boolean([...${cardsOf}[1].querySelectorAll('.btn')].find((el) => el.textContent.trim() === 'Apply'))`)), 'a dismissed card still offered Apply');
+			check(onDisk('base.yml') === beforeThree, 'dismissing a card changed the file');
+			await js(`${inChat('Apply all 2')}.click()`);
+			await waitFor(`${cardsOf}.filter((el) => el.dataset.status === 'applied').length === 2`, 'Apply all to apply both cards', 10000);
+			check(onDisk('base.yml').includes('  - trigger: ";big"') && onDisk('base.yml').includes('Line 450 of 450') && onDisk('base.yml').includes('  - trigger: ";third"') && !onDisk('base.yml').includes(':ip'), 'Apply all did not write exactly the two cards that were waiting');
+
+			// The assistant is told what became of its cards.
+			await ask('ARGS');
+			await answered(4);
+			const told = await js(`${lastAnswer}.querySelector('.md').textContent`);
+			check(told.includes('[Card shown to the person: Add a snippet to base.yml. Applied by the person.]') && told.includes('Dismissed by the person.'), 'the assistant was not told what happened to its cards');
+
 			// What an answer contains is shown as text, whatever it says.
 			await ask('SAY <img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script> [press](javascript:window.__pwned=1) **bold**');
-			await answered(3);
+			await answered(5);
 			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('<img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script> press (javascript:window.__pwned=1) bold')`), 'the answer was not shown as written');
 			check(await js(`window.__pwned === undefined && !${lastAnswer}.querySelector('img, script, a') && Boolean(${lastAnswer}.querySelector('strong'))`), 'an answer became markup');
 
@@ -731,7 +769,7 @@ async function run() {
 
 			// A backend that fails says why.
 			await ask('EXIT 3 You have hit your usage limit.');
-			await answered(5);
+			await answered(7);
 			check((await js(`${lastAnswer}.querySelector('.alert')?.textContent.trim()`)) === 'Codex stopped unexpectedly: You have hit your usage limit.', 'the failure was not shown');
 
 			// History, and a new conversation.
@@ -744,7 +782,56 @@ async function run() {
 			await waitFor(`document.querySelectorAll('.chat__conversation').length === 1`, 'the conversation in History');
 			await shot('19g-assistant-history');
 			await js(`document.querySelector('.chat__conversation').click()`);
-			await waitFor(`document.querySelectorAll('.msg--assistant').length === 5`, 'the conversation to come back');
+			await waitFor(`document.querySelectorAll('.msg--assistant').length === 7`, 'the conversation to come back');
+
+			// The one that was chosen stops being ready while another is. The
+			// panel says so. It does not quietly send to the other.
+			await js(`${inChat('Codex')}.click()`);
+			await waitFor(`document.querySelector('.backends')`, 'who answers');
+			await js(`[...document.querySelectorAll('.backend')].find((el) => el.textContent.includes('Codex')).querySelector('input').click()`);
+			chatReady.codex = false;
+			chatReady.ollama = true;
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`document.querySelector('.chat__lead')?.textContent === 'Codex is not ready. Fix it and press Check again, or choose another.'`, 'the panel to say the chosen backend is not ready');
+			check((await js(`document.querySelector('.chat__provider').textContent`)) === 'Not set up' && (await js(`document.querySelector('.chat__box').disabled`)), 'with the chosen backend gone, another was used without asking');
+			// Chosen now, Ollama starts on the model that stays on this computer.
+			await js(`[...document.querySelectorAll('.backend')].find((el) => el.textContent.includes('Ollama')).querySelector('input').click()`);
+			await waitFor(`document.querySelector('.chat__provider').textContent === 'Ollama · on-this-computer:8b'`, 'Ollama to start on its local model');
+			await shot('19k-assistant-choice');
+			// The other way round: Ollama, now the choice, goes away and Codex is back. Nothing is sent to Codex until it is chosen.
+			chatReady.codex = true;
+			chatReady.ollama = false;
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`document.querySelector('.chat__lead')?.textContent === 'Ollama is not ready. Fix it and press Check again, or choose another.'`, 'the panel to say Ollama is not ready');
+			check((await js(`document.querySelector('.chat__provider').textContent`)) === 'Not set up', 'with Ollama gone, Codex was used without asking');
+			await js(`[...document.querySelectorAll('.backend')].find((el) => el.textContent.includes('Codex')).querySelector('input').click()`);
+			await waitFor(`document.querySelector('.chat__provider').textContent === 'Codex'`, 'Codex to be chosen and ready again');
+			await js(`${inChat('Back to the conversation')}.click()`);
+
+			// The options menu by keyboard: it takes the keys, and gives them back.
+			await js(`${inChat('Assistant options')}.click()`);
+			await waitFor(`document.activeElement?.getAttribute('role') === 'menuitem' && document.activeElement.textContent.trim() === 'History'`, 'the menu to take the keyboard');
+			await js(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))`);
+			check((await js(`document.activeElement.textContent.trim()`)) === 'Who answers', 'the down arrow did not move through the menu');
+			await js(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+			check((await js(`document.activeElement.textContent.trim()`)) === 'Settings', 'End did not go to the last item');
+			await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+			await waitFor(`!document.querySelector('.chat__menu') && document.activeElement?.getAttribute('aria-label') === 'Assistant options'`, 'Escape to close the menu and return to its button');
+
+			// The window is reloaded while an answer is under way. The answer is
+			// stopped, the conversation comes back, and the next message goes through.
+			await ask('SAY Interrupted by a reload.\nHANG');
+			await waitFor(`document.querySelector('.chat__working')`, 'an answer under way before the reload');
+			await sleep(500);
+			const loaded = new Promise((resolve) => win.webContents.once('did-finish-load', resolve));
+			win.webContents.reload();
+			await loaded;
+			await js(HELPERS);
+			await waitFor(`document.querySelector('.chat:not([hidden]) .msg--assistant')`, 'the panel and its conversation after a reload');
+			check(await js(`[...document.querySelectorAll('.msg--assistant')].at(-1).querySelector('.msg__ending')?.textContent === 'Stopped.'`), 'the answer cut off by the reload does not say it was stopped');
+			await ask('SAY After the reload.');
+			await waitFor(`!document.querySelector('.chat__working') && [...document.querySelectorAll('.msg--assistant')].at(-1).textContent.includes('After the reload.')`, 'a message to be answered after the reload', 20000);
+			check(!(await js(`Boolean(document.querySelector('.chat__notice .alert--danger'))`)), `after a reload the next message was refused: ${await js(`document.querySelector('.chat__notice')?.textContent`)}`);
 
 			// In the dark, in a narrower window (where it covers the page), and closed again.
 			await js(`document.querySelector('.sidebar__footer [aria-label="Dark"]').click()`);
@@ -754,19 +841,55 @@ async function run() {
 			await sleep(300);
 			check(await js(`document.querySelector('.chat').getBoundingClientRect().width === window.innerWidth`), 'in a narrow window the assistant does not cover the page');
 			await shot('19i-assistant-sheet');
+			// From a card, "Show the file" goes to a page the sheet covers: the sheet makes way.
+			await js(`[...document.querySelectorAll('.chat .btn')].find((el) => el.textContent.trim() === 'Show the file').click()`);
+			await waitFor(`document.querySelector('.chat').hidden && document.querySelector('.snippet-list')`, 'the sheet to make way for the file');
+			check(await js(`getComputedStyle(document.querySelector('.main')).visibility === 'visible'`), 'the page stayed hidden after the sheet closed');
+			await js(`document.querySelector('.topbar [aria-pressed]').click()`);
+			await waitFor(`!document.querySelector('.chat').hidden`, 'the assistant to open again');
 			await js(`${inChat('Close the assistant')}.click()`);
 			await waitFor(`document.querySelector('.chat').hidden`, 'the assistant to close');
+			await waitFor(`document.activeElement?.getAttribute('aria-label') === 'Show the assistant'`, 'the keyboard to return to the button that opens the assistant');
 			win.setContentSize(1440, 900);
+			await sleep(200);
+
+			// Quitting with an answer under way: its program is stopped and nothing of it stays on disk.
+			await js(`document.querySelector('.topbar [aria-pressed]').click()`);
+			await waitFor(`!document.querySelector('.chat').hidden`, 'the assistant to open once more');
+			await ask('PID\nHANG');
+			await waitFor(`document.querySelector('.chat__working') && /^\\d+$/.test([...document.querySelectorAll('.msg--assistant')].at(-1).querySelector('.md')?.textContent ?? '')`, 'the stand-in to say its process number');
+			leftRunning = Number(await js(`[...document.querySelectorAll('.msg--assistant')].at(-1).querySelector('.md').textContent`));
+			check(fs.readdirSync(path.join(app.getPath('userData'), 'chat')).some((name) => name.startsWith('chat-')), 'an answer under way has no listener file');
 			await backend.service.saveSettings({ aiWrite: false });
 		});
 	}
 
 	await waitFor(`document.querySelectorAll('.toast').length === 0`, 'every toast to dismiss itself', 9000);
 
+	// The backend is shut down as the app shuts it down on quitting. An
+	// answer was left under way on purpose: its program must be gone, and
+	// nothing of it may stay on disk.
+	await backend.dispose();
+	if (leftRunning) {
+		const alive = () => {
+			try {
+				process.kill(leftRunning, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		for (let tries = 0; tries < 60 && alive(); tries += 1) await sleep(50);
+		check(!alive(), 'shutting the backend down left the program of an answer running');
+		const left = fs.readdirSync(path.join(app.getPath('userData'), 'chat')).filter((name) => name !== 'empty');
+		check(left.length === 0, `shutting the backend down left files behind: ${left.join(', ')}`);
+	} else if (process.platform !== 'win32') {
+		failures.push('no answer was left under way for the shutdown check');
+	}
+
 	check(consoleProblems.length === 0, `console problems: ${consoleProblems.join(' | ')}`);
 	fs.writeFileSync(path.join(artifacts, 'report.json'), JSON.stringify({ failures, consoleProblems }, null, 2));
 	console.log(failures.length ? `UI smoke: ${failures.length} failure(s)\n- ${failures.join('\n- ')}` : 'UI smoke: all checks passed');
-	await backend.dispose();
 	fs.rmSync(sandbox, { recursive: true, force: true });
 	clearTimeout(watchdog);
 	app.exit(failures.length ? 1 : 0);

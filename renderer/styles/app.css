@@ -2142,6 +2142,17 @@ li:first-child > .file-row {
   line-height: 1.6;
 }
 
+/* Every row of a change that is waiting, in a box that scrolls. */
+.proposal__rows--whole {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.proposal__count {
+  color: var(--ui-muted-foreground);
+  font-size: 12px;
+}
+
 .diff-row {
   display: flex;
   padding-right: 8px;

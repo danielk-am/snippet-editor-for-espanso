@@ -61,7 +61,9 @@ export function codexArgs({ cwd, system, mcp, sessionFile }) {
 }
 
 // Lines in, events out, the same events as for Claude Code.
-export function createCodexParser() {
+// `tools` are the names of the app's tools.
+export function createCodexParser({ tools: names = [] } = {}) {
+	const ours = new Set(names);
 	let ended = false;
 	let anyText = false;
 	let lastError = '';
@@ -96,7 +98,7 @@ export function createCodexParser() {
 			const unsafe = (what) => end({ type: 'error', code: 'UNSAFE', message: `Codex ${what}, so it was stopped.` });
 			if (Object.hasOwn(FORBIDDEN, item.type)) {
 				unsafe(`${FORBIDDEN[item.type]}, which this app does not allow`);
-			} else if (item.type === 'mcp_tool_call' && !(item.server === SERVER && typeof item.tool === 'string') && !(item.server === 'codex' && OWN_TOOLS.has(item.tool))) {
+			} else if (item.type === 'mcp_tool_call' && !(item.server === SERVER && ours.has(item.tool)) && !(item.server === 'codex' && OWN_TOOLS.has(item.tool))) {
 				unsafe(`used a tool this app did not give it (${String(item.server)}: ${String(item.tool)})`);
 			} else if (item.type !== 'agent_message' && item.type !== 'mcp_tool_call' && !QUIET.has(item.type)) {
 				unsafe(`did something this app does not know (${String(item.type)})`);

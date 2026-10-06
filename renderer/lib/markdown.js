@@ -13,6 +13,9 @@
 // of any text quick.
 const REACH = 1000;
 const MAX_DEPTH = 4;
+// How many marks in one stretch of text may turn out to open nothing before
+// the rest is taken as plain text. Each such mark costs a look ahead.
+const MISSES = 200;
 
 const runOf = (text, at, mark) => {
 	let end = at;
@@ -80,7 +83,7 @@ function linkAt(text, at) {
 	return null;
 }
 
-function inline(text, depth = 0) {
+function inline(text, depth = 0, budget = { misses: MISSES }) {
 	const parts = [];
 	let plain = '';
 	const flush = () => {
@@ -89,6 +92,11 @@ function inline(text, depth = 0) {
 	};
 
 	for (let at = 0; at < text.length; ) {
+		// Too many marks here opened nothing: the rest is plain text.
+		if (budget.misses <= 0) {
+			plain += text.slice(at);
+			break;
+		}
 		const char = text[at];
 
 		if (char === '\\' && at + 1 < text.length && /[\\`*_{}[\]()#+\-.!>~|]/.test(text[at + 1])) {
@@ -98,6 +106,7 @@ function inline(text, depth = 0) {
 			const run = runOf(text, at, '`');
 			const close = closingTicks(text, at + run, run);
 			if (close === -1) {
+				budget.misses -= 1;
 				plain += text.slice(at, at + run);
 				at += run;
 			} else {
@@ -113,6 +122,7 @@ function inline(text, depth = 0) {
 				plain += !link.words || link.words === link.address ? link.address : `${link.words} (${link.address})`;
 				at = link.end;
 			} else {
+				budget.misses -= 1;
 				plain += char;
 				at += 1;
 			}
@@ -122,11 +132,12 @@ function inline(text, depth = 0) {
 			const opens = run <= 3 && depth < MAX_DEPTH && next !== undefined && !/\s/.test(next) && (char === '*' || !isWordy(text[at - 1]));
 			const close = opens ? closingMark(text, at + run, char, run) : -1;
 			if (close === -1) {
+				if (opens) budget.misses -= 1;
 				plain += text.slice(at, at + run);
 				at += run;
 			} else {
 				flush();
-				const children = inline(text.slice(at + run, close), depth + 1);
+				const children = inline(text.slice(at + run, close), depth + 1, budget);
 				parts.push(run === 1 ? { type: 'em', children } : run === 2 ? { type: 'strong', children } : { type: 'strong', children: [{ type: 'em', children }] });
 				at = close + run;
 			}
@@ -139,8 +150,11 @@ function inline(text, depth = 0) {
 	return parts;
 }
 
-const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([\w+#.-]*)\s*$/;
-const HEADING = /^(#{1,6})\s+(.*\S)\s*$/;
+// These two are matched against a line with its trailing spaces removed, and
+// each has one stretch of spaces at most. A pattern with two stretches that
+// can share the same spaces takes time that grows with the square of them.
+const FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*([\w+#.-]*)$/;
+const HEADING = /^(#{1,6})[ \t]+(\S.*)$/;
 const RULE = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(\S.*)$/;
@@ -159,13 +173,14 @@ export function parseMarkdown(input) {
 
 	for (let at = 0; at < lines.length; ) {
 		const line = lines[at];
-		const fence = FENCE.exec(line);
+		const trimmed = line.trimEnd();
+		const fence = FENCE.exec(trimmed);
 
 		if (fence) {
 			endParagraph();
 			const [, marks, language] = fence;
 			const closes = (candidate) => {
-				const found = FENCE.exec(candidate);
+				const found = FENCE.exec(candidate.trimEnd());
 				return Boolean(found) && found[1][0] === marks[0] && found[1].length >= marks.length && !found[2];
 			};
 			const body = [];
@@ -180,12 +195,12 @@ export function parseMarkdown(input) {
 		} else if (!line.trim()) {
 			endParagraph();
 			at += 1;
-		} else if (HEADING.test(line)) {
+		} else if (HEADING.test(trimmed)) {
 			endParagraph();
-			const [, marks, text] = HEADING.exec(line);
+			const [, marks, text] = HEADING.exec(trimmed);
 			blocks.push({ type: 'heading', level: marks.length, inline: inline(text) });
 			at += 1;
-		} else if (RULE.test(line)) {
+		} else if (RULE.test(trimmed)) {
 			endParagraph();
 			blocks.push({ type: 'rule' });
 			at += 1;
@@ -205,13 +220,13 @@ export function parseMarkdown(input) {
 				at += 1;
 			}
 			blocks.push({ type: 'code', language: 'table', text: rows.join('\n') });
-		} else if (ITEM.test(line)) {
+		} else if (ITEM.test(trimmed)) {
 			endParagraph();
-			const ordered = /\d/.test(ITEM.exec(line)[2]);
+			const ordered = /\d/.test(ITEM.exec(trimmed)[2]);
 			const items = [];
 			while (at < lines.length) {
-				const item = ITEM.exec(lines[at]);
-				if (item && !RULE.test(lines[at])) {
+				const item = ITEM.exec(lines[at].trimEnd());
+				if (item && !RULE.test(lines[at].trimEnd())) {
 					const depth = Math.min(3, Math.floor(item[1].replaceAll('\t', '    ').length / 2));
 					// The other kind of list, at the left edge, is a list of its own.
 					if (depth === 0 && /\d/.test(item[2]) !== ordered) break;
@@ -220,7 +235,7 @@ export function parseMarkdown(input) {
 				} else if (!lines[at].trim()) {
 					let next = at + 1;
 					while (next < lines.length && !lines[next].trim()) next += 1;
-					if (next >= lines.length || !ITEM.test(lines[next])) break;
+					if (next >= lines.length || !ITEM.test(lines[next].trimEnd())) break;
 					at = next;
 				} else if (/^\s+\S/.test(lines[at])) {
 					// An item that runs on to the next line.

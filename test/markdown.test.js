@@ -128,3 +128,49 @@ test('very long and very nested input is read without trouble', () => {
 	assert.deepEqual(parseMarkdown(null), []);
 	assert.deepEqual(parseMarkdown(42), [p(t('42'))]);
 });
+
+test('no line, however long or oddly spaced, takes more than a moment to read', () => {
+	const spaces = ' '.repeat(80_000);
+	const lines = {
+		'a heading mark and spaces': `#${spaces}`,
+		'a heading mark, spaces and a word': `#${spaces}x`,
+		'a heading with spaces after it': `# Title${spaces}`,
+		'a fence and spaces': `\`\`\`${spaces}`,
+		'a fence, spaces and a word': `\`\`\`${spaces}x y`,
+		'a fence with a language and spaces': `\`\`\`yaml${spaces}`,
+		'a list mark and spaces': `-${spaces}`,
+		'a number and spaces': `1.${spaces}`,
+		'a quote mark and spaces': `>${spaces}`,
+		'a rule that is not one': `- - -${spaces}x`,
+		'a table bar and spaces': `|${spaces}`,
+		'only spaces': spaces,
+		'many hashes': '#'.repeat(80_000),
+		'many backticks': '`'.repeat(80_000),
+		'many dashes and spaces': '- '.repeat(40_000),
+	};
+	for (const [name, line] of Object.entries(lines)) {
+		const began = performance.now();
+		parseMarkdown(`before\n${line}\nafter`);
+		parseMarkdown(`${line}\n${line}\n${line}`);
+		const took = performance.now() - began;
+		assert.ok(took < 250, `${name}: ${Math.round(took)} ms`);
+	}
+	// And they still mean what they should.
+	assert.deepEqual(parseMarkdown(`# Title${' '.repeat(50)}`), [{ type: 'heading', level: 1, inline: [t('Title')] }]);
+	assert.deepEqual(parseMarkdown(`\`\`\`yaml   \na: 1\n\`\`\`   `), [{ type: 'code', language: 'yaml', text: 'a: 1' }]);
+	assert.deepEqual(parseMarkdown('#   '), [p(t('#'))]);
+});
+
+test('a great many marks that open nothing are read as quickly as plain words', () => {
+	const cases = { 'a million square brackets': '['.repeat(1_000_000), 'stars that never close': '*a '.repeat(333_333), 'backticks apart': '` '.repeat(500_000), 'brackets and stars': '[*'.repeat(500_000), 'underscores': ' _a'.repeat(333_333) };
+	for (const [name, text] of Object.entries(cases)) {
+		const began = performance.now();
+		const blocks = parseMarkdown(text);
+		const took = performance.now() - began;
+		assert.ok(took < 400, `${name}: ${Math.round(took)} ms`);
+		// Where no mark can pair with another, nothing is lost: it all comes out as text.
+		if (!['backticks apart', 'brackets and stars'].includes(name)) assert.equal(blocks.map((block) => block.inline.map((part) => part.text ?? '').join('')).join('').length, text.trimEnd().length, name);
+	}
+	// Ordinary use of the same marks is unaffected.
+	assert.deepEqual(parseMarkdown('[a] and *b* and `c` and [d](e)'), [p(t('[a] and '), em(t('b')), t(' and '), code('c'), t(' and d (e)'))]);
+});

@@ -319,7 +319,7 @@ function App() {
 			prefs=${chatPrefs}
 			setPrefs=${setChatPrefs}
 			context=${chatContext}
-			isDirty=${(fileId) => dirty.current && route.fileId === fileId}
+			isDirty=${(fileId) => dirty.current && (route.fileId ?? '').toLowerCase() === fileId.toLowerCase()}
 			refresh=${refresh}
 			navigate=${navigate}
 			onClose=${() => setChatPrefs({ open: false })}

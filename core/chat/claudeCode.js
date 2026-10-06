@@ -50,7 +50,11 @@ export function claudeMcpConfig({ mcp, sessionFile }) {
 //   { type: 'tool', id, name, status }          started, done or failed
 //   { type: 'done' }                            the answer is complete
 //   { type: 'error', code, message }            it ended some other way
-export function createClaudeParser() {
+// `tools` are the names of the app's tools. A tool is one of them only if
+// its whole name is the server's prefix and one of those names.
+export function createClaudeParser({ tools: names = [] } = {}) {
+	const ours = new Set(names.map((name) => `${PREFIX}${name}`));
+	const isOurs = (name) => typeof name === 'string' && ours.has(name);
 	let ended = false;
 	let listed = false;
 	let anyText = false;
@@ -86,7 +90,7 @@ export function createClaudeParser() {
 
 		if (data.type === 'system' && data.subtype === 'init') {
 			const given = Array.isArray(data.tools) ? data.tools : [];
-			const foreign = given.filter((name) => typeof name !== 'string' || !name.startsWith(PREFIX));
+			const foreign = given.filter((name) => !isOurs(name));
 			if (foreign.length) {
 				const named = foreign.length > 3 ? `${foreign.slice(0, 3).join(', ')} and ${foreign.length - 3} more` : foreign.join(', ');
 				end({ type: 'error', code: 'UNSAFE', message: `Claude Code started with tools this app did not give it (${named}), so it was stopped.` });
@@ -108,7 +112,7 @@ export function createClaudeParser() {
 
 		// A tool that is not one of the app's, whoever in the answer uses it.
 		if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
-			const foreign = data.message.content.find((block) => block?.type === 'tool_use' && !(typeof block.name === 'string' && block.name.startsWith(PREFIX)));
+			const foreign = data.message.content.find((block) => block?.type === 'tool_use' && !isOurs(block.name));
 			if (foreign) {
 				end({ type: 'error', code: 'UNSAFE', message: `Claude Code used a tool this app did not give it (${String(foreign.name)}), so it was stopped.` });
 				return out;

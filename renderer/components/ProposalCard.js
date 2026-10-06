@@ -7,15 +7,25 @@ import { Badge, Button } from '../lib/ui.js';
 
 const ICONS = { add: 'plus', update: 'pencil', delete: 'trash', 'create-file': 'file', 'replace-file': 'code', install: 'download', send: 'pull-request' };
 const SHOWN = 14;
-// Opened up, a card still shows only so much. The file itself shows the rest.
-const MOST = 400;
+// The most rows drawn for one of the person's own files on its way to the
+// team, and for a card that is no longer waiting.
+const MOST = 2000;
 const SIGN = { add: '+', remove: '−', same: ' ' };
+const lines = (count) => `${count.toLocaleString('en-US')} ${count === 1 ? 'line' : 'lines'}`;
 
-function Lines({ rows }) {
+// While a card waits for Apply, every row of what it would change is on it,
+// in a box that scrolls: Apply writes all of it, so all of it can be read.
+// Once the card is settled, a few rows are enough.
+function Lines({ rows, whole, capped }) {
 	const [all, setAll] = useState(false);
-	const visible = rows.slice(0, all ? MOST : SHOWN);
+	const added = rows.filter((row) => row.kind === 'add').length;
+	const removed = rows.filter((row) => row.kind === 'remove').length;
+	const most = whole && !capped ? rows.length : whole || all ? MOST : SHOWN;
+	const visible = rows.slice(0, most);
+	const summary = [added && `${lines(added)} added`, removed && `${lines(removed)} removed`].filter(Boolean).join(', ');
 	return html`<div class="proposal__diff">
-		<div class="proposal__rows" role="group" aria-label="What would change">
+		${summary && html`<p class="proposal__count">${summary}</p>`}
+		<div class=${whole ? 'proposal__rows proposal__rows--whole' : 'proposal__rows'} role="group" aria-label="What would change" tabindex=${whole && rows.length > SHOWN ? '0' : undefined}>
 			${visible.map((row) =>
 				row.kind === 'skip'
 					? html`<div class="diff-row diff-row--skip">${row.count} unchanged ${row.count === 1 ? 'line' : 'lines'}</div>`
@@ -27,8 +37,8 @@ function Lines({ rows }) {
 							</div>`
 			)}
 		</div>
-		${all && rows.length > MOST && html`<p class="proposal__note">${(rows.length - MOST).toLocaleString('en-US')} more lines are not shown here.</p>`}
-		${rows.length > SHOWN && html`<button class="link proposal__more" onClick=${() => setAll(!all)}>${all ? 'Show less' : `Show ${rows.length > MOST ? `the first ${MOST} of ${rows.length.toLocaleString('en-US')}` : `all ${rows.length}`} lines`}</button>`}
+		${rows.length > most && most >= MOST && html`<p class="proposal__note">The first ${lines(MOST)} are shown. The other ${(rows.length - MOST).toLocaleString('en-US')} are in the file itself.</p>`}
+		${!whole && rows.length > SHOWN && html`<button class="link proposal__more" onClick=${() => setAll(!all)}>${all ? 'Show less' : `Show all ${rows.length.toLocaleString('en-US')} lines`}</button>`}
 	</div>`;
 }
 
@@ -58,7 +68,7 @@ export function ProposalCard({ card, blocked, onApply, onDismiss, onShow, onOpen
 			${state && html`<${Badge} tone=${state[0]} icon=${state[1]}>${state[2]}<//>`}
 		</div>
 		${card.lines.length > 0 && html`<ul class="proposal__facts">${card.lines.map((line) => html`<li>${line}</li>`)}</ul>`}
-		${rows.length > 0 && html`<${Lines} rows=${rows} />`}
+		${rows.length > 0 && html`<${Lines} rows=${rows} whole=${waiting} capped=${card.kind === 'send'} />`}
 		${waiting && card.warnings.map((warning) => html`<p class="proposal__warning"><${Icon} name="alert" /><span>${warning}</span></p>`)}
 		${card.message && html`<p class=${card.status === 'applied' ? 'proposal__note' : 'proposal__problem'} role=${card.status === 'applied' ? 'status' : 'alert'}>${card.message}</p>`}
 		${card.status === 'expired' && html`<p class="proposal__note">The app was closed before this was applied. Ask again if you still want it.</p>`}

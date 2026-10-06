@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { codexArgs, createCodexParser } from '../core/chat/codex.js';
 
 const fixture = (name) => readFileSync(fileURLToPath(new URL(`./fixtures/chat/${name}`, import.meta.url)), 'utf8').split('\n').filter(Boolean);
-const run = (lines, parser = createCodexParser()) => lines.flatMap((line) => parser.push(typeof line === 'string' ? line : JSON.stringify(line)));
+const NAMES = ['search', 'list_files', 'get_file', 'get_snippet', 'list_team_packages', 'add_snippet', 'update_snippet', 'delete_snippet', 'create_file', 'replace_file_yaml', 'install_team_package', 'propose_to_team'].map((name) => `snippets_${name}`);
+const run = (lines, parser = createCodexParser({ tools: NAMES })) => lines.flatMap((line) => parser.push(typeof line === 'string' ? line : JSON.stringify(line)));
 const item = (kind, id, type, rest = {}) => ({ type: `item.${kind}`, item: { id, type, ...rest } });
 const message = (id, text) => item('completed', id, 'agent_message', { text });
 const DONE = { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } };
@@ -97,6 +98,7 @@ test('anything Codex does that the app does not know to be harmless stops the an
 		[call('files', 'read_file'), 'used a tool this app did not give it (files: read_file)'],
 		[call('codex', 'run_anything'), 'used a tool this app did not give it (codex: run_anything)'],
 		[call('snippets', 7), 'used a tool this app did not give it (snippets: 7)'],
+		[call('snippets', 'snippets_run_shell'), 'used a tool this app did not give it (snippets: snippets_run_shell)'],
 		[item('started', 'x', 'browser_action', {}), 'did something this app does not know (browser_action)'],
 		[item('completed', 'x', 'image_generation', {}), 'did something this app does not know (image_generation)'],
 		[{ type: 'item.completed', item: { id: 'x' } }, 'did something this app does not know (undefined)'],
@@ -136,7 +138,7 @@ test('a warning from Codex is not a failure, and a failed turn is', () => {
 });
 
 test('a problem Codex mentions on the way is kept, in case it ends without saying more', () => {
-	const parser = createCodexParser();
+	const parser = createCodexParser({ tools: NAMES });
 	assert.equal(parser.lastError, '');
 	assert.deepEqual(run([{ type: 'error', message: 'Reconnecting... 1/5' }, { type: 'error', message: 'stream disconnected before completion' }], parser), []);
 	assert.equal(parser.lastError, 'stream disconnected before completion');
@@ -161,7 +163,7 @@ test('a message that grows is shown as it grows, once, and messages are set apar
 });
 
 test('what is not a line of JSON, or not a kind of line the app knows, is skipped, and only one ending is reported', () => {
-	const parser = createCodexParser();
+	const parser = createCodexParser({ tools: NAMES });
 	const events = run(['', 'not json', '[]', 'null', '{"type":"thread.started","thread_id":"t"}', '{"type":"turn.started"}', '{"type":"something.new","item":{"id":"q","type":"agent_message","text":"no"}}', JSON.stringify(message('m', 'Yes.')), JSON.stringify(DONE), JSON.stringify(DONE), JSON.stringify(message('z', 'late'))], parser);
 	assert.deepEqual(events, [{ type: 'text', text: 'Yes.' }, { type: 'done' }]);
 	assert.equal(parser.ended, true);

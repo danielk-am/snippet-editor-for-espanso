@@ -54,6 +54,8 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 	};
 
 	const proposals = createProposals({ router, aiWrite: () => service.settings().aiWrite, log });
+	// The names of the app's tools: what a backend may be seen to have and to use.
+	const toolNames = proposals.tools.list().map((tool) => tool.name);
 	// The way in for one answer's proposals. A card carries the name of the
 	// answer that asked for it, and none is made once that answer is over.
 	const proposalsOf = (turn) =>
@@ -91,10 +93,10 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				configFile = path.join(chatDir, `mcp-${randomBytes(8).toString('hex')}.json`);
 				await fs.writeFile(configFile, JSON.stringify(claudeMcpConfig({ mcp, sessionFile: channel.file })), { mode: 0o600 });
 				args = claudeArgs({ mcpConfigFile: configFile, system: SYSTEM });
-				parser = createClaudeParser();
+				parser = createClaudeParser({ tools: toolNames });
 			} else {
 				args = codexArgs({ cwd: emptyDir, system: SYSTEM, mcp, sessionFile: channel.file });
-				parser = createCodexParser();
+				parser = createCodexParser({ tools: toolNames });
 			}
 
 			let ending = null;
