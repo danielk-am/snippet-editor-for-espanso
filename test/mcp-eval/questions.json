@@ -1,0 +1,16 @@
+{
+  "about": "Usability check for the MCP server, after the tool-design rules in the MCP skill. Ten read-only questions, each with one answer checked by exact match. A fresh agent answers them with only this server's tools, reached through ask.mjs against the data serve.mjs sets up.",
+  "pass_mark": "8 of 10 correct, with no failure caused by a misleading tool description",
+  "questions": [
+    { "id": 1, "question": "How many snippets do the person's own (local) files hold in total, counting only the files that can be read? Answer with a number.", "answer": "408" },
+    { "id": 2, "question": "One of the person's own files cannot be read as YAML. What is its file name? Answer with the file name only.", "answer": "broken.yml" },
+    { "id": 3, "question": "A snippet has the label \"Friendly goodbye\". What exact text does it expand to? Answer with the text only.", "answer": "Thanks for reaching out. Have a great day!" },
+    { "id": 4, "question": "The snippet triggered by ;sig ends with a name that comes from a variable defined once for its whole file. What name is that? Answer with the name only.", "answer": "Daniel" },
+    { "id": 5, "question": "What date format does the snippet triggered by :today use? Answer with the format string only.", "answer": "%d %B %Y" },
+    { "id": 6, "question": "The form snippet triggered by :meet has one field with a fixed list of choices. How many choices are there, and which is last? Answer as: N, Name", "answer": "3, Friday" },
+    { "id": 7, "question": "In catalog.yml one snippet expands to a much longer text than all the others. What is its position in the file, counting from 0? Answer with a number.", "answer": "317" },
+    { "id": 8, "question": "Does the connected team repository offer a package that runs commands? Answer with the package name, or: none", "answer": "tools" },
+    { "id": 9, "question": "Which team package is installed, and how many snippets does it hold? Answer as: name, N", "answer": "support, 4" },
+    { "id": 10, "question": "In the installed team package, the file escalations.yml holds three snippets. What does the third one expand to? Answer with the text only.", "answer": "A specialist will reply." }
+  ]
+}

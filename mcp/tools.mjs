@@ -21,7 +21,7 @@ const textOf = (value) => (typeof value === 'string' ? value : typeof value === 
 const text = (description, extra = {}) => ({ type: 'string', minLength: 1, description, ...extra });
 const whole = (description, minimum, maximum) => ({ type: 'integer', minimum, ...(maximum === undefined ? {} : { maximum }), description });
 
-const FILE_ID = text('The id of a file, from snippets_list_files or snippets_search. Example: "local:base.yml".');
+const FILE_ID = text('The id of a file, from snippets_list_files or snippets_search. Examples: "local:base.yml" for one of the person\'s own files, "package:goodbyes:package.yml", "team:support:replies.yml".');
 const VERSION = text('The `version` from your last snippets_get_file or snippets_get_snippet of this file. It proves you saw the file as it is now. Example: "3f2a9c0d1e4b5a6978c0d1e2".');
 const INDEX = whole('The position of the snippet in its file, counting from 0. Example: 0.', 0);
 const SNIPPET = {
@@ -159,8 +159,8 @@ export function createTools({ api }) {
 			name: 'snippets_search',
 			title: 'Search snippets',
 			description:
-				'Find Espanso snippets by words in their trigger, label, search terms or the text they expand to. Searches every file: the person\'s own, installed packages and team packages. Use this first when you know what a snippet says or does but not where it lives. Returns matches with their file id and position, which the other tools take. Use snippets_list_files instead to see what files exist.',
-			inputSchema: schema({ query: text('Words to look for. All must appear. Example: "refund".'), limit: LIMIT, offset: OFFSET }, ['query']),
+				'Find Espanso snippets by words in their trigger, label, search terms or the text they expand to. Searches every file: the person\'s own, installed packages and team packages. Use this first when you know what a snippet says or does but not where it lives. Returns matches with their file id and position, which the other tools take. `preview` is the text a snippet expands to, cut to 120 characters and ending in "..." when it is longer: read the whole snippet with snippets_get_snippet. Use snippets_list_files instead to see what files exist.',
+			inputSchema: schema({ query: text('Words to look for. All must appear. A trigger works too. Examples: "refund", ":sig".'), limit: LIMIT, offset: OFFSET }, ['query']),
 			async run({ query, limit = 50, offset = 0 }) {
 				const hits = await ask('GET', '/search', { query: { q: query, limit: 1000 } });
 				const found = hits.map((hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) }));
@@ -173,7 +173,7 @@ export function createTools({ api }) {
 			name: 'snippets_list_files',
 			title: 'List match files',
 			description:
-				'List the Espanso match files: the person\'s own (source "local"), files from installed packages ("package") and from team packages ("team"). Use it to learn file ids, how many snippets each file holds, which are read-only, and which have problems. Use snippets_search instead to find a particular snippet.',
+				'List the Espanso match files: the person\'s own (source "local"), files from installed packages ("package") and from team packages ("team"). Use it to learn file ids, how many snippets each file holds, which are read-only, and which have problems. A "package" was installed by Espanso and a "team" package by this app from the team repository: the two are separate, even when they share a name. `total_count` counts files, not snippets. Use snippets_search instead to find a particular snippet.',
 			inputSchema: schema({ source: { enum: ['local', 'package', 'team'], description: 'Keep to one source. Leave out for all three. Example: "local".' }, limit: LIMIT, offset: OFFSET }),
 			async run({ source, limit = 50, offset = 0 }) {
 				const state = await ask('GET', '/state');
@@ -188,7 +188,7 @@ export function createTools({ api }) {
 			name: 'snippets_get_file',
 			title: 'Read a match file',
 			description:
-				'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as Espanso keys. "raw" gives the YAML text itself, with its comments, imports and global variables. Long files come back in pages: use `limit` and `offset`.',
+				'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as Espanso keys. "raw" gives the YAML text itself, with its comments, imports and global variables. In "summary" and "full", long files come back in pages: use `limit` and `offset`, and a `preview` is cut to 120 characters. "raw" is not paged: text too long for one reply is cut, and the reply says so.',
 			inputSchema: schema(
 				{ file_id: FILE_ID, detail: { enum: ['summary', 'full', 'raw'], description: 'How much to return. Default "summary". Example: "full".' }, limit: LIMIT, offset: OFFSET },
 				['file_id']
@@ -215,7 +215,7 @@ export function createTools({ api }) {
 			name: 'snippets_get_snippet',
 			title: 'Read one snippet',
 			description:
-				'Read one snippet whole, as Espanso keys, together with the `version` of its file. Use it before changing or deleting a snippet, so you work from what is there now. Takes the file id and the snippet\'s position, as given by snippets_search or snippets_get_file.',
+				'Read one snippet whole, as Espanso keys, together with the `version` of its file. Use it before changing or deleting a snippet, so you work from what is there now. Takes the file id and the snippet\'s position, as given by snippets_search or snippets_get_file. A file\'s `global_vars` are not part of any one snippet: read them with snippets_get_file and detail "raw".',
 			inputSchema: schema({ file_id: FILE_ID, index: INDEX }, ['file_id', 'index']),
 			async run({ file_id: fileId, index }) {
 				const file = await readFile(fileId);
@@ -232,7 +232,7 @@ export function createTools({ api }) {
 			name: 'snippets_list_team_packages',
 			title: 'List team packages',
 			description:
-				'Show the team repository the app is connected to and the packages it offers: which are installed, which have an update, and which run commands when their snippets are used. Use it before snippets_install_team_package or snippets_propose_to_team. If no repository is connected, it says so.',
+				'Show the team repository the app is connected to and the packages it offers: which are installed, which have an update, and which run commands when their snippets are used. Use it before snippets_install_team_package or snippets_propose_to_team. `snippet_count` is what the repository offers now. `installed_only` names packages that are installed but that the repository no longer offers. Team packages are separate from packages Espanso installed, even when they share a name. If no repository is connected, it says so.',
 			inputSchema: schema({}),
 			async run() {
 				const team = await ask('GET', '/team');

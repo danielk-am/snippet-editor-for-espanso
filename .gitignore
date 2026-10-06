@@ -4,3 +4,4 @@ drafts/
 test/.artifacts/
 .DS_Store
 .claude/
+test/mcp-eval/.session
