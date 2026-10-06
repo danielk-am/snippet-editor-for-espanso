@@ -69,9 +69,11 @@ test('a command over its time limit is stopped, along with anything it started',
 	const started = Date.now();
 	const pidFile = join(dir(), 'helper.pid');
 	const program = standIn('sleep 20 &\necho $! > "$PID_FILE"\nwait');
-	const error = await fails(createGit({ program, env: { PATH: process.env.PATH, PID_FILE: pidFile } })(['fetch'], { timeout: 300 }), 'timeout');
+	// Long enough for the stand-in to start its helper on a busy computer,
+	// far short of the 20 seconds the helper would run.
+	const error = await fails(createGit({ program, env: { PATH: process.env.PATH, PID_FILE: pidFile } })(['fetch'], { timeout: 1500 }), 'timeout');
 	assert.equal(error.message, 'Git did not finish in time.');
-	assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+	assert.ok(Date.now() - started < 6000, `took ${Date.now() - started} ms`);
 	// The helper it started, as ssh would be, is gone too. A busy computer can
 	// take a moment to clear a stopped process away, so look for a while.
 	const helper = Number(readFileSync(pidFile, 'utf8'));
@@ -132,7 +134,9 @@ test('every git call under way can be stopped at once, as when the app quits', p
 	const pidFile = join(dir(), 'helper.pid');
 	const git = createGit({ program: standIn('sleep 20 &\necho $! > "$PID_FILE"\nwait'), env: { PATH: process.env.PATH, PID_FILE: pidFile } });
 	const running = [git(['fetch'], { timeout: 30_000 }), git(['push'], { timeout: 30_000 })];
-	await new Promise((resolve) => setTimeout(resolve, 300));
+	// Wait until a stand-in has started its helper, however busy the computer is.
+	for (let waited = 0; waited < 10_000 && !existsSync(pidFile); waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+	await new Promise((resolve) => setTimeout(resolve, 200));
 	const started = Date.now();
 	git.stopAll();
 	for (const call of running) assert.equal((await fails(call, 'stopped')).message, 'Git was stopped because the app is closing.');
