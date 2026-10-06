@@ -183,6 +183,12 @@ test('two very long and very different texts are shown whole, old then new, with
 	const rows = diffLines(before, after);
 	assert.ok(Date.now() - began < 2000);
 	assert.deepEqual([rows.length, rows[0], rows[19_999], rows[20_000], rows.at(-1)], [40_000, row('remove', 'old 0'), row('remove', 'old 19999'), row('add', 'new 0'), row('add', 'new 19999')]);
+	// Past the limit nothing is matched up, even where lines are shared in the middle.
+	const shared = ['one', 'two', 'three'];
+	const a = ['top', ...shared, 'bottom'].join('\n');
+	const b = ['TOP', ...shared, 'BOTTOM'].join('\n');
+	assert.deepEqual(diffLines(a, b).map((item) => item.kind), ['remove', 'add', 'same', 'same', 'same', 'remove', 'add']);
+	assert.deepEqual(diffLines(a, b, { budget: 24 }).map((item) => item.kind), ['remove', 'remove', 'remove', 'remove', 'remove', 'add', 'add', 'add', 'add', 'add']);
 	// Long but nearly the same is still compared line by line.
 	const near = before.replace('old 1500\n', 'OLD 1500\n');
 	assert.deepEqual(diffLines(before, near, { context: 0 }), [skip(1500), row('remove', 'old 1500'), row('add', 'OLD 1500'), skip(18_499)]);
