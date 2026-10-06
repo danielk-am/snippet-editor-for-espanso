@@ -1,0 +1,133 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { isSafeFileName } from './store.js';
+import { MANIFEST, PACKAGE_NAME } from './teamRepo.js';
+import { isPlainObject, toText } from '../shared/text.js';
+
+// Team packages as Espanso sees them: one folder each under match/team/.
+// Espanso loads every .yml in there, so what the folder holds is what runs.
+//
+// A folder is the app's only if it carries the marker file. The marker is
+// written before anything else, so a folder is the app's to repair from the
+// first moment, and a folder someone else made is never touched.
+
+export const MARKER = '.snippet-editor.json';
+
+// Espanso skips files whose names start with an underscore. A file is
+// written under such a name first, then renamed, so Espanso never reads one
+// that is half written. One short name serves every file: installs run one
+// at a time, and a name built from the file's own could be too long.
+const INCOMING = '_incoming.tmp';
+
+const fail = (code, message) => Object.assign(new Error(message), { code });
+const isPackageFile = (name) => name === MANIFEST || isSafeFileName(name);
+
+export function createTeamPackages({ matchDir, now = () => new Date() }) {
+	const root = path.join(matchDir, 'team');
+	const folder = (name) => path.join(root, name);
+
+	let queue = Promise.resolve();
+	const inTurn = (work) => {
+		const result = queue.then(work);
+		queue = result.catch(() => {});
+		return result;
+	};
+
+	const checkName = (name) => {
+		if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) throw fail('INVALID', 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
+	};
+
+	// null: no folder. false: a folder (or a link) that is not the app's.
+	async function markerOf(name) {
+		let stat;
+		try {
+			stat = await fs.lstat(folder(name));
+		} catch {
+			return null;
+		}
+		if (!stat.isDirectory()) return false;
+		let text;
+		try {
+			text = await fs.readFile(path.join(folder(name), MARKER), 'utf8');
+		} catch {
+			return false;
+		}
+		let data = null;
+		try {
+			data = JSON.parse(text);
+		} catch {
+			// Damaged, but there: the folder is still the app's, half done.
+		}
+		const known = isPlainObject(data);
+		return {
+			repository: known ? toText(data.repository) : '',
+			package: name,
+			commit: known ? toText(data.commit) : '',
+			tree: known ? toText(data.tree) : '',
+			state: known && data.state === 'installed' ? 'installed' : 'installing',
+			installedAt: known ? toText(data.installedAt) : '',
+		};
+	}
+
+	async function writeMarker(name, marker) {
+		const file = path.join(folder(name), MARKER);
+		await fs.writeFile(`${file}.tmp`, JSON.stringify(marker, null, '\t') + '\n');
+		await fs.rename(`${file}.tmp`, file);
+	}
+
+	async function install({ name, files, repository, commit, tree }) {
+		checkName(name);
+		if (!Array.isArray(files) || !files.length) throw fail('INVALID', 'That package has no files to install.');
+		for (const file of files) {
+			if (!isPackageFile(file?.name) || !Buffer.isBuffer(file.bytes)) throw fail('INVALID', 'That package holds a file that cannot be installed.');
+		}
+
+		const existing = await markerOf(name);
+		if (existing === false) throw fail('EXISTS', `A folder named ${name} is already in match/team and was not put there by this app.`);
+		await fs.mkdir(folder(name), { recursive: true });
+
+		const marker = { repository: toText(repository), package: name, commit: toText(commit), tree: toText(tree), state: 'installing', installedAt: now().toISOString() };
+		await writeMarker(name, marker);
+
+		const staged = path.join(folder(name), INCOMING);
+		for (const file of files) {
+			await fs.rm(staged, { recursive: true, force: true });
+			await fs.writeFile(staged, file.bytes, { flag: 'wx' });
+			await fs.rename(staged, path.join(folder(name), file.name));
+		}
+		// The folder mirrors the package: what the package dropped goes too.
+		const keep = new Set([MARKER, ...files.map((file) => file.name)]);
+		for (const entry of await fs.readdir(folder(name))) {
+			if (!keep.has(entry)) await fs.rm(path.join(folder(name), entry), { recursive: true, force: true });
+		}
+
+		marker.state = 'installed';
+		await writeMarker(name, marker);
+		return marker;
+	}
+
+	async function remove(name) {
+		checkName(name);
+		const existing = await markerOf(name);
+		if (existing === null) throw fail('NOT_FOUND', 'That package is not installed.');
+		if (existing === false) throw fail('READ_ONLY', `The folder named ${name} in match/team was not put there by this app, so it is left alone.`);
+		await fs.rm(folder(name), { recursive: true, force: true });
+	}
+
+	async function installed() {
+		const found = new Map();
+		const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+		for (const entry of entries.filter((item) => item.isDirectory() && PACKAGE_NAME.test(item.name)).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+			const marker = await markerOf(entry.name);
+			if (marker) found.set(entry.name, marker);
+		}
+		return found;
+	}
+
+	return {
+		root,
+		installed: () => inTurn(installed),
+		install: (input = {}) => inTurn(() => install(input)),
+		remove: (name) => inTurn(() => remove(name)),
+	};
+}
