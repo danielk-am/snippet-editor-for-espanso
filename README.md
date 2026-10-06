@@ -66,6 +66,7 @@ The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sid
 - **Light, dark or system theme.**
 - **API for other tools.** Scripts on the same computer can read and change snippets over HTTP. It is off until you switch it on. See "API for other tools" below.
 - **Team snippets.** Connect a GitHub repository of shared packages, install the ones you want, and propose your own files back as a pull request. See "Team snippets" below.
+- **AI tools.** An MCP server comes with the app, so an AI tool such as Claude or Codex can search and read your snippets, and change them once you allow it. See "AI tools (MCP)" below.
 
 ## API for other tools
 
@@ -139,6 +140,42 @@ Connecting and disconnecting a repository are done in the window only. Installed
 
 Team packages go in `match/team/`, not in Espanso's own `match/packages/`. Checked with Espanso 2.4.1: it loads `match/team/` like any other match files, and a folder in `match/packages/` without Espanso's own source file makes `espanso package list` fail for every package.
 
+## AI tools (MCP)
+
+The app comes with an MCP server: a small program an AI tool starts, which lets it work with your snippets. It holds no snippets of its own. Every tool call goes to the app's local API, so the app must be open with "API for other tools" switched on.
+
+To connect an AI tool, open Settings, go to "AI tools" and press "Copy setup". Paste the block into the AI tool's MCP settings. It names the app's own program and the server file, so you do not need Node installed. It holds no password or token: the server reads the API token from the app's data folder itself.
+
+From a source checkout, the server also runs with:
+
+```bash
+npm run mcp
+```
+
+Reading and searching work from the start. The tools that change something are refused until you switch on "Let AI tools change snippets" in Settings. The switch takes effect at once.
+
+| Tool | Does | Needs the switch |
+| --- | --- | --- |
+| `snippets_search` | Finds snippets across every file, package and team package | No |
+| `snippets_list_files` | Lists files with their source, counts and problems | No |
+| `snippets_get_file` | One file in brief, in full, or as raw YAML, with its version | No |
+| `snippets_get_snippet` | One snippet in full, with its file's version | No |
+| `snippets_list_team_packages` | The team repository and what it offers | No |
+| `snippets_add_snippet`, `snippets_update_snippet`, `snippets_delete_snippet` | Add, change or remove one snippet | Yes |
+| `snippets_create_file` | Create a match file | Yes |
+| `snippets_replace_file_yaml` | Replace a file's raw YAML | Yes |
+| `snippets_install_team_package` | Install or update a team package | Yes |
+| `snippets_propose_to_team` | Send one of your files to the team repository as a proposal branch | Yes |
+
+- Every change needs the version of the file the AI tool last read. If the file changed since, the change is refused and the tool is told to read it again. So an AI tool cannot overwrite something it has not seen.
+- A reply is at most 25,000 characters. Long lists come in pages.
+- Deleting a file, removing a team package, connecting a repository and everything in Settings stay in the window.
+- The switch governs this MCP server. Another program on your computer that holds the API token can still change snippets through the API.
+
+The server speaks both forms of MCP in use today: the older one that opens with a handshake (versions `2024-11-05` to `2025-11-25`) and the one from `2026-07-28` that sends its version with every request. It is written by hand, in three files under `mcp/`, with no dependency.
+
+How well an AI tool can use the tools was checked: ten questions with one right answer each, given to a fresh agent with nothing but these tools. It answered 10 of 10. The questions and the result are in `test/mcp-eval/`.
+
 ## How it treats your files
 
 Espanso's match folder is the only store. There is no database, so nothing can drift from what Espanso reads.
@@ -184,6 +221,7 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
 | `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repository, path resolution, settings. |
+| `mcp/` | The MCP server: the protocol, the twelve tools and the client for the app's API. It imports nothing from the rest of the app. |
 | `shared/` | Pure modules used by both sides: the snippet and variable models, search, the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
@@ -229,10 +267,11 @@ This is a reconstruction of Snippet Manager for Espanso, not a copy of its sourc
 
 Not rebuilt in this version:
 
-- The MCP adapter.
 - The AI assistant panel.
 - The WordPress block editor content type.
 - The original branded icon. The packages use a new icon drawn from the sidebar mark.
+
+The MCP server was built afterwards too, as a new piece: nothing of the original's adapter is in those records beyond its existence.
 
 Team snippets were rebuilt afterwards, from the record of the original's data model: one repository, a folder per package with a `_manifest.yml`, read-only copies, and changes proposed by pull request. How the original stored its installed copies is not in those records, so that part is new here.
 

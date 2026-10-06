@@ -166,6 +166,16 @@ env:      ELECTRON_RUN_AS_NODE=1
 - **Usability check, from the MCP skill.** Ten read-only questions with one checkable answer each, against the fixtures, answered by a fresh agent that has only these tools. Pass mark: 8 of 10, with no failure caused by a misleading description. The questions, answers and result are kept in `test/mcp-eval/`.
 - Tests are written first and watched to fail.
 
+## Changed while building
+
+| Change | Why |
+| --- | --- |
+| The setup is shown in the Settings card and copied with the existing clipboard request. There is no separate request for copying it. | It holds paths only, so there is nothing to keep out of the page. |
+| The token is read from its file for every request. There is no retry on a refused token. | Reading it each time already picks up a replaced token, and no test could tell a retry from that. |
+| With "API for other tools" switched off, the server sends nothing at all. | Another program could hold that port, and it must not be sent the token. |
+| The tool descriptions say more than first drafted. | The fresh agent in the usability check answered every question, and its notes on what cost it an extra call were folded in. |
+| A reply that is too long even at one item is a tool error. | Cutting inside one snippet would hand an AI tool half a snippet to write back. |
+
 ## Not in this piece
 
 - Running without the app open.
