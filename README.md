@@ -64,6 +64,43 @@ The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sid
 - **File details.** A description and an optional trigger prefix per file. New snippets in a file start with its prefix.
 - **Packages are read-only.** Copy a package snippet into one of your own files to change it.
 - **Light, dark or system theme.**
+- **API for other tools.** Scripts on the same computer can read and change snippets over HTTP. It is off until you switch it on. See "API for other tools" below.
+
+## API for other tools
+
+Everything the window does with snippets goes through one set of routes. Other tools on the same computer can use those routes over HTTP.
+
+The HTTP side is off until you switch it on in Settings, under "API for other tools". Settings then shows the address and gives you two buttons: one copies the token, one copies a ready `curl` command.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:27187/api/v1/state
+```
+
+| Method | Path under `/api/v1` | Does |
+| --- | --- | --- |
+| GET | `/state` | Match folder, files with their snippets, packages |
+| GET | `/files/{id}` | One file, with its raw text and version |
+| POST | `/files` | Create a file: `name`, optional `description` and `prefix` |
+| PUT | `/files/{id}/details` | Change `description` and `prefix` |
+| PUT | `/files/{id}/raw` | Replace the raw YAML: `text` |
+| DELETE | `/files/{id}?version=` | Delete a file, keeping a backup |
+| POST | `/files/{id}/snippets` | Add a snippet: `match`, optional `index` |
+| PUT | `/files/{id}/snippets/{index}` | Change a snippet: `match` |
+| DELETE | `/files/{id}/snippets/{index}?version=` | Remove a snippet |
+| GET | `/search?q=` | Search every file and package |
+| POST | `/yaml/preview`, `/yaml/parse`, `/yaml/stringify` | YAML helpers |
+
+A file `{id}` is the `id` from `/state`, such as `local:base.yml`, percent-encoded. Every write needs the `version` you last read for that file. If the file has changed since, the write is refused with `409` and you read it again. That is what stops a script and the window from overwriting each other.
+
+Errors always have the same shape: `{ "error": { "code": "CONFLICT", "message": "…" } }`.
+
+How it is guarded:
+
+- It listens on `127.0.0.1` only, so other computers cannot reach it.
+- Every route needs the token. It is kept in `api-token` in the app's data folder, readable only by you. Replace it in Settings at any time.
+- Any program running under your account can read that file. The token keeps out other people and web pages, not software you choose to run.
+- Requests from web pages are refused, so a site open in your browser cannot use it.
+- The window does not use the HTTP side at all. It takes the same routes over the app's internal channel, so the token never enters the page.
 
 ## How it treats your files
 
@@ -109,7 +146,7 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | Path | What it holds |
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
-| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, path resolution, settings. |
+| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, path resolution, settings. |
 | `shared/` | Pure modules used by both sides: the snippet and variable models, search, the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
@@ -135,7 +172,7 @@ Asks the real Espanso program to read files this app has written, in a temporary
 npm run test:ui
 ```
 
-Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens.
+Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token.
 
 ## Colours and design
 
