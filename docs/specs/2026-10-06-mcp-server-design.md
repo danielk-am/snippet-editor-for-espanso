@@ -1,6 +1,6 @@
 # MCP server: design
 
-Status: awaiting Daniel's approval. No code is written until it is approved.
+Status: approved by Daniel on 2026-10-06, to be written by hand with no new dependency.
 
 This is the third of three connected pieces. It builds on the local API (built) and on team snippets (`2026-10-06-team-snippets-design.md`).
 

@@ -1,6 +1,6 @@
 # Team snippets from GitHub: design
 
-Status: awaiting Daniel's approval. No code is written until it is approved.
+Status: approved by Daniel on 2026-10-06.
 
 This is the second of three connected pieces. The first, the local API, is built on the `local-api` branch. The third is the MCP server, in `2026-10-06-mcp-server-design.md`.
 
@@ -19,7 +19,7 @@ From the first conversation about this piece: the app uses the `git` already on 
 
 ## What the original did
 
-The original app's source cannot be reached from this computer, so this follows its recorded data model (`port-manifest.json` in `danielk-am/snippet-manager-wp`):
+The original app's source cannot be reached from this computer, so this follows the record of its data model that was kept from an earlier port:
 
 - One team repository holds packages under `packages/<name>/`. Each has a `_manifest.yml` with `name`, `title`, `description`, `version` and `author`, beside its match files.
 - The app kept a copy of the repository, listed its packages, and installed the ones you chose as managed, read-only copies in Espanso's match folder.
@@ -73,7 +73,7 @@ A package is a folder `packages/<name>/` whose name is lowercase letters, digits
 For each package the app reports: `name`, `title`, `description`, `version`, `author`, its files with snippet counts, whether it is installed, whether an update is available, and any problem with it.
 
 - **Runs commands.** Espanso snippets can run shell commands and scripts when used. A package that holds a `shell` or `script` variable is marked "Runs commands". Installing or updating it needs a second, explicit confirmation.
-- **Install.** The package's files are written to `match/team/<name>/`, with a marker file `.snippet-editor.json` that records the repository, the commit and the package's tree id. The files are written to a temporary folder first and moved into place, so Espanso never sees half a package.
+- **Install.** The package's files are written to `match/team/<name>/`, with a marker file `.snippet-editor.json` that records the repository, the commit and the package's tree id. The marker is written first, so a folder is the app's to repair from the first moment. Each file is written under a name Espanso skips (a leading underscore) and then renamed into place, so Espanso never reads a half-written file. Espanso also loads hidden folders, which rules out staging a whole copy beside the real one.
 - **Update available.** The installed tree id differs from the package's tree id in the fetched commit. A commit that touches other packages does not flag this one.
 - **Update.** The same as install, replacing the managed copy.
 - **Remove.** Deletes `match/team/<name>/`. Only a folder that carries the app's marker can be removed or replaced. A folder of the same name without the marker is left alone, and the install is refused.
@@ -148,7 +148,7 @@ Connecting and disconnecting a repository are settings. Like the match folder, t
 | Install | A folder of that name is in `match/team/` without the marker | Refused | Package test | "A folder named X is already there and was not put there by this app." |
 | Install | The package runs commands and that was not confirmed | Refused until `acceptCommands` is sent | Package test and router test | The dialog asks again, naming the risk |
 | Install | Disk full, or the match folder is read-only | The temporary folder is removed; nothing changes | Package test with a read-only folder | The existing plain disk message |
-| Install | The app quits partway | Files are moved into place in one step; a leftover temporary folder is removed on the next list | Package test | Either the old copy or the new one |
+| Install | The app quits partway | The marker says an install was under way; the package shows as needing an update, and installing again finishes it. Leftover staged files are names Espanso skips | Package test | "Update available". Install again to finish |
 | Install | Two installs of one package at once | One at a time | Package test | Both succeed; the folder is whole |
 | Update | Nothing to update | Answers the current state | Package test | "Already up to date." |
 | Remove | The folder was changed by hand | The marker is all that is checked; the folder is removed | Package test | Removed |
