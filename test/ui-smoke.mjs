@@ -96,9 +96,9 @@ true;
 
 // Whatever happens, the run must end with an exit code rather than hang.
 const watchdog = setTimeout(() => {
-	console.error('UI smoke: timed out after 120 seconds');
+	console.error('UI smoke: timed out after 180 seconds');
 	app.exit(1);
-}, 120000);
+}, 180000);
 
 async function run() {
 	let win = null;
@@ -112,11 +112,25 @@ async function run() {
 		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
 	});
 	const opened = [];
+	// The assistant's backends are stand-ins: a script that starts the app's
+	// real MCP server and prints what Codex would. No model is called. Which
+	// of them is ready can be changed while the test runs.
+	const chatReady = { codex: false };
+	const chatEntry = (id, label, state, extra = {}) => ({ id, label, ready: state === 'ready', state, message: '', command: null, sendsTo: null, models: [], ...extra });
+	const chatStatus = () => [
+		chatEntry('claude', 'Claude Code', 'missing', { sendsTo: 'Anthropic', message: 'Claude Code is not installed on this computer.' }),
+		chatReady.codex
+			? chatEntry('codex', 'Codex', 'ready', { sendsTo: 'OpenAI' })
+			: chatEntry('codex', 'Codex', 'signed-out', { sendsTo: 'OpenAI', message: 'Codex is not signed in. Run this in a terminal, then press Check again.', command: '/opt/tools/codex login' }),
+		chatEntry('ollama', 'Ollama', 'not-running', { message: 'Ollama is not answering on this computer. Open Ollama, then press Check again.' }),
+	];
 	const backend = await startBackend({
 		ipcMain,
 		userDataDir: app.getPath('userData'),
 		env: { SNIPPET_EDITOR_MATCH_DIR: matchDir },
 		onChange: () => win?.webContents.send('data:changed'),
+		onChatEvent: (event) => win?.webContents.send('chat:event', event),
+		chatOptions: { backends: { status: async () => chatStatus(), locate: async () => path.join(here, 'helpers', 'fakeAgent.mjs') } },
 		getWindow: () => win,
 		isTrustedSender,
 		clipboard: { writeText: (text) => copied.push(text) },
@@ -616,6 +630,136 @@ async function run() {
 		await waitFor(`document.querySelector('.raw-editor')?.value.includes('*missing')`, 'the raw editor for the file with a broken alias');
 		check(await js(`Boolean(document.querySelector('.sidebar'))`), 'the window went blank on hostile content');
 	});
+
+	// The stand-in agent is a script started by its first line, which Windows cannot do.
+	if (process.platform !== 'win32') {
+		await step('assistant', async () => {
+			const inChat = (label) => `[...document.querySelectorAll('.chat button')].find((el) => (el.getAttribute('aria-label') ?? el.textContent.trim()) === ${JSON.stringify(label)})`;
+			const ask = async (text) => {
+				await js(`window.__ui.type('.chat__box', ${JSON.stringify(text)})`);
+				await waitFor(`${inChat('Send')} && !${inChat('Send')}.disabled`, 'Send to be ready');
+				await js(`${inChat('Send')}.click()`);
+			};
+			const answered = (count) => waitFor(`!document.querySelector('.chat__working') && document.querySelectorAll('.msg--assistant').length === ${count}`, `answer ${count} to end`, 20000);
+			const lastAnswer = `[...document.querySelectorAll('.msg--assistant')].at(-1)`;
+			const pending = `[...document.querySelectorAll('.proposal[data-status="pending"] .btn')].find((el) => el.textContent.trim() === 'Apply')`;
+
+			// Nothing is ready: the panel says what each backend needs, and no message can be written.
+			await js(`window.__ui.click('Overview', '.nav-item__label')`);
+			await js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', metaKey: true }))`);
+			await waitFor(`document.querySelector('.chat:not([hidden]) .backends')`, 'the list of backends when none is ready');
+			check(await js(`document.querySelector('.chat__box').disabled`), 'a message could be written with no backend ready');
+			check(
+				JSON.stringify(await js(`[...document.querySelectorAll('.backend')].map((el) => [el.querySelector('.backend__name').textContent, el.querySelector('.badge').textContent.trim()])`)) ===
+					JSON.stringify([['Claude Code', 'Not installed'], ['Codex', 'Not signed in'], ['Ollama', 'Not running']]),
+				'the backends were not listed with their states'
+			);
+			await js(`${inChat('Copy')}.click()`);
+			await sleep(150);
+			check(copied.at(-1) === '/opt/tools/codex login', `the sign-in command copied was ${copied.at(-1)}`);
+			await shot('19-assistant-setup');
+
+			// One becomes ready.
+			chatReady.codex = true;
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`document.querySelector('.chat__starter')`, 'the starters once a backend is ready');
+			check(await js(`document.querySelector('.chat__notice')?.textContent.includes('Codex sends your messages, and the snippets it reads, to OpenAI')`), 'nothing said where the text goes');
+			await js(`${inChat('OK')}.click()`);
+			await waitFor(`!document.querySelector('.chat__notice')`, 'the notice to go once read');
+			check((await js(`document.querySelector('.chat__provider').textContent`)) === 'Codex', 'the footer does not name who answers');
+			await shot('19b-assistant-empty');
+
+			// A question, an answer, a card. Nothing is written.
+			const before = onDisk('base.yml');
+			await ask('SAY Here is a draft.\nADD ;asst=From the assistant\nSAY It is waiting on the card.');
+			await answered(1);
+			check((await js(`${lastAnswer}.querySelector('.msg__tools').textContent`)) === 'Read a file · Proposed a snippet', `the tool line read: ${await js(`${lastAnswer}.querySelector('.msg__tools')?.textContent`)}`);
+			check(
+				JSON.stringify(await js(`[...${lastAnswer}.children].map((el) => el.className.split(' ')[0])`)) === JSON.stringify(['msg__tools', 'md', 'proposal', 'md']),
+				'the card is not where the assistant proposed it'
+			);
+			check((await js(`document.querySelector('.proposal__title').textContent`)) === 'Add a snippet to base.yml', 'the card does not say what it would do');
+			check(await js(`[...document.querySelectorAll('.diff-row--add .diff-row__text')].map((el) => el.textContent).join('|') === '- trigger: ";asst"|  replace: "From the assistant"'`), 'the card does not show the snippet');
+			check(onDisk('base.yml') === before, 'the assistant changed a file without Apply');
+			await shot('19c-assistant-card');
+
+			// The switch is off: Apply says so, and writes nothing.
+			await js(`${pending}.click()`);
+			await waitFor(`document.querySelector('.proposal__problem')?.textContent.startsWith('Changes by AI tools are switched off.')`, 'Apply to say the switch is off');
+			check(await js(`Boolean(${inChat('Open Settings')})`), 'no way to the switch was offered');
+			check(onDisk('base.yml') === before, 'Apply wrote with the switch off');
+
+			// Switched on, Apply writes it.
+			await backend.service.saveSettings({ aiWrite: true });
+			await js(`${pending}.click()`);
+			await waitFor(`document.querySelector('.proposal[data-status="applied"]')`, 'the card to be applied');
+			check(onDisk('base.yml') === `${before}\n  - trigger: ";asst"\n    replace: "From the assistant"\n`, 'Apply did not write the snippet as shown');
+			await shot('19d-assistant-applied');
+			await js(`${inChat('Show the file')}.click()`);
+			await waitFor(`[...document.querySelectorAll('.snippet-row')].some((el) => el.textContent.includes(';asst'))`, 'the file to open with the new snippet');
+
+			// Unsaved edits to the same file hold Apply back.
+			await ask('ADD ;held=Held back');
+			await answered(2);
+			await js(`document.querySelector('.snippet-row__open').click()`);
+			await waitFor(`document.querySelector('.editor textarea')`, 'the editor');
+			await js(`window.__ui.type('.editor textarea', 'Edited while a card waits')`);
+			await waitFor(`window.__ui.byText('Unsaved changes', '.badge')`, 'the unsaved badge');
+			await js(`${pending}.click()`);
+			await waitFor(`document.querySelector('.proposal__problem')?.textContent === 'Save or discard your edits to this file first.'`, 'Apply to wait for the edits');
+			check(!onDisk('base.yml').includes(';held'), 'Apply wrote over unsaved edits');
+			await js(`window.__ui.click('Save')`);
+			await waitFor(`window.__ui.byText('Saved', '.action-bar__status')`, 'the save to finish');
+			await js(`${pending}.click()`);
+			await waitFor(`document.querySelectorAll('.proposal[data-status="applied"]').length === 2`, 'the second card to be applied after the save');
+			check(onDisk('base.yml').includes('Edited while a card waits') && onDisk('base.yml').includes('  - trigger: ";held"\n    replace: "Held back"\n'), 'the saved edit and the applied card are not both in the file');
+
+			// What an answer contains is shown as text, whatever it says.
+			await ask('SAY <img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script> [press](javascript:window.__pwned=1) **bold**');
+			await answered(3);
+			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('<img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script> press (javascript:window.__pwned=1) bold')`), 'the answer was not shown as written');
+			check(await js(`window.__pwned === undefined && !${lastAnswer}.querySelector('img, script, a') && Boolean(${lastAnswer}.querySelector('strong'))`), 'an answer became markup');
+
+			// Stop.
+			await ask('SAY Thinking it over.\nSEARCH hello\nHANG');
+			await waitFor(`document.querySelector('.chat__working') && ${lastAnswer}.querySelector('.msg__tools')?.textContent === 'Searched snippets'`, 'an answer under way');
+			check(await js(`${inChat('New conversation')}.disabled`), 'a new conversation could be started mid-answer');
+			await shot('19e-assistant-working');
+			await js(`${inChat('Stop')}.click()`);
+			await waitFor(`!document.querySelector('.chat__working') && ${lastAnswer}.querySelector('.msg__ending')?.textContent === 'Stopped.'`, 'the answer to stop');
+			check(await js(`${lastAnswer}.querySelector('.md').textContent === 'Thinking it over.'`), 'what was said before the stop was lost');
+
+			// A backend that fails says why.
+			await ask('EXIT 3 You have hit your usage limit.');
+			await answered(5);
+			check((await js(`${lastAnswer}.querySelector('.alert')?.textContent.trim()`)) === 'Codex stopped unexpectedly: You have hit your usage limit.', 'the failure was not shown');
+
+			// History, and a new conversation.
+			await js(`${inChat('New conversation')}.click()`);
+			await waitFor(`document.querySelector('.chat__starter')`, 'a new, empty conversation');
+			await js(`${inChat('Assistant options')}.click()`);
+			await waitFor(`document.querySelector('.chat__menu')`, 'the options menu');
+			await shot('19f-assistant-menu');
+			await js(`[...document.querySelectorAll('.chat__menu button')].find((el) => el.textContent.trim() === 'History').click()`);
+			await waitFor(`document.querySelectorAll('.chat__conversation').length === 1`, 'the conversation in History');
+			await shot('19g-assistant-history');
+			await js(`document.querySelector('.chat__conversation').click()`);
+			await waitFor(`document.querySelectorAll('.msg--assistant').length === 5`, 'the conversation to come back');
+
+			// In the dark, in a narrower window (where it covers the page), and closed again.
+			await js(`document.querySelector('.sidebar__footer [aria-label="Dark"]').click()`);
+			await shot('19h-assistant-dark');
+			await js(`document.querySelector('.sidebar__footer [aria-label="Light"]').click()`);
+			win.setContentSize(900, 700);
+			await sleep(300);
+			check(await js(`document.querySelector('.chat').getBoundingClientRect().width === window.innerWidth`), 'in a narrow window the assistant does not cover the page');
+			await shot('19i-assistant-sheet');
+			await js(`${inChat('Close the assistant')}.click()`);
+			await waitFor(`document.querySelector('.chat').hidden`, 'the assistant to close');
+			win.setContentSize(1440, 900);
+			await backend.service.saveSettings({ aiWrite: false });
+		});
+	}
 
 	await waitFor(`document.querySelectorAll('.toast').length === 0`, 'every toast to dismiss itself', 9000);
 

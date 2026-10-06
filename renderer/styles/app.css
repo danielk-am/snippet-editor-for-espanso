@@ -2344,17 +2344,48 @@ li:first-child > .file-row {
 }
 
 .backend__row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 24px;
 }
 
-.backend__row input {
+/* The whole row is the control. The mark beside the name is drawn. */
+.backend__radio {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.backend__radio:disabled {
+  cursor: not-allowed;
+}
+
+.backend__mark {
   width: 16px;
   height: 16px;
-  margin: 0;
-  accent-color: var(--ui-primary);
+  flex: none;
+  border: 1.5px solid var(--ui-input);
+  border-radius: 50%;
+  background: var(--ui-background);
+}
+
+.backend__radio:checked + .backend__mark {
+  border: 5px solid var(--ui-primary);
+}
+
+.backend__radio:disabled + .backend__mark {
+  opacity: 0.5;
+}
+
+.backend__radio:focus-visible + .backend__mark {
+  outline: 2px solid var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .backend__name {

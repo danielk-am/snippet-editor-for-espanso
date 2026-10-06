@@ -103,7 +103,8 @@ function Backends({ status, chosen, model, checking, onChoose, onModel, onCheck 
 			${status.map(
 				(backend) => html`<li class="backend" data-ready=${backend.ready ? '' : undefined}>
 					<label class="backend__row">
-						<input type="radio" name="chat-backend" checked=${chosen?.id === backend.id} disabled=${!backend.ready} onChange=${() => onChoose(backend.id)} />
+						<input class="backend__radio" type="radio" name="chat-backend" checked=${chosen?.id === backend.id} disabled=${!backend.ready} onChange=${() => onChoose(backend.id)} />
+						<span class="backend__mark" aria-hidden="true"></span>
 						<span class="backend__name">${backend.label}</span>
 						<${Badge} tone=${backend.ready ? 'success' : undefined}>${STATE_WORDS[backend.state] ?? backend.state}<//>
 					</label>
