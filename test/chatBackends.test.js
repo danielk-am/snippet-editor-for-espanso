@@ -98,6 +98,10 @@ test('on Windows and Linux the program\'s name and its usual places are those of
 	const shim = computer({ platform: 'win32', home: 'C:\\Users\\sam', env: { Path: 'C:\\npm' }, files: ['C:\\npm\\claude.cmd', 'C:\\npm\\claude'] });
 	assert.equal(await shim.backends.locate('claude'), null);
 
+	// A Mac's app folders are not looked in on another system.
+	const stray = computer({ platform: 'linux', home: HOME, env: { PATH: '/usr/bin' }, files: [BUNDLED_CODEX, BUNDLED_CLAUDE('2.1.288', 'abc')], dirs: { [DESKTOP]: ['2.1.288'], [`${DESKTOP}/2.1.288`]: ['abc'] } });
+	assert.deepEqual([await stray.backends.locate('codex'), await stray.backends.locate('claude')], [null, null]);
+
 	const linux = computer({ platform: 'linux', home: '/home/sam', env: { PATH: '/usr/bin' }, files: ['/home/sam/.local/bin/claude', '/usr/local/bin/codex'] });
 	assert.equal(await linux.backends.locate('claude'), '/home/sam/.local/bin/claude');
 	assert.equal(await linux.backends.locate('codex'), '/usr/local/bin/codex');
