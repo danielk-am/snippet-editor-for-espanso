@@ -23,7 +23,7 @@ Run everything: `npm test`. One file: `node --test test/<name>.test.js`.
 | `core/chat/chat.js`, `test/helpers/fakeAgent.mjs` | new | 11 |
 | `shared/channels.js`, `electron/preload.cjs`, `electron/ipc.js`, `electron/bootstrap.js`, `electron/main.js` | changed | 12 |
 | `renderer/lib/markdown.js` | new | 13 |
-| `renderer/lib/chatStore.js` | new | 14 |
+| `renderer/lib/chatStore.js`, `renderer/lib/diff.js` | new | 14 |
 | `renderer/components/ChatPanel.js`, `ProposalCard.js`, `renderer/app.js`, `renderer/lib/api.js`, `renderer/lib/icons.js`, `renderer/styles/app.css` | new and changed | 15 |
 | `test/ui-smoke.mjs`, `test/packaged-smoke.mjs` | changed | 16 |
 | `README.md`, the design's "Changed while building" | changed | 17 |
@@ -60,7 +60,7 @@ Tests (`test/chatProposals.test.js`), on the real service over the fixtures: one
 
 ## Task 4: the per-message listener
 
-`openChannel({ dir, router, onProposal })` → `{ file, port, close() }`. A listener on `127.0.0.1` on a port the system picks, a fresh token, and `dir/chat-<random>.json` (mode 0600) holding `{ port, token }`. It answers `GET` routes and `POST yaml/parse` through the router, `POST chat/proposals` through `onProposal`, and nothing else.
+`openChannel({ dir, router, onProposal })` → `{ file, port, close() }`. A listener on `127.0.0.1` on a port the system picks, a fresh token, and `dir/chat-<random>.json` (mode 0600) holding `{ port, token }`. It answers `GET` routes through the router, `POST chat/proposals` through `onProposal`, and nothing else. (As built: the YAML check a proposal needs runs inside the app, so the listener does not carry it.)
 
 Tests (`test/chatChannel.test.js`): the file's mode and contents; reads work with the token and fail without; every write route of the router answers 405 and changes nothing; a proposal reaches `onProposal` and its `{ id }` or `{ error }` comes back; after `close` the port is shut and the file is gone; the proof route answers.
 
@@ -124,9 +124,11 @@ Tests: `test/channels.test.js` keeps the three lists in step.
 
 Tests (`test/markdown.test.js`): each kind; nesting of bold and italic; an unclosed code block; HTML and a script tag come out as text; a very long line; a table stays readable as text.
 
-## Task 14: history
+## Task 14: history, and what changed line by line
 
-`chatStore(storage)` → `{ load(), save(state) }`, with 20 conversations of 100 messages, newest first.
+`createChatStore(storage)` → `{ load(), save(state) }`, with 20 conversations of 100 messages, newest first.
+
+`diffLines(before, after, { context })` → rows for a card: the lines that go and come, a little around them, and the rest folded into a count. (Added while building: a card shows what differs, not two whole texts.)
 
 Tests (`test/chatStore.test.js`): trimming; damaged JSON; a storage that throws on read and on write.
 
