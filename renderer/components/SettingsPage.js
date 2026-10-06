@@ -121,6 +121,58 @@ function ApiCard() {
 	<//>`;
 }
 
+// What an AI tool may do through the MCP server that comes with the app.
+function AiCard() {
+	const toast = useToast();
+	const [ai, setAi] = useState(null);
+	useEffect(() => {
+		api.ai().then(setAi, () => {});
+	}, []);
+	if (!ai) return null;
+
+	const change = async (write) => {
+		try {
+			setAi(await api.setAi({ write }));
+		} catch (failure) {
+			toast({ tone: 'error', title: 'That did not work', description: failure.message });
+		}
+	};
+
+	return html`<${Card}
+		title="AI tools"
+		description="An AI tool such as Claude or Codex can search and read your snippets through the MCP server that comes with this app. The app must be open, with the API above switched on."
+	>
+		<div class="setting">
+			<${Switch}
+				title="Let AI tools change snippets"
+				description=${ai.write
+					? 'On. AI tools can add, change and delete snippets, install team packages and send proposals. Every change needs the version of the file it read, and keeps a backup.'
+					: 'Off. AI tools can search and read, and nothing else.'}
+				checked=${ai.write}
+				onChange=${change}
+			/>
+			${ai.setup &&
+			html`
+				<p class="field__help">To connect an AI tool, add this to its MCP settings. It holds paths only, no password or token.</p>
+				<pre class="code-block" tabindex="0" aria-label="MCP setup">${ai.setup}</pre>
+				<div class="setting__actions">
+					<${Button}
+						variant="outline"
+						icon="copy"
+						onClick=${async () => {
+							await api.copy(ai.setup);
+							toast({ title: 'Setup copied' });
+						}}
+					>
+						Copy setup
+					<//>
+				</div>
+			`}
+			<p class="field__help">This switch governs AI tools that use this MCP server. Another program that holds the API token can still change snippets through the API.</p>
+		</div>
+	<//>`;
+}
+
 // Which GitHub repository the team's shared snippets come from. Connecting
 // is a setting, so it lives here; browsing and installing is on its own page.
 function TeamCard({ navigate, refresh }) {
@@ -253,6 +305,7 @@ export function SettingsPage({ state, theme, setTheme, refresh, navigate }) {
 			<//>
 			<${TeamCard} navigate=${navigate} refresh=${refresh} />
 			<${ApiCard} />
+			<${AiCard} />
 			<${Card} title="Appearance">
 				<${Segmented} label="Theme" options=${THEMES} value=${theme} onChange=${setTheme} />
 			<//>

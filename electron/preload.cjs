@@ -11,6 +11,8 @@ const CHANNELS = new Set([
 	'team:connect',
 	'team:disconnect',
 	'team:openLink',
+	'ai:get',
+	'ai:set',
 	'listener:get',
 	'listener:set',
 	'listener:replaceToken',

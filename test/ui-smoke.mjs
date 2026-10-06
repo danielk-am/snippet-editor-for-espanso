@@ -8,8 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, ipcMain } from 'electron';
+import { spawn } from 'node:child_process';
 import { createGit } from '../core/git.js';
 import { startBackend } from '../electron/bootstrap.js';
+import { mcpSetup } from '../electron/mcpSetup.js';
 import { MANIFEST, MATCHES, gitEnv, seeded } from './helpers/teamRemote.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
@@ -121,6 +123,7 @@ async function run() {
 		openExternal: async (url) => opened.push(url),
 		git: createGit({ allowLocal: true, env: gitEnv(remote.root) }),
 		allowLocalRepositories: true,
+		mcp: mcpSetup({ packaged: false, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: path.join(here, '..') }),
 	});
 	const services = backend.service;
 
@@ -345,6 +348,48 @@ async function run() {
 		await js(`document.querySelector('[role="switch"][aria-checked="true"]').click()`);
 		await waitFor(`document.querySelector('[role="switch"][aria-checked="false"]') && !(${shown})`, 'Settings to show the API as off');
 		check((await reach({ Authorization: `Bearer ${token}` })) === 'closed', 'the API kept listening after it was switched off');
+	});
+
+	await step('AI tools', async () => {
+		const settingsFile = path.join(app.getPath('userData'), 'settings.json');
+		const saved = () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')).aiWrite;
+		const toggle = `[...document.querySelectorAll('.switch-row')].find((row) => row.textContent.includes('Let AI tools change snippets'))?.querySelector('[role="switch"]')`;
+		await waitFor(toggle, 'the AI tools switch');
+		check((await js(`${toggle}.getAttribute('aria-checked')`)) === 'false' && saved() === false, 'AI tools could change snippets before that was switched on');
+
+		await js(`${toggle}.click()`);
+		await waitFor(`${toggle}.getAttribute('aria-checked') === 'true'`, 'the switch to turn on');
+		check(saved() === true, 'switching it on did not reach the settings file');
+		await js(`${toggle}.closest('.card').scrollIntoView({ block: 'center' }); true;`);
+		await shot('09f-settings-ai');
+
+		// The setup it offers is the one that starts the server, with no secret in it.
+		await js(`window.__ui.click('Copy setup')`);
+		await waitFor(`window.__ui.byText('Setup copied', '.toast__title')`, 'the setup to be copied');
+		const setup = JSON.parse(copied.at(-1)).mcpServers['snippet-editor'];
+		check(fs.existsSync(setup.args[0]) && setup.args[0].endsWith(path.join('mcp', 'server.mjs')), `the setup points at ${setup.args[0]}`);
+		check(!copied.at(-1).includes(fs.readFileSync(path.join(app.getPath('userData'), 'api-token'), 'utf8').trim()), 'the setup carries the API token');
+
+		// Started the way an AI tool would start it, it answers.
+		const answer = await new Promise((resolve) => {
+			const child = spawn(setup.command, setup.args, { env: { ...process.env, ...setup.env, SNIPPET_EDITOR_DATA_DIR: app.getPath('userData') }, stdio: ['pipe', 'pipe', 'ignore'] });
+			let out = '';
+			const giveUp = setTimeout(() => (child.kill(), resolve('no answer')), 10000);
+			child.stdout.on('data', (chunk) => {
+				out += chunk;
+				if (!out.includes('\n')) return;
+				clearTimeout(giveUp);
+				child.stdin.end();
+				resolve(out.split('\n')[0]);
+			});
+			child.on('error', (error) => resolve(`could not start: ${error.message}`));
+			child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } }) + '\n');
+		});
+		check(answer.includes('"supportedVersions":["2026-07-28"]'), `the server started from the copied setup answered: ${answer.slice(0, 200)}`);
+
+		await js(`${toggle}.click()`);
+		await waitFor(`${toggle}.getAttribute('aria-checked') === 'false'`, 'the switch to turn off');
+		check(saved() === false, 'switching it off did not reach the settings file');
 	});
 
 	await step('team snippets', async () => {

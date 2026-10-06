@@ -9,11 +9,11 @@ import { registerIpc } from './ipc.js';
 // The last four options are for that test: a stand-in clipboard and browser,
 // and a git that may use a repository in a temporary folder. The app passes
 // none of them.
-export async function startBackend({ ipcMain, userDataDir, env, onChange, getWindow, isTrustedSender, clipboard, openExternal, git, allowLocalRepositories }) {
+export async function startBackend({ ipcMain, userDataDir, env, onChange, getWindow, isTrustedSender, mcp, clipboard, openExternal, git, allowLocalRepositories }) {
 	const service = await createService({ userDataDir, env, onChange, git, allowLocalRepositories });
 	const router = createRouter({ service });
 	const listener = createListenerControl({ service, router });
-	registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, clipboard, openExternal });
+	registerIpc({ ipcMain, service, router, listener, getWindow, isTrustedSender, mcp, clipboard, openExternal });
 	await listener.apply();
 	return {
 		service,

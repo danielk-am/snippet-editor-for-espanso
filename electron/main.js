@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import { startBackend } from './bootstrap.js';
+import { mcpSetup } from './mcpSetup.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 
 let win = null;
@@ -69,6 +70,7 @@ if (!app.requestSingleInstanceLock()) {
 			onChange: () => send('data:changed'),
 			getWindow: () => win,
 			isTrustedSender,
+			mcp: mcpSetup({ packaged: app.isPackaged, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
 		});
 		// Run from source, macOS shows Electron's own icon in the Dock. The
 		// packaged app carries its icon in the bundle and needs no help.

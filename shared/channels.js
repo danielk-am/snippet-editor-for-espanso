@@ -14,6 +14,8 @@ export const CHANNELS = [
 	'team:connect',
 	'team:disconnect',
 	'team:openLink',
+	'ai:get',
+	'ai:set',
 	'listener:get',
 	'listener:set',
 	'listener:replaceToken',

@@ -46,6 +46,10 @@ export const api = {
 	disconnectTeam: () => call('team:disconnect'),
 	openTeamLink: (url) => call('team:openLink', url),
 
+	// What AI tools may do, and how to connect one.
+	ai: () => call('ai:get'),
+	setAi: (input) => call('ai:set', input),
+
 	// Things only a window can ask for.
 	chooseMatchDir: () => call('settings:chooseMatchDir'),
 	resetMatchDir: () => call('settings:resetMatchDir'),
