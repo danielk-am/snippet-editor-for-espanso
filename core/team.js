@@ -54,7 +54,9 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 					// An install that was cut short counts as out of date: installing
 					// again is what finishes it.
 					updateAvailable: own && (holder === '' || marker.state !== 'installed' || marker.tree !== pkg.tree),
-					// The name is taken: another repository's package is installed under it.
+					// The name is taken: another repository's package is installed under
+					// it. What a marker names is an address the app accepts, never the
+					// text in its file: the installed copies see to that.
 					installedFrom: marker && !own ? marker.repository : '',
 				};
 			}),

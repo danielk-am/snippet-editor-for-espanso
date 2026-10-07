@@ -909,6 +909,34 @@ test('at start, one repository out of reach does not hold up the others', async 
 	assert.deepEqual([of(status, other).commit, named(of(status, other).packages).other.installed], [was, true]);
 });
 
+test('at start the repositories are fetched side by side: one that stalls keeps no other waiting', async (t) => {
+	const context = await setup(t);
+	const other = another(OTHER);
+	await context.service.connectTeam(context.remote.url);
+	await context.service.connectTeam(other.url);
+	const before = of(await context.service.teamStatus(), other).fetchedAt;
+	const [mine, theirs] = [context.remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'See you']) }), other.commit({ 'packages/other/package.yml': MATCHES([':o', 'Other, changed']) })];
+
+	// The first in the saved list stalls: it is asked, and does not answer.
+	const release = context.hold((args, options) => args[0] === 'ls-remote' && options.cwd.includes(idOf(context.remote)));
+	t.after(release);
+	const again = await context.start(join(context.root, 'data'));
+	let ended = false;
+	again.service.teamFetched().then(() => (ended = true));
+
+	// The second answers. Looked at until it has been fetched, for five seconds at most.
+	let status = await again.service.teamStatus();
+	for (const until = Date.now() + 5000; of(status, other).commit !== theirs && Date.now() < until; status = await again.service.teamStatus()) await new Promise((resolve) => setTimeout(resolve, 25));
+	assert.equal(of(status, other).commit, theirs, 'the second repository was not fetched while the first was waiting');
+	assert.ok(of(status, other).fetchedAt > before);
+	// The first is still waiting, so the start's fetching as a whole has not ended.
+	assert.deepEqual([of(status, context.remote).commit === mine, ended], [false, false]);
+
+	release();
+	await again.service.teamFetched();
+	assert.deepEqual([of(await again.service.teamStatus(), context.remote).commit, ended], [mine, true]);
+});
+
 test('a settings file from before, with its one repository, connects it as before and is saved as a list at the next change', async (t) => {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	const remote = seeded();
@@ -1045,6 +1073,69 @@ test('a package from a repository that is not connected is listed apart with its
 	await service.connectTeam(remote.url);
 	const again = await service.teamStatus();
 	assert.deepEqual([again.installedOnly, named(of(again, other).packages).goodbyes.installed, named(of(again, remote).packages).goodbyes.installedFrom], [[], true, other.url]);
+});
+
+// What a marker file says is text someone could have edited. These two tests
+// rewrite the repository an installed package's marker names.
+const remark = (matchDir, name, repository) => {
+	const file = join(matchDir, 'team', name, '.snippet-editor.json');
+	writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), repository }));
+};
+
+test('the repository a marker names reaches the status as an address, never as the text in the file', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	const other = another({ goodbyes: MATCHES([':bye', 'The other goodbye']) });
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	await service.team(idOf(remote)).install('goodbyes');
+	await service.team(idOf(remote)).install('support');
+	// Spaces around an address do not stop it being one, and a file can hold any number of them.
+	for (const name of ['goodbyes', 'support']) remark(matchDir, name, `${' '.repeat(3_000_000)}${remote.url}  `);
+
+	// Each package is still its own repository's, and the other is told where the name is held, in so many words.
+	const both = await call('GET', '/team');
+	assert.deepEqual([shown(of(both.body, remote), 'goodbyes'), shown(of(both.body, other), 'goodbyes')], [[true, false, ''], [false, false, remote.url]]);
+	assert.ok(JSON.stringify(both.body).length < 20_000, `the status is ${JSON.stringify(both.body).length} characters long`);
+	await fails(service.team(idOf(other)).install('goodbyes'), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', taken('goodbyes', remote.url)]));
+
+	// Listed apart once its repository is disconnected, by the same address.
+	await service.disconnectTeam(idOf(remote));
+	const left = await call('GET', '/team');
+	assert.deepEqual(left.body.installedOnly, [{ name: 'goodbyes', repository: remote.url }, { name: 'support', repository: remote.url }]);
+	assert.equal(named(only(left.body).packages).goodbyes.installedFrom, remote.url);
+	assert.deepEqual(await service.teamStatus(), left.body);
+	assert.ok(JSON.stringify(left.body).length < 20_000, `the status is ${JSON.stringify(left.body).length} characters long`);
+});
+
+test('a marker whose text holds a sign-in names no repository, and none of that text is shown anywhere', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	await service.connectTeam(remote.url);
+	await service.team().install('goodbyes');
+	await service.team().install('support');
+	for (const name of ['goodbyes', 'support']) remark(matchDir, name, 'https://bob:s3cret@github.com/acme/team');
+	// Everything the app says about team packages, to the window, the API and the tools.
+	const said = async () => JSON.stringify([await service.teamStatus(), (await call('GET', '/team')).body, (await call('GET', '/state')).body]);
+	const clean = (text) => assert.ok(!/s3cret|bob/.test(text), 'the marker\'s text is in what the app says');
+
+	// Offered by a connected repository: each shows as needing an update, which repairs it.
+	const offered = await service.teamStatus();
+	assert.deepEqual([shown(only(offered), 'goodbyes'), shown(only(offered), 'support'), offered.installedOnly], [[true, true, ''], [true, true, ''], []]);
+	clean(await said());
+
+	// One dropped by its repository, then both with no repository connected: listed apart, with no address.
+	remote.commit({ 'packages/support/_manifest.yml': null, 'packages/support/replies.yml': null, 'packages/support/escalations.yml': null });
+	assert.deepEqual((await service.refreshTeam()).installedOnly, [{ name: 'support', repository: '' }]);
+	clean(await said());
+	await service.disconnectTeam(idOf(remote));
+	assert.deepEqual((await service.teamStatus()).installedOnly, [{ name: 'goodbyes', repository: '' }, { name: 'support', repository: '' }]);
+	clean(await said());
+
+	// Another repository that offers the name may repair it, and says nothing of the old text either.
+	const other = another({ goodbyes: MATCHES([':bye', 'The other goodbye']) });
+	const again = await service.connectTeam(other.url);
+	assert.deepEqual([shown(only(again), 'goodbyes'), again.installedOnly], [[true, true, ''], [{ name: 'support', repository: '' }]]);
+	clean(await said());
+	assert.deepEqual(shown(await service.team().install('goodbyes'), 'goodbyes'), [true, false, '']);
 });
 
 test('a damaged marker is listed apart only when no connected repository offers its name', async (t) => {

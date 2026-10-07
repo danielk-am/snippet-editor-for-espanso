@@ -331,6 +331,30 @@ test('which repository a marker names is told by its key, whatever form the addr
 	for (const text of ['', 'somewhere on the internet', '/tmp/remotes/team.git', 42, null, undefined]) assert.equal(packages.keyOf(text), '', String(text));
 });
 
+test('what a marker says of its repository is read as an address, never as the text in the file', async () => {
+	const { packages, dir, read } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const written = JSON.parse(read('goodbyes', MARKER));
+	const named = async (repository) => {
+		writeFileSync(join(dir('goodbyes'), MARKER), JSON.stringify({ ...written, repository }));
+		return (await packages.installed()).get('goodbyes').repository;
+	};
+	// A marker can be edited by hand. Spaces around an address do not stop it
+	// being one, and there can be any number of them.
+	assert.equal(await named(`${' '.repeat(3_000_000)}git@github.com:acme/team.git\n`), 'git@github.com:acme/team.git');
+	// As the app would write the address, whichever way it was put.
+	assert.equal(await named('acme/team'), 'https://github.com/acme/team.git');
+	assert.equal(await named(' https://GitHub.com/Acme/Team/ '), 'https://GitHub.com/Acme/Team.git');
+	// Text that is no address names no repository, and none of it is handed on.
+	for (const text of ['https://bob:s3cret@github.com/acme/team', 'ext::sh -c "touch /tmp/owned"', 'somewhere on the internet', `acme/${'x'.repeat(400)}`, '/tmp/remotes/team.git', 42, null]) {
+		assert.equal(await named(text), '', String(text).slice(0, 40));
+	}
+	// The package is still its repository's own, and the refusal to another is as short as ever.
+	await named(`${' '.repeat(100_000)}git@github.com:acme/team.git`);
+	assert.equal((await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER }), 'EXISTS')).message, TAKEN);
+	assert.equal((await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE })).state, 'installed');
+});
+
 test('in tests, two folders on this computer are two repositories', async () => {
 	const matchDir = join(mkdtempSync(join(tmpdir(), 'snippet-editor-teampkg-')), 'match');
 	const packages = createTeamPackages({ matchDir, now: AT, allowLocal: true });

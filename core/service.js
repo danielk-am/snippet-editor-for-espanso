@@ -120,8 +120,9 @@ export async function createService({ userDataDir, env = process.env, onChange =
 			const key = teamPackages.keyOf(marker.repository);
 			// A damaged marker names no repository. Where its name is on offer, the
 			// package shows there as needing an update. Otherwise it is listed
-			// here, so that it can still be removed.
-			if (key ? !keys.has(key) : !offered.has(name)) installedOnly.push({ name, repository: key ? marker.repository : '' });
+			// here, so that it can still be removed. What a marker names is by now
+			// an address the app accepts, or '': never the text in its file.
+			if (key ? !keys.has(key) : !offered.has(name)) installedOnly.push({ name, repository: marker.repository });
 		}
 		return { connected: connected.length > 0, repositories, installedOnly, problem: teamProblem };
 	}

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isSafeFileName } from './store.js';
-import { parseRepositoryAddress, repositoryKey } from './teamAddress.js';
+import { parseRepositoryAddress, repositoryKey, repositoryName } from './teamAddress.js';
 import { MANIFEST, PACKAGE_NAME } from './teamRepo.js';
 import { isPlainObject, toText } from '../shared/text.js';
 
@@ -38,11 +38,19 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 	// marker that cannot be read, or whose address the app would refuse, names
 	// none: its key is ''.
 	const keyOf = (url) => repositoryKey(url, { allowLocal });
-	// How a message names a repository: owner/repo. A folder has no owner.
-	const called = (url) => {
-		const { owner, repo } = parseRepositoryAddress(url, { allowLocal });
-		return owner ? `${owner}/${repo}` : url;
+	// The address a marker names, as the app itself would write it, or '' when
+	// its text is no address. A marker is a file, and a file can be edited by
+	// hand: its text can be any length, and can hold a sign-in. So that text
+	// is read here and handed on to nobody. What goes on is the address.
+	const addressOf = (text) => {
+		try {
+			return parseRepositoryAddress(text, { allowLocal }).url;
+		} catch {
+			return '';
+		}
 	};
+	// How a message names a repository: owner/repo. A folder has no owner.
+	const called = (url) => repositoryName(parseRepositoryAddress(url, { allowLocal }));
 	// A folder whose marker names no repository is damaged, and any repository
 	// may repair it. One that names a repository is that repository's alone.
 	const refuseIfHeld = (name, marker, repository) => {
@@ -89,7 +97,7 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 		}
 		const known = isPlainObject(data);
 		return {
-			repository: known ? toText(data.repository) : '',
+			repository: known ? addressOf(toText(data.repository)) : '',
 			package: name,
 			commit: known ? toText(data.commit) : '',
 			tree: known ? toText(data.tree) : '',
