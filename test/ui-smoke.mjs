@@ -118,11 +118,15 @@ async function run() {
 	// real MCP server and prints what Codex would. No model is called. Which
 	// of them is ready can be changed while the test runs.
 	const chatReady = { codex: false, ollama: false };
+	// The models the stand-in Codex says it has. The test changes the list.
+	const QUICK = { name: 'quick-one', label: 'Quick One', about: 'Fast and affordable model for easier tasks.' };
+	const LONG = { name: 'a-model-with-a-very-long-name', label: 'A Model With A Name Long Enough To Need Cutting In A Narrow Panel', about: 'Thorough.' };
+	const chatModels = { codex: [QUICK, LONG] };
 	const chatEntry = (id, label, state, extra = {}) => ({ id, label, ready: state === 'ready', state, message: '', command: null, sendsTo: null, models: [], ...extra });
 	const chatStatus = () => [
 		chatEntry('claude', 'Claude Code', 'missing', { sendsTo: 'Anthropic', message: 'Claude Code is not installed on this computer.' }),
 		chatReady.codex
-			? chatEntry('codex', 'Codex', 'ready', { sendsTo: 'OpenAI' })
+			? chatEntry('codex', 'Codex', 'ready', { sendsTo: 'OpenAI', models: chatModels.codex })
 			: chatEntry('codex', 'Codex', 'signed-out', { sendsTo: 'OpenAI', message: 'Codex is not signed in. Run this in a terminal, then press Check again.', command: '/opt/tools/codex login' }),
 		chatReady.ollama
 			? chatEntry('ollama', 'Ollama', 'ready', { models: [{ name: 'in-the-cloud:cloud', cloud: true }, { name: 'on-this-computer:8b', cloud: false }] })
@@ -843,6 +847,61 @@ async function run() {
 			check(!onDisk('zebras.yml').includes('Edited before a row was pressed'), 'discarded edits reached the file');
 			check(!(await js(`document.querySelector('.chat').hidden`)), 'beside the page, the assistant closed when a row was opened');
 
+			// Which model answers. Codex lists its own, and its own choice comes first.
+			const codexRow = `[...document.querySelectorAll('.backend')].find((el) => el.querySelector('.backend__name').textContent === 'Codex')`;
+			const pick = (name) => js(`(() => { const el = ${codexRow}.querySelector('select'); el.value = ${JSON.stringify(name)}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+			const provider = `document.querySelector('.chat__provider').textContent`;
+			await js(`${inChat('Codex')}.click()`);
+			await waitFor(`document.querySelector('.backends') && ${codexRow}.querySelector('select')`, 'the Model choice under Codex');
+			check(
+				JSON.stringify(await js(`[...${codexRow}.querySelectorAll('select option')].map((el) => el.textContent)`)) === JSON.stringify(["Codex's own choice", QUICK.label, LONG.label]),
+				`the models offered were: ${JSON.stringify(await js(`[...${codexRow}.querySelectorAll('select option')].map((el) => el.textContent)`))}`
+			);
+			check((await js(`${codexRow}.querySelector('select').value`)) === '' && !(await js(`Boolean(${codexRow}.querySelector('.backend__about'))`)), "Codex's own choice was not what was chosen to begin with");
+			check(!(await js(`Boolean([...document.querySelectorAll('.backend')].find((el) => el.querySelector('.backend__name').textContent === 'Claude Code').querySelector('select'))`)), 'a backend that is not ready offered a model');
+			await pick('quick-one');
+			await waitFor(`${provider} === 'Codex · Quick One'`, 'the footer to name the model');
+			check((await js(`${codexRow}.querySelector('.backend__about')?.textContent`)) === QUICK.about, 'what Codex says of the model is not shown');
+			await shot('19n-assistant-model');
+			// A long name, at the panel's narrowest: cut, not spilled.
+			await pick(LONG.name);
+			await waitFor(`${provider} === ${JSON.stringify(`Codex · ${LONG.label}`)}`, 'the footer to name the long model');
+			await js(`document.querySelector('.chat__resize').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+			await waitFor(`Math.round(document.querySelector('.chat').getBoundingClientRect().width) === 320`, 'the panel at its narrowest, for the model');
+			check(
+				await js(`(() => { const panel = document.querySelector('.chat').getBoundingClientRect(); return [document.querySelector('.chat__provider'), ${codexRow}.querySelector('select'), document.querySelector('.chat__footer')].every((el) => el.getBoundingClientRect().right <= panel.right + 0.5 && el.getBoundingClientRect().left >= panel.left - 0.5); })()`),
+				'a long model name spills out of the narrow panel'
+			);
+			await shot('19o-assistant-model-narrow');
+			for (let press = 0; press < 5; press += 1) await js(`document.querySelector('.chat__resize').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))`);
+			// The chosen model reaches the program by name.
+			await pick('quick-one');
+			await waitFor(`${provider} === 'Codex · Quick One'`, 'the quick model to be chosen again');
+			await js(`${inChat('Back to the conversation')}.click()`);
+			await ask('ARGS');
+			await answered(9);
+			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('"exec","-m","quick-one","--json"')`), 'the chosen model was not named to the program');
+			// The model leaves Codex's list. Its own choice answers, and the footer says so.
+			chatModels.codex = [LONG];
+			await js(`${inChat('Codex · Quick One')}.click()`);
+			await waitFor(`document.querySelector('.backends')`, 'who answers, to check again');
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`${provider} === 'Codex'`, 'the footer to fall back to Codex alone');
+			check((await js(`${codexRow}.querySelector('select').value`)) === '', 'a model that is gone from the list is still shown as chosen');
+			await js(`${inChat('Back to the conversation')}.click()`);
+			await ask('ARGS');
+			await answered(10);
+			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('"exec","--json"')`), 'a model that is gone from the list was still named to the program');
+			// Listed again, it is the choice again. Then back to Codex's own.
+			chatModels.codex = [QUICK, LONG];
+			await js(`${inChat('Codex')}.click()`);
+			await waitFor(`document.querySelector('.backends')`, 'who answers, once more');
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`${provider} === 'Codex · Quick One'`, 'the remembered model to be chosen once it is listed again');
+			await pick('');
+			await waitFor(`${provider} === 'Codex'`, "the footer after choosing Codex's own");
+			await js(`${inChat('Back to the conversation')}.click()`);
+
 			// History, and a new conversation.
 			await js(`${inChat('New conversation')}.click()`);
 			await waitFor(`document.querySelector('.chat__starter')`, 'a new, empty conversation');
@@ -853,7 +912,7 @@ async function run() {
 			await waitFor(`document.querySelectorAll('.chat__conversation').length === 1`, 'the conversation in History');
 			await shot('19g-assistant-history');
 			await js(`document.querySelector('.chat__conversation').click()`);
-			await waitFor(`document.querySelectorAll('.msg--assistant').length === 8`, 'the conversation to come back');
+			await waitFor(`document.querySelectorAll('.msg--assistant').length === 10`, 'the conversation to come back');
 			check(await js(`document.querySelectorAll('.found').length === 1 && document.querySelectorAll('.found__row').length === 3`), 'the closest matches were not kept with the conversation');
 
 			// The one that was chosen stops being ready while another is. The
