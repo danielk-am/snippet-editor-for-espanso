@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createRouter } from '../core/apiRouter.js';
@@ -244,4 +244,43 @@ test('the lookups do not wait on one another', async (t) => {
 	const result = await lookUp({ text: 'thanks', context: { ...BASE, index: 1 } });
 	assert.deepEqual(kinds(result), ['snippets_get_snippet', 'snippets_search', 'snippets_get_file']);
 	assert.ok(Date.now() - began < 290, `took ${Date.now() - began} ms`);
+});
+
+// --- after an independent review ---------------------------------------------------------------
+
+test('one enormous match does not cost the others their place: a match is handed over short', async (t) => {
+	const { lookUp, matchDir } = await setup(t);
+	mkdirSync(join(matchDir, 'packages', 'huge'), { recursive: true });
+	writeFileSync(join(matchDir, 'packages', 'huge', 'package.yml'), `matches:\n  - triggers: [${Array.from({ length: 9 }, (_, index) => `":refund-policy-${index}-${'t'.repeat(300)}"`).join(', ')}]\n    label: "${'Refund policy thanks '.repeat(700)}"\n    replace: "x"\n`);
+	writeFileSync(join(matchDir, 'mine.yml'), 'matches:\n  - trigger: ":rp"\n    label: "Refund policy"\n    replace: "Thirty days."\n');
+	const result = await lookUp({ text: 'find my refund policy', context: null });
+	const items = result.lookups[0].result.items;
+	// The huge one is the closer by weight, so it comes first, and it does not push the other out.
+	assert.deepEqual(items.map((item) => item.file_id), ['package:huge:package.yml', 'local:mine.yml']);
+	assert.equal(items[0].triggers.length, 5);
+	assert.ok(items[0].triggers.every((trigger) => trigger.length === 80 && trigger.endsWith('…')));
+	assert.equal(items[0].label.length, 80);
+	assert.ok(JSON.stringify(items[0]).length < 1000);
+	assert.deepEqual(items[1], { file_id: 'local:mine.yml', file: 'mine.yml', source: 'local', index: 0, triggers: [':rp'], label: 'Refund policy', preview: 'Thirty days.' });
+	// What is shown is what is sent, field for field.
+	assert.deepEqual(result.found, items.map(({ file_id: fileId, file: fileName, ...rest }) => ({ fileId, fileName, ...rest })));
+});
+
+test('a snippet the tools could not hand over is not handed over as a match', async (t) => {
+	const { lookUp, matchDir, call } = await setup(t);
+	writeFileSync(join(matchDir, 'odd.yml'), 'matches:\n  - trigger: ":okapi"\n    replace: "An okapi"\n    weight: .nan\n');
+	writeFileSync(join(matchDir, 'even.yml'), 'matches:\n  - trigger: ":okapi2"\n    replace: "Another okapi"\n');
+	// The search tool leaves the first out, and so does the lookup.
+	assert.deepEqual((await call('snippets_search', { query: 'okapi' })).items.map((item) => item.file_id), ['local:even.yml']);
+	const result = await lookUp({ text: 'my okapi snippet', context: null });
+	assert.deepEqual(result.lookups[0].result.items.map((item) => item.file_id), ['local:even.yml']);
+	assert.deepEqual(result.found.map((hit) => hit.fileId), ['local:even.yml']);
+});
+
+test('a snippet folder that cannot be opened gives nothing to look up, and nothing goes wrong', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+	const { lookUp, matchDir, logged } = await setup(t);
+	chmodSync(matchDir, 0o000);
+	t.after(() => chmodSync(matchDir, 0o755));
+	assert.deepEqual(await lookUp({ text: 'Find my thanks', context: { ...BASE, index: 1 } }), { found: [], lookups: [] });
+	assert.deepEqual(logged, []);
 });

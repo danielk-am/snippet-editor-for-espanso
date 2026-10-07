@@ -22,7 +22,8 @@ export function triggersNow(match) {
 export const rowTriggers = (triggers) => triggers.slice(0, MOST).map((trigger) => (trigger.length > WIDE ? `${trigger.slice(0, WIDE - 1)}…` : trigger));
 
 // The route that opens a row: the snippet where it is now, or its file when
-// the snippet cannot be told apart any more, or nothing when the file is gone.
+// the snippet is gone or cannot be told apart from another any more, or
+// nothing when the file is gone.
 export function whereNow(files, hit) {
 	if (!Array.isArray(files) || !isObject(hit) || typeof hit.fileId !== 'string') return null;
 	const file = files.find((item) => isObject(item) && item.id === hit.fileId);
@@ -31,6 +32,7 @@ export function whereNow(files, hit) {
 	const wanted = Array.isArray(hit.triggers) ? JSON.stringify(hit.triggers) : null;
 	const same = (match) => isObject(match) && JSON.stringify(rowTriggers(triggersNow(match))) === wanted;
 	if (Number.isInteger(hit.index) && same(matches[hit.index])) return { view: 'snippet', fileId: file.id, index: hit.index };
-	const moved = matches.findIndex(same);
-	return moved === -1 ? { view: 'file', fileId: file.id } : { view: 'snippet', fileId: file.id, index: moved };
+	// Moved: it is the one snippet with those triggers, or it cannot be told.
+	const moved = matches.flatMap((match, index) => (same(match) ? [index] : []));
+	return moved.length === 1 ? { view: 'snippet', fileId: file.id, index: moved[0] } : { view: 'file', fileId: file.id };
 }

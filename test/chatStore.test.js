@@ -252,3 +252,29 @@ test('an OK given before the app began to send matches with every message does n
 	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, told: [toldKey('codex'), toldKey('claude')] } });
 	assert.deepEqual(store.load().prefs.told, ['codex@2', 'claude@2']);
 });
+
+test('what a version from before this change left in storage is read as it should be: the notice is asked again, and old answers have no matches', () => {
+	const kept = storage();
+	kept.kept.set(
+		KEY,
+		JSON.stringify({
+			prefs: { open: true, width: 440, wide: false, backend: 'codex', model: '', told: ['codex', 'claude', 'ollama'] },
+			conversations: [
+				{
+					id: 'a',
+					title: 'Find thanks',
+					updatedAt: 5,
+					messages: [
+						{ id: 'm1', role: 'user', text: 'Find thanks' },
+						{ id: 'm2', role: 'assistant', text: 'It is ;ty.', backend: 'codex', tools: [{ id: 't1', name: 'snippets_search', status: 'done' }], cards: [], ending: 'done', error: null },
+					],
+				},
+			],
+			current: 'a',
+		})
+	);
+	const loaded = createChatStore(kept).load();
+	assert.deepEqual(loaded.prefs, { open: true, width: 440, wide: false, backend: 'codex', model: '', told: [] });
+	assert.deepEqual(loaded.conversations[0].messages[1], { id: 'm2', role: 'assistant', text: 'It is ;ty.', backend: 'codex', found: [], tools: [{ id: 't1', name: 'snippets_search', status: 'done' }], cards: [], ending: 'done', error: null });
+	assert.equal(loaded.current, 'a');
+});

@@ -289,3 +289,68 @@ test('one enormous word made to be slow to trim is not slow', () => {
 	}
 	assert.ok(Date.now() - began < 200, `took ${Date.now() - began} ms`);
 });
+
+// --- after an independent review ---------------------------------------------------------------
+
+const TRIGGERS = (list) => [{ id: 'local:t.yml', source: 'local', name: 't.yml', matches: list.map((trigger) => (typeof trigger === 'string' ? { trigger, replace: 'x' } : trigger)) }];
+
+test('a trigger named with its sign finds that trigger first, then the ones that start with it, and no others', () => {
+	const files = TRIGGERS([':signature', ':sigwork', ':sig2', ':sig3', ':sig4', ':sig5', ':sig6', ':sig7', ':sig8', ':sig', 'my:sig', { trigger: ':other', replace: 'type :sig for it' }]);
+	const hits = likelyFiles(files, 'what does :sig do?');
+	assert.equal(hits.length, 8);
+	// The one that was named, though nine others come before it in the file.
+	assert.equal(hits[0].match.trigger, ':sig');
+	assert.deepEqual(hits.slice(1, 4).map((hit) => hit.match.trigger), [':signature', ':sigwork', ':sig2']);
+	// Not a trigger that only holds it, and not text that mentions it.
+	assert.deepEqual(ids(likelyFiles(TRIGGERS(['my:sig', { trigger: ':other', replace: 'type :sig for it' }]), 'what does :sig do?')), []);
+	// In a list of triggers, and whatever the capitals.
+	assert.deepEqual(ids(likelyFiles(TRIGGERS([{ triggers: [';a', ';SIG'], replace: 'x' }]), 'what does ;sig do?')), ['local:t.yml#0']);
+});
+
+test('a smiley is not a trigger to be found in every trigger that starts like it', () => {
+	const files = TRIGGERS([':date', ':dt', ':done', ':dear', ':day', ':dd', ':dm', ':dx', { trigger: ':rp', label: 'Refund policy', replace: 'Our refund policy is thirty days.' }, ':phone']);
+	assert.deepEqual(ids(likelyFiles(files, 'nice :D')), []);
+	assert.deepEqual(ids(likelyFiles(files, 'find my refund policy snippet :D')), ['local:t.yml#8']);
+	assert.deepEqual(ids(likelyFiles(files, 'refund policy :P')), ['local:t.yml#8']);
+	// A trigger of two characters is still found when it is named exactly.
+	assert.deepEqual(ids(likelyFiles(TRIGGERS([':d', ':date']), 'what does :d do')), ['local:t.yml#0']);
+	assert.deepEqual(ids(likelyFiles(TRIGGERS([';m', ';more']), 'explain ;m')), ['local:t.yml#0']);
+});
+
+test('a trigger named exactly is kept whatever else the message says, and one that only starts with it is too', () => {
+	const files = TRIGGERS([';brb2', { trigger: ':x', replace: 'right back five minutes' }, ';brb']);
+	// Six words. Only the second snippet holds half of them.
+	const hits = likelyFiles(files, 'Find my thanks snippet, then add ;brb to this file, expanding to back in five minutes');
+	assert.deepEqual(hits.map((hit) => hit.match.trigger), [';brb', ';brb2', ':x']);
+});
+
+test('a trigger wrapped in Markdown is still read as a trigger', () => {
+	assert.deepEqual(words('what does `:sig` do?'), [':sig']);
+	assert.deepEqual(words('what does **:sig** do?'), [':sig']);
+	assert.deepEqual(words('is it `;ty`, or *;thanks*?'), [';ty', ';thanks']);
+	assert.deepEqual(words('the **refund** `policy`'), ['refund', 'policy']);
+	assert.deepEqual(ids(likelyFiles(FILES, 'what does `;sig` do?')), ['local:base.yml#1']);
+});
+
+test('words joined by a dash or a slash are searched for one by one, and a trigger is left whole', () => {
+	assert.deepEqual(words('my out-of-office reply'), ['office', 'reply']);
+	assert.deepEqual(words('the email/phone one'), ['email', 'phone']);
+	assert.deepEqual(words('refund–policy and late—shipping'), ['refund', 'policy', 'late', 'shipping']);
+	assert.deepEqual(words('explain :zebra-long/one'), [':zebra-long/one']);
+	const files = [{ id: 'local:a.yml', source: 'local', name: 'a.yml', matches: [{ trigger: ':ooo', replace: 'I am out of the office until Monday.' }] }];
+	assert.deepEqual(ids(likelyFiles(files, 'my out-of-office reply')), ['local:a.yml#0']);
+});
+
+test('the name of a YAML file is not a word to search for', () => {
+	assert.deepEqual(words('add ;brb to base.yml'), [';brb']);
+	assert.deepEqual(words('what is in Notes.YAML and replies.yml?'), []);
+});
+
+test('what people say in reply to an answer is not searched for', () => {
+	for (const reply of ['yes', 'Yes please', 'ok', 'okay, good', 'great, nice', 'perfect', 'sure', 'yep', 'nope', 'good, now make it shorter', 'better', 'again', 'that worked', 'cool, fine']) {
+		assert.deepEqual(words(reply), [], reply);
+	}
+	// A word that is also what a snippet is about stays.
+	assert.deepEqual(words('thanks!'), ['thanks']);
+	assert.deepEqual(words('good morning'), ['morning']);
+});

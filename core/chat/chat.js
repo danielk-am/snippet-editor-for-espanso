@@ -32,7 +32,9 @@ import { createRunner } from './run.js';
 
 const LABEL = { claude: 'Claude Code', codex: 'Codex', ollama: 'Ollama' };
 // A model on this computer can take a while to load before its first word.
-const LIMITS = { idleMs: 120_000, ollamaIdleMs: 180_000, totalMs: 600_000, maxText: 1_000_000, statusMs: 60_000 };
+// Looking up reads a few files and takes milliseconds. A folder that does not answer (a drive
+// that has gone away) must not hold the answer up: past the limit the backend is asked without.
+const LIMITS = { idleMs: 120_000, ollamaIdleMs: 180_000, totalMs: 600_000, maxText: 1_000_000, statusMs: 60_000, lookupMs: 3000 };
 // An answer that ended this way says the backend itself needs looking at again.
 const BACKEND_FAULTS = new Set(['SIGNED_OUT', 'MISSING', 'OLD', 'NOT_RUNNING']);
 const TOO_LONG = { type: 'error', code: 'TOO_LONG', message: 'The answer was too long, so it was stopped.' };
@@ -41,7 +43,7 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 const count = (number) => number.toLocaleString('en-US');
 
 export function createChat({ service, router, dataDir, mcp, emit, backends = createBackends(), runner = createRunner(), ollama = createOllama(), log = console.error, limits = {}, lookUp }) {
-	const { idleMs, ollamaIdleMs, totalMs, maxText, statusMs } = { ...LIMITS, ...limits };
+	const { idleMs, ollamaIdleMs, totalMs, maxText, statusMs, lookupMs } = { ...LIMITS, ...limits };
 	const chatDir = path.join(dataDir, 'chat');
 	// Where the programs run: a folder with nothing in it, so no file there
 	// can hand them instructions or tools.
@@ -51,25 +53,62 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 	let prepared = null;
 	// What the backends last said, and when. Looking takes over half a second,
 	// so a message never waits for it twice: it goes on the last look, and when
-	// that is over a minute old a new one is made behind the answer. A backend
-	// that has gone since is found out by the answer, which says so.
+	// that is over a minute old a new one is made once the answer has ended,
+	// when nothing else is starting. A backend that has gone since is found out
+	// by the answer, which says so.
 	let known = null;
 	let looking = null;
-	const look = () =>
-		(looking ??= (async () => {
-			try {
-				const list = await backends.status();
-				known = { at: Date.now(), list };
-				return list;
-			} finally {
-				looking = null;
-			}
-		})());
+	// Counts the times a backend was found gone. A look that began before the
+	// last of them saw the backends as they were, and vouches for nothing.
+	let faults = 0;
+	const look = () => {
+		if (looking) return looking;
+		const began = faults;
+		const mine = (async () => {
+			const list = await backends.status();
+			if (began === faults) known = { at: Date.now(), list };
+			return list;
+		})();
+		looking = mine;
+		const over = () => {
+			if (looking === mine) looking = null;
+		};
+		mine.then(over, over);
+		return mine;
+	};
+	const forget = () => {
+		faults += 1;
+		known = null;
+		looking = null;
+	};
 
 	const proposals = createProposals({ router, aiWrite: () => service.settings().aiWrite, log });
 	// The names of the app's tools: what a backend may be seen to have and to use.
 	const toolNames = proposals.tools.list().map((tool) => tool.name);
 	const lookedUp = lookUp ?? createLookups({ store: service.store, tools: proposals.tools, log });
+	// What was looked up for one answer, or nothing: when looking failed, when
+	// it took too long, and when Stop was pressed meanwhile. It never waits
+	// longer than the limit, and Stop ends the wait at once.
+	const NOTHING = { found: [], lookups: [] };
+	function looked(turn, input) {
+		let timer;
+		return new Promise((resolve) => {
+			timer = setTimeout(() => {
+				log(new Error(`Looking up took over ${lookupMs} ms, so the assistant was asked without it.`));
+				resolve(NOTHING);
+			}, lookupMs);
+			turn.stop = () => resolve(NOTHING);
+			Promise.resolve()
+				.then(() => lookedUp(input))
+				.then(resolve, (error) => {
+					log(error);
+					resolve(NOTHING);
+				});
+		}).finally(() => {
+			clearTimeout(timer);
+			turn.stop = () => {};
+		});
+	}
 	// The way in for one answer's proposals. A card carries the name of the
 	// answer that asked for it, and none is made once that answer is over.
 	const proposalsOf = (turn) =>
@@ -192,7 +231,9 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			log(error);
 			ending = { type: 'error', code: 'ERROR', message: 'Something went wrong inside the app.' };
 		}
-		if (BACKEND_FAULTS.has(ending.code)) known = null;
+		if (BACKEND_FAULTS.has(ending.code)) forget();
+		// The last look is old: a new one now, with nothing else starting up.
+		else if (!closed && known && Date.now() - known.at >= statusMs) look().catch(log);
 		// Over: a card still being worked out for this answer is no longer wanted.
 		turn.open = false;
 		// Free before the ending is told, so the next message can follow it at once.
@@ -220,7 +261,6 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				const list = known ? known.list : await look();
 				// The app began to close while that was being looked up.
 				if (closed) throw fail('CLOSED', 'The app is closing.');
-				if (Date.now() - known.at >= statusMs) look().catch(log);
 				const entry = list.find((item) => item.id === id);
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
 				if (id === 'ollama' && !entry.models.some((model) => model.name === input.model)) throw fail('INVALID', "Choose one of Ollama's models first.");
@@ -230,12 +270,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			}
 			turn.finished = answer(turn, async () => {
 				// Looking up is a convenience: without it the backend asks for itself.
-				const { found, lookups } = await Promise.resolve()
-					.then(() => lookedUp({ text: latest.text, context: input.context }))
-					.catch((error) => {
-						log(error);
-						return { found: [], lookups: [] };
-					});
+				const { found, lookups } = await looked(turn, { text: latest.text, context: input.context });
 				if (turn.stopped) return { type: 'stopped' };
 				if (found.length) emit({ turnId: turn.id, type: 'found', hits: found });
 				const asked = { messages, context: input.context, lookups };

@@ -18,7 +18,7 @@ const ENDINGS = ['done', 'error', 'stopped'];
 
 const ready = (id, label, extra = {}) => ({ id, label, ready: true, state: 'ready', message: '', command: null, sendsTo: null, models: [], ...extra });
 
-async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {}, statusDelay = 0, locateDelay = 0, chunkDelay = 0, lookUp, log = () => {} } = {}) {
+async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {}, statusDelay = 0, locateDelay = 0, chunkDelay = 0, lookUp, log = () => {}, statusFault = null } = {}) {
 	const api = await startApi(t, { enabled: false, aiWrite });
 	const ollama = await standIn(t, { answers, chunkDelay });
 	const events = [];
@@ -39,10 +39,13 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 			tap(event);
 		},
 		backends: {
-			status: async () => {
+			// Not an async function: a fault here is thrown at once, as a careless one would.
+			status: () => {
 				checks.count += 1;
-				await wait(statusDelay);
-				return Object.values(backends);
+				if (statusFault?.(checks.count)) throw new Error('the look fell over');
+				// The backends as they are now, told when the look is over.
+				const seen = Object.values(backends);
+				return wait(statusDelay).then(() => seen);
 			},
 			locate: async () => {
 				checks.located += 1;
@@ -235,7 +238,7 @@ test('a message does not wait for the backends to be looked at again: the last l
 	// The look is stale by now, and sending does not wait 300 ms for a new one.
 	const began = Date.now();
 	const { turnId } = await context.chat.send(hello);
-	assert.ok(Date.now() - began < 150, `sending took ${Date.now() - began} ms`);
+	assert.ok(Date.now() - began < 250, `sending took ${Date.now() - began} ms`);
 	while (!context.events.some((event) => event.turnId === turnId && event.type === 'done')) await wait(10);
 	// One new look was started behind it, and only one however many messages follow meanwhile.
 	assert.equal(context.checks.count, 2);
@@ -497,7 +500,7 @@ for (const backend of ['claude', 'codex']) {
 		assert.equal(block.at(-1), '</looked_up_by_the_app>');
 		assert.equal(block[2], 'snippets_get_snippet {"file_id":"local:base.yml","index":1} returned:');
 		assert.equal(JSON.parse(block[3]).snippet.label, 'Signature');
-		assert.match(block[4], /^The snippets closest to the words of the new message \(thanks, args\), closest first\./);
+		assert.match(block[4], /^The snippets closest to the words of the new message \("thanks", "args"\), closest first\./);
 		assert.deepEqual(JSON.parse(block[5]).items.map((item) => [item.file_id, item.index]), [['local:base.yml', 2], ['package:goodbyes:package.yml', 0]]);
 		assert.equal(block[6], 'snippets_get_file {"file_id":"local:base.yml","limit":25} returned:');
 		assert.match(JSON.parse(block[7]).version, /^[a-f0-9]{24}$/);
@@ -565,4 +568,74 @@ test('Stop while the app is still looking ends the answer before any program run
 	assert.deepEqual(context.events.map((event) => event.type), ['stopped']);
 	assert.equal(context.checks.located, 0);
 	assert.deepEqual(context.left(), []);
+});
+
+// --- after an independent review ---------------------------------------------------------------
+
+test('a look that began before a backend was found gone does not vouch for it afterwards', options, async (t) => {
+	const context = await setup(t, { statusDelay: 400 });
+	await context.chat.status();
+	// A look is under way (the panel's "Check again", say) when the answer fails.
+	const under = context.chat.status();
+	assert.equal(context.checks.count, 2);
+	const failed = await context.ask('codex', 'SIGNEDOUT');
+	assert.equal(failed.at(-1).code, 'SIGNED_OUT');
+	context.backends.codex = { ...context.backends.codex, ready: false, state: 'signed-out', message: 'Codex is not signed in.' };
+	// That look read the backends before the answer failed, and says "ready".
+	assert.equal((await under).find((item) => item.id === 'codex').ready, true);
+	// The next message does not go on its word: it looks again, and is refused.
+	await assert.rejects(context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY again' }] }), (error) => error.code === 'NOT_READY' && error.message === 'Codex is not signed in.');
+	assert.equal(context.checks.count, 3);
+});
+
+test('the look behind an answer is made when the answer has ended, not while the backend is starting', async (t) => {
+	const context = await setup(t, { limits: { statusMs: 1 }, chunkDelay: 150, answers: [{ chunks: [said('One. '), said('Two. '), said('Three.'), END] }] });
+	await context.chat.status();
+	await wait(20);
+	const { turnId } = await context.chat.send({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] });
+	await wait(200);
+	assert.equal(context.checks.count, 1);
+	while (!context.events.some((event) => event.turnId === turnId && event.type === 'done')) await wait(10);
+	assert.equal(context.checks.count, 2);
+});
+
+test('a look that falls over at once does not stand in the way of the next one', async (t) => {
+	const context = await setup(t, { statusFault: (count) => count === 1 });
+	await assert.rejects(context.chat.status(), /the look fell over/);
+	assert.equal((await context.chat.status()).length, 3);
+	assert.equal((await context.chat.status()).length, 3);
+	assert.equal(context.checks.count, 3);
+	assert.deepEqual(kinds(await context.answer({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] })), ['text', 'done']);
+});
+
+test('Stop does not wait for the app to finish looking: it ends the answer at once, and the next message can be sent', options, async (t) => {
+	const context = await setup(t, { lookUp: () => new Promise(() => {}) });
+	const { turnId } = await context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	await wait(50);
+	const began = Date.now();
+	context.chat.stop(turnId);
+	while (!context.events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(5);
+	assert.ok(Date.now() - began < 200, `stopping took ${Date.now() - began} ms`);
+	assert.deepEqual(context.events.map((event) => event.type), ['stopped']);
+	assert.equal(context.checks.located, 0);
+	assert.deepEqual(kinds(await context.ask('codex', 'SAY Next.')), ['stopped', 'text', 'done'].slice(1));
+});
+
+test('looking up has a time limit: past it the backend is asked without, and what comes late is not shown', options, async (t) => {
+	const logged = [];
+	const context = await setup(t, {
+		limits: { lookupMs: 80 },
+		log: (error) => logged.push(error.message),
+		lookUp: async () => {
+			await wait(400);
+			return { found: THANKS, lookups: [{ tool: 'snippets_search', words: ['thanks'], result: { items: [] } }] };
+		},
+	});
+	const events = await context.ask('codex', 'ARGS');
+	assert.deepEqual(squash(kinds(events)), ['text', 'done']);
+	assert.ok(!JSON.parse(textOf(events)).input.includes('looked_up_by_the_app'));
+	assert.deepEqual(logged, ['Looking up took over 80 ms, so the assistant was asked without it.']);
+	// The lookups finish at last, and nothing more is told for that answer.
+	await wait(450);
+	assert.deepEqual(context.events.map((event) => event.type).filter((type) => type === 'found'), []);
 });

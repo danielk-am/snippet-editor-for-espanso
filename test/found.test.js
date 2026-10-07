@@ -51,11 +51,19 @@ test('a file that is gone opens nothing, and a file with errors opens as a file'
 	assert.deepEqual(whereNow(files(), hit({ fileId: 'local:broken.yml', index: 0 })), { view: 'file', fileId: 'local:broken.yml' });
 });
 
-test('of two snippets with the same triggers, the one at the position is opened, else the first', () => {
+test('of two snippets with the same triggers, the one still at the position is opened; moved, they cannot be told apart, and the file is opened', () => {
 	const twins = files();
 	twins[0].matches.push({ triggers: [';ty', ';thanks'], replace: 'Thanks again' });
 	assert.deepEqual(whereNow(twins, hit({ index: 4 })), { view: 'snippet', fileId: 'local:base.yml', index: 4 });
-	assert.deepEqual(whereNow(twins, hit({ index: 1 })), { view: 'snippet', fileId: 'local:base.yml', index: 2 });
+	assert.deepEqual(whereNow(twins, hit({ index: 2 })), { view: 'snippet', fileId: 'local:base.yml', index: 2 });
+	assert.deepEqual(whereNow(twins, hit({ index: 1 })), { view: 'file', fileId: 'local:base.yml' });
+	// With one of the two gone, the other is the only one it can be.
+	twins[0].matches.splice(2, 1);
+	assert.deepEqual(whereNow(twins, hit({ index: 0 })), { view: 'snippet', fileId: 'local:base.yml', index: 3 });
+	// The same holds for snippets that have no trigger at all.
+	const bare = [{ id: 'local:bare.yml', name: 'bare.yml', matches: [{ trigger: ';a', replace: 'x' }, { replace: 'One' }, { replace: 'Two' }] }];
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 2, triggers: [] }), { view: 'snippet', fileId: 'local:bare.yml', index: 2 });
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 0, triggers: [] }), { view: 'file', fileId: 'local:bare.yml' });
 });
 
 test('a row shows at most five triggers of at most 80 characters, and a snippet is still found by them', () => {
