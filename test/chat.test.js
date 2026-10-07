@@ -670,3 +670,44 @@ test('looking up has a time limit: past it the backend is asked without, and wha
 	await wait(450);
 	assert.deepEqual(context.events.map((event) => event.type).filter((type) => type === 'found'), []);
 });
+
+// --- which model answers ---------------------------------------------------------------------
+
+const QUICK = [{ name: 'quick-one', label: 'Quick One', about: 'Fast.' }, { name: 'big-one', label: 'Big One', about: 'Thorough.' }];
+const withModels = { claude: ready('claude', 'Claude Code', { sendsTo: 'Anthropic', models: QUICK }), codex: ready('codex', 'Codex', { sendsTo: 'OpenAI', models: QUICK }) };
+
+test('a chosen model is named to the program, and with none chosen the program is left to choose', options, async (t) => {
+	const { ask } = await setup(t, { status: withModels });
+	const argsOf = async (backend, extra) => JSON.parse(textOf(await ask(backend, 'ARGS', extra))).args;
+
+	const codex = await argsOf('codex', { model: 'quick-one' });
+	assert.deepEqual(codex.slice(0, 3), ['exec', '-m', 'quick-one']);
+	const claude = await argsOf('claude', { model: 'big-one' });
+	assert.equal(claude[claude.indexOf('--model') + 1], 'big-one');
+	assert.equal(claude.filter((arg) => arg === '--model').length, 1);
+
+	for (const none of [{}, { model: undefined }, { model: null }, { model: '' }]) {
+		const plain = await argsOf('codex', none);
+		assert.ok(!plain.includes('-m') && !plain.includes('--model'), JSON.stringify(none));
+		assert.equal(plain[1], '--json');
+		assert.ok(!(await argsOf('claude', none)).includes('--model'), JSON.stringify(none));
+	}
+});
+
+test('a model that is not one of the backend\'s own is refused, and nothing is started', options, async (t) => {
+	const context = await setup(t, { status: withModels });
+	const send = (backend, model) => context.chat.send({ backend, model, messages: [{ role: 'user', text: 'SAY never' }] });
+	for (const model of ['gpt-other', 'Quick-One', 'quick-one ', '--oss', '-m', 7, {}, ['quick-one'], true]) {
+		await assert.rejects(send('codex', model), (error) => error.code === 'INVALID' && error.message === "Choose one of Codex's models, or its own choice.", String(model));
+		await assert.rejects(send('claude', model), (error) => error.code === 'INVALID' && error.message === "Choose one of Claude Code's models, or its own choice.", String(model));
+	}
+	assert.equal(context.checks.located, 0);
+	assert.deepEqual(context.events, []);
+	// The refusal leaves the chat free for the next message.
+	assert.deepEqual(kinds(await context.ask('codex', 'SAY Fine.', { model: 'quick-one' })), ['text', 'done']);
+
+	// With no list to choose from, no name is taken on trust.
+	const bare = await setup(t);
+	await assert.rejects(bare.chat.send({ backend: 'codex', model: 'quick-one', messages: [{ role: 'user', text: 'SAY never' }] }), (error) => error.code === 'INVALID');
+	assert.deepEqual(kinds(await bare.ask('codex', 'SAY Fine.')), ['text', 'done']);
+});
