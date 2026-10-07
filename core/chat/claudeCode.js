@@ -1,3 +1,5 @@
+import { modelArgs } from './modelName.js';
+
 // Claude Code as the chat's backend: how it is started, and how what it
 // prints becomes the events the panel shows.
 //
@@ -19,7 +21,7 @@ const MOST = 500;
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-export function claudeArgs({ mcpConfigFile, system }) {
+export function claudeArgs({ mcpConfigFile, system, model }) {
 	return [
 		'-p',
 		'--output-format', 'stream-json',
@@ -35,6 +37,7 @@ export function claudeArgs({ mcpConfigFile, system }) {
 		'--disable-slash-commands',
 		'--no-session-persistence',
 		'--effort', 'low',
+		...modelArgs('--model', model),
 		'--system-prompt', system,
 	];
 }

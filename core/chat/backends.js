@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
+import { MODEL_NAME } from './modelName.js';
 import { createOllama } from './ollama.js';
 
 // Which of the three backends are on this computer, and whether each is
@@ -54,9 +55,6 @@ const numbers = (text) => {
 const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-// A model's name is handed to a program as an argument, so it is plain or it
-// is not offered: nothing that could be read as an option or needs quoting.
-export const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
 const MOST_MODELS = 40;
 const line = (value, most) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, most) : '');
 
