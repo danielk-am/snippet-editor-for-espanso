@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseDocument, stringify } from 'yaml';
 import { isSafeFileName } from './store.js';
+import { repositoryLabel } from '../shared/repositoryLabel.js';
 import { isPlainObject, oddBreak, toText } from '../shared/text.js';
 
 // The app's copy of the team repository. It is a bare copy: nothing is
@@ -391,7 +392,8 @@ export function createTeamRepo({ dataDir, address, git, now = () => new Date(), 
 		async packageFiles(name) {
 			const { commit, packages, files } = await listing();
 			const wanted = files.get(name);
-			if (!wanted) throw fail('NOT_FOUND', `The team repository has no package named ${name}.`);
+			// Named, because there can be several: "the" repository would be a guess.
+			if (!wanted) throw fail('NOT_FOUND', `${repositoryLabel(address.url)} has no package named ${name}.`);
 			const blobs = await readBlobs(wanted.map((file) => file.sha));
 			return { commit, package: packages.find((pkg) => pkg.name === name), files: wanted.map((file) => ({ name: file.name, bytes: blobs.get(file.sha) })) };
 		},

@@ -5,11 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../core/apiRouter.js';
-import { createGit } from '../core/git.js';
 import { createService } from '../core/service.js';
 import { parseRepositoryAddress } from '../core/teamAddress.js';
 import { CHANNELS, EVENTS } from '../shared/channels.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from './helpers/teamRemote.js';
 import { mainProcess, windowApi } from './helpers/window.js';
 
 const preload = readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
@@ -66,15 +65,8 @@ async function setup(t) {
 		'packages/tools/_manifest.yml': MANIFEST('tools'),
 		'packages/tools/package.yml': RUNS,
 	});
-	const where = new Map([[urlOf('acme/first'), first.url], [urlOf('acme/second'), second.url], [SECOND_BY_SSH, second.url]]);
-	const real = createGit({ allowLocal: true, env: gitEnv(first.root) });
-	const git = (args, options) => {
-		// An address with no test repository behind it never gets as far as git.
-		const stray = args.find((arg) => /^(https?:|ssh:|git@)/.test(arg) && !where.has(arg));
-		if (stray) return Promise.reject(new Error(`This test has no repository for ${stray}.`));
-		return real(args.map((arg) => where.get(arg) ?? arg), options);
-	};
-	git.stopAll = () => real.stopAll();
+	// An address with no test repository behind it never gets as far as git.
+	const git = localGit(first.root, new Map([[urlOf('acme/first'), first.url], [urlOf('acme/second'), second.url], [SECOND_BY_SSH, second.url]]));
 	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git });
 	t.after(() => service.dispose());
 	const router = createRouter({ service, log: () => {} });
@@ -135,6 +127,9 @@ test('team:openLink opens a link inside any connected repository, and nothing el
 		'http://github.com/acme/second',
 		'https://someone:secret@github.com/acme/second',
 		'https://github.com/acme/second/../../evil/repo',
+		'https://github.com/acme/second/..%2f..%2fthird',
+		'https://github.com/acme/second/..%5C..%5Cthird',
+		'https://github.com/acme/second/%2E%2e/second/compare/main...x',
 		'file:///etc/hosts',
 		'',
 		undefined,
@@ -206,6 +201,8 @@ test('the window\'s calls reach the routes and the channels, and say which repos
 	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'Newest']));
 	await fails(api.installTeamPackage('goodbyes', { repository: one }), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', 'A package named goodbyes is already installed from acme/second. Remove it first, then install this one.']));
 	await fails(api.installTeamPackage('tools', { repository: two }), (error) => assert.match(error.message, /runs commands/));
+	// A package a repository does not have is said of that repository, by name.
+	await fails(api.installTeamPackage('tools', { repository: one }), (error) => assert.deepEqual([error.code, error.message], ['NOT_FOUND', 'acme/first has no package named tools.']));
 	// A page with no repository to name sends none: null is not an id.
 	await fails(api.installTeamPackage('tools', { repository: null }), (error) => assert.match(error.message, /runs commands/));
 	// A name that is held means its holder, though both offer it.

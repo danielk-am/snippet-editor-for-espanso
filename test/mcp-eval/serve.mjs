@@ -14,9 +14,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createListenerControl } from '../../core/apiListener.js';
 import { createRouter } from '../../core/apiRouter.js';
-import { createGit } from '../../core/git.js';
 import { createService } from '../../core/service.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from '../helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from '../helpers/teamRemote.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const root = mkdtempSync(join(tmpdir(), 'snippet-editor-eval-'));
@@ -60,7 +59,7 @@ const port = await new Promise((resolve) => {
 	});
 });
 const dataDir = join(root, 'data');
-const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true });
+const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: localGit(remote.root), allowLocalRepositories: true });
 await service.connectTeam(remote.url);
 await service.connectTeam(second.url);
 // With two connected, a repository is found by its place or its id.

@@ -85,6 +85,14 @@ export function repositoryKey(url, { allowLocal = false } = {}) {
 // caller asks this of each.
 export function isTeamLink(url, webUrl) {
 	if (typeof url !== 'string' || typeof webUrl !== 'string') return false;
+	// An encoded slash or backslash is part of one path segment here, and can
+	// be a separator to whoever answers the link. An encoded dot can be a step
+	// up that is never seen. So "..%2f..%2fother" would pass for a page of this
+	// repository and could open another's. The app makes no link with any of
+	// the three in its path, so a link that has one is not opened. The path is
+	// read as it was written, before any tidying. What follows it, after "?"
+	// or "#", is not part of where the link leads.
+	if (/%(?:2f|5c|2e)/i.test(url.split(/[?#]/)[0])) return false;
 	let link;
 	let base;
 	try {

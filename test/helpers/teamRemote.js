@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createGit } from '../../core/git.js';
 
 // The environment for every git call in a test. With `identity: false`, git
 // has no name or email to commit under.
@@ -21,6 +22,28 @@ export function gitEnv(root, { identity = true } = {}) {
 	}
 	return { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' };
 }
+
+// Git as the app is given it in a test, kept away from the network.
+//
+// A test's repositories are folders on this computer. Where a test gives the
+// app an address on GitHub, `behind` says which folder stands behind it, and
+// git is handed that folder in its place. Any other address stops here,
+// before git is called. So if a check in the app that should have refused an
+// address ever gave way, the test that leans on it fails, and nothing is
+// asked of a real server.
+export function offline(real, behind = new Map()) {
+	const git = (args, options) => {
+		const stray = args.find((arg) => typeof arg === 'string' && /^(https?:|ssh:|git@)/i.test(arg) && !behind.has(arg));
+		if (stray) return Promise.reject(new Error(`This test has no repository for ${stray}.`));
+		return real(args.map((arg) => behind.get(arg) ?? arg), options);
+	};
+	git.stopAll = () => real.stopAll?.();
+	return git;
+}
+
+// The real git for a test, with its own settings file under `root`, and the
+// guard above around it. Every test that hands the app a git gets it here.
+export const localGit = (root, behind, options) => offline(createGit({ allowLocal: true, env: gitEnv(root, options) }), behind);
 
 export function createRemote(root = fs.mkdtempSync(path.join(os.tmpdir(), 'snippet-editor-remote-'))) {
 	const env = gitEnv(root);

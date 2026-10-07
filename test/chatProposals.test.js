@@ -5,11 +5,10 @@ import { join } from 'node:path';
 import { createRouter } from '../core/apiRouter.js';
 import { createInProcessApi } from '../core/chat/inProcess.js';
 import { createProposals } from '../core/chat/proposals.js';
-import { createGit } from '../core/git.js';
 import { parseRepositoryAddress } from '../core/teamAddress.js';
 import { createApiClient } from '../mcp/client.mjs';
 import { startApi } from './helpers/apiFixture.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from './helpers/teamRemote.js';
 
 async function setup(t, { aiWrite = true, serviceOptions, limit } = {}) {
 	const api = await startApi(t, { enabled: false, aiWrite, serviceOptions });
@@ -451,7 +450,7 @@ async function team(t, options = {}) {
 		'packages/tools/_manifest.yml': MANIFEST('tools'),
 		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
 	});
-	const context = await setup(t, { ...options, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const context = await setup(t, { ...options, serviceOptions: { git: localGit(remote.root), allowLocalRepositories: true } });
 	await context.service.connectTeam(remote.url);
 	return { ...context, remote };
 }
@@ -462,7 +461,8 @@ const proposalsIn = (remote) => remote.branches().filter((branch) => branch.star
 // repository is a folder, which has no owner, so its address stands in.
 const listedAs = (remote) => `${remote.url} (${idOf(remote)})`;
 const WHICH = 'Say which: set `repository` to one of the ids in brackets. If the person has not said which one, ask them.';
-const NOT_CONNECTED = 'That repository is not connected. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.';
+const LIST_REPOSITORIES = 'Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.';
+const NOT_CONNECTED = `That repository is not connected. ${LIST_REPOSITORIES}`;
 const TAKEN = (name, from) => `A package named ${name} is already installed from ${from}. Remove it first, then install this one.`;
 
 // A second repository beside the one `team` connects. It offers `goodbyes`
@@ -507,7 +507,7 @@ test('installing a team package is a card, with a warning when the package runs 
 
 test('installing a package that runs no commands does not say that commands were agreed to', async (t) => {
 	const remote = seeded();
-	const api = await startApi(t, { enabled: false, aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const api = await startApi(t, { enabled: false, aiWrite: true, serviceOptions: { git: localGit(remote.root), allowLocalRepositories: true } });
 	await api.service.connectTeam(remote.url);
 	const real = createRouter({ service: api.service, log: () => {} });
 	const installs = [];
@@ -595,7 +595,7 @@ test('with several repositories, an install card is made for the one that offers
 	// Offered by both: which one has to be said, and the card then names it.
 	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, `Two repositories offer goodbyes: ${listedAs(first)} and ${listedAs(second)}. ${WHICH}`);
 	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes', repository: 'nothing' })).error, NOT_CONNECTED);
-	assert.match((await propose('snippets_install_team_package', { name: 'shipping', repository: one })).error, /^The team repository has no package named shipping\..*snippets_list_team_packages/);
+	assert.equal((await propose('snippets_install_team_package', { name: 'shipping', repository: one })).error, `${first.url} has no package named shipping. ${LIST_REPOSITORIES}`);
 	assert.match((await propose('snippets_install_team_package', { name: 'nothing' })).error, /^No connected repository has a package named nothing\..*snippets_list_team_packages/);
 	assert.deepEqual(cards.map((card) => card.id), [shipping.id]);
 
@@ -670,19 +670,14 @@ test('a card names a repository on GitHub by its owner and name', async (t) => {
 	// at a test repository when it is asked for one of the two GitHub addresses.
 	const [first, second] = [seeded(), seeded()];
 	const [one, two] = [parseRepositoryAddress('acme/team-snippets'), parseRepositoryAddress('git@github.com:Other-Org/snippets.git')];
-	const where = new Map([[one.url, first.url], [two.url, second.url]]);
-	const real = createGit({ allowLocal: true, env: gitEnv(first.root) });
-	const git = (args, options) => {
-		const stray = args.find((arg) => /^(https?:|ssh:|git@)/.test(arg) && !where.has(arg));
-		if (stray) return Promise.reject(new Error(`This test has no repository for ${stray}.`));
-		return real(args.map((arg) => where.get(arg) ?? arg), options);
-	};
-	git.stopAll = () => real.stopAll();
+	const git = localGit(first.root, new Map([[one.url, first.url], [two.url, second.url]]));
 	const { propose, service, proposals, route } = await setup(t, { serviceOptions: { git } });
 	await service.connectTeam('acme/team-snippets');
 
 	const card = await propose('snippets_install_team_package', { name: 'support' });
 	assert.deepEqual(card.lines, ['Repository: acme/team-snippets', 'Support replies', 'The support package', '4 snippets']);
+	// A package it does not have is said of the repository by name, not of "the" repository.
+	assert.equal((await propose('snippets_install_team_package', { name: 'nothing' })).error, `acme/team-snippets has no package named nothing. ${LIST_REPOSITORIES}`);
 	// Where a file is sent is shown in full, as it always was.
 	const send = await propose('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share' });
 	assert.equal(send.lines[0], 'Repository: https://github.com/acme/team-snippets.git');
@@ -690,12 +685,52 @@ test('a card names a repository on GitHub by its owner and name', async (t) => {
 	await service.connectTeam('git@github.com:Other-Org/snippets.git');
 	assert.equal((await propose('snippets_install_team_package', { name: 'support' })).error, `Two repositories offer support: acme/team-snippets (${one.id}) and Other-Org/snippets (${two.id}). ${WHICH}`);
 	assert.equal((await propose('snippets_install_team_package', { name: 'support', repository: two.id })).lines[0], 'Repository: Other-Org/snippets');
+	assert.equal((await propose('snippets_install_team_package', { name: 'nothing', repository: two.id })).error, `Other-Org/snippets has no package named nothing. ${LIST_REPOSITORIES}`);
 	assert.equal((await proposals.apply(card.id)).status, 'applied');
 	assert.equal((await propose('snippets_install_team_package', { name: 'support', repository: two.id })).error, `${TAKEN('support', 'acme/team-snippets')} These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`);
 	// The link a sent card keeps is one the window may open: it is inside its own repository's pages.
 	const sent = await proposals.apply(send.id);
 	assert.match(sent.link, /^https:\/\/github\.com\/acme\/team-snippets\/compare\/main\.\.\.snippet-editor\/goodbyes-\d{8}-\d{6}\?expand=1$/);
 	assert.equal((await route('GET', '/team')).repositories.length, 2);
+});
+
+test('a card is for its repository, whichever form of the address it is connected under when Apply is pressed', async (t) => {
+	// The app as it runs, where no folder is an address. Git alone is pointed
+	// at a test repository when it is asked for one of these addresses. Two of
+	// them are one repository.
+	const [first, second] = [seeded(), seeded()];
+	const [https, ssh, other] = [parseRepositoryAddress('acme/team-snippets'), parseRepositoryAddress('git@github.com:Acme/Team-Snippets.git'), parseRepositoryAddress('acme/other-snippets')];
+	assert.deepEqual([https.key === ssh.key, https.url === ssh.url, other.key === https.key], [true, false, false]);
+	const git = localGit(first.root, new Map([[https.url, first.url], [ssh.url, first.url], [other.url, second.url]]));
+	const { propose, service, proposals, matchDir } = await setup(t, { serviceOptions: { git } });
+	const marker = (name) => JSON.parse(readFileSync(join(matchDir, 'team', name, '.snippet-editor.json'), 'utf8')).repository;
+
+	// Both cards are made while it is connected over HTTPS.
+	await service.connectTeam(https.url);
+	const install = await propose('snippets_install_team_package', { name: 'support' });
+	const send = await propose('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share' });
+	const later = await propose('snippets_install_team_package', { name: 'goodbyes' });
+	assert.deepEqual([install.lines[0], send.lines[0]], ['Repository: acme/team-snippets', `Repository: ${https.url}`]);
+
+	// It is disconnected, and connected again over SSH. It is the same
+	// repository, so both cards still mean what they said.
+	await service.disconnectTeam(https.id);
+	await service.connectTeam(ssh.url);
+	assert.deepEqual((await service.teamStatus()).repositories.map((repository) => [repository.id, repository.repository]), [[ssh.id, ssh.url]]);
+	const installed = await proposals.apply(install.id);
+	assert.deepEqual([installed.status, installed.message ?? ''], ['applied', '']);
+	// Installed from the repository as it is connected now.
+	assert.equal(marker('support'), ssh.url);
+	const sent = await proposals.apply(send.id);
+	assert.equal(sent.status, 'applied');
+	assert.match(sent.link, /^https:\/\/github\.com\/Acme\/Team-Snippets\/compare\/main\.\.\.snippet-editor\/goodbyes-\d{8}-\d{6}\?expand=1$/);
+	assert.deepEqual([proposalsIn(first).length, proposalsIn(second).length], [1, 0]);
+
+	// Another repository is not the card's own, though it offers the same package.
+	await service.disconnectTeam(ssh.id);
+	await service.connectTeam(other.url);
+	const stale = await proposals.apply(later.id);
+	assert.deepEqual([stale.status, stale.code, existsSync(join(matchDir, 'team', 'goodbyes'))], ['stale', 'STALE', false]);
 });
 
 test('a package that started to run commands after its card was made is not installed', async (t) => {

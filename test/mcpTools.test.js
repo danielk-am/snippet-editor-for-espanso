@@ -2,13 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createGit } from '../core/git.js';
 import { createApiClient } from '../mcp/client.mjs';
 import { createTools, foundItem } from '../mcp/tools.mjs';
 import { likelyFiles, searchFiles } from '../shared/search.js';
 import { startApi } from './helpers/apiFixture.js';
 import { parseRepositoryAddress } from '../core/teamAddress.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from './helpers/teamRemote.js';
 
 async function setup(t, options = {}) {
 	const api = await startApi(t, options);
@@ -33,7 +32,7 @@ const idOf = (remote) => parseRepositoryAddress(remote.url, { allowLocal: true }
 // repository is a folder, which has no owner, so its address stands in.
 const listedAs = (remote) => `${remote.url} (${idOf(remote)})`;
 const proposalsIn = (remote) => remote.branches().filter((branch) => branch.startsWith('snippet-editor/'));
-const local = (remote) => ({ git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true });
+const local = (remote) => ({ git: localGit(remote.root), allowLocalRepositories: true });
 
 const WRITE_TOOLS = ['snippets_add_snippet', 'snippets_update_snippet', 'snippets_delete_snippet', 'snippets_create_file', 'snippets_replace_file_yaml', 'snippets_install_team_package', 'snippets_propose_to_team'];
 const READ_TOOLS = ['snippets_search', 'snippets_list_files', 'snippets_get_file', 'snippets_get_snippet', 'snippets_list_team_packages'];
@@ -364,7 +363,7 @@ test('team tools, with a repository: list, install, accept commands, propose', a
 		'packages/tools/_manifest.yml': MANIFEST('tools'),
 		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
 	});
-	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: local(remote) });
 	await service.connectTeam(remote.url);
 
 	const id = idOf(remote);
@@ -511,7 +510,7 @@ test('one file with a value that cannot be sent is marked, and every other file 
 
 test('errors point at the next call that fits what went wrong', async (t) => {
 	const remote = seeded();
-	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: local(remote) });
 	await service.connectTeam(remote.url);
 
 	// A file that is not there is a file problem, even in a team tool.
@@ -591,7 +590,7 @@ test('a match folder that is missing says so, and is not shown as a folder with 
 
 test('the list of team packages is paged like every other list', async (t) => {
 	const remote = seeded();
-	const { call, service } = await setup(t, { serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const { call, service } = await setup(t, { serviceOptions: local(remote) });
 	await service.connectTeam(remote.url);
 	const first = await call('snippets_list_team_packages', { limit: 1 });
 	assert.deepEqual([first.packages.map((pkg) => pkg.name), first.total_count, first.has_more, first.next_offset], [['goodbyes'], 2, true, 1]);
@@ -661,7 +660,7 @@ test('with several repositories, installing says which when more than one offers
 	const { call, first, second, one, two, matchDir, service } = await twoRepositories(t);
 	// A repository that is named is the only one asked.
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'shipping', repository: one }), {
-		error: 'The team repository has no package named shipping. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.',
+		error: `${first.url} has no package named shipping. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.`,
 	});
 	// Offered by one of them: no need to say.
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), { name: 'support', repository: one, installed: true, update_available: false });

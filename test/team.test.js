@@ -5,18 +5,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../core/apiRouter.js';
-import { createGit } from '../core/git.js';
 import { createService } from '../core/service.js';
 import { createTeam } from '../core/team.js';
 import { parseRepositoryAddress } from '../core/teamAddress.js';
 import { createTeamPackages } from '../core/teamPackages.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, offline, seeded } from './helpers/teamRemote.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/match', import.meta.url));
 
 // Git as the service is given it in these tests: the real one, with every
 // call noted, and a way to make chosen calls wait until the test lets them go.
-function watched(real) {
+// It is kept off the network: an address with no test repository behind it
+// is noted like any other call, and then stopped before git is called.
+function watched(given) {
+	const real = offline(given);
 	const calls = [];
 	let held = null;
 	const git = (args, options) => {
@@ -39,7 +41,7 @@ async function setup(t, { remote = seeded(), userDataDir } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	const matchDir = join(root, 'match');
 	cpSync(FIXTURES, matchDir, { recursive: true });
-	const { git, calls, hold } = watched(createGit({ allowLocal: true, env: gitEnv(remote.root) }));
+	const { git, calls, hold } = watched(localGit(remote.root));
 	const start = async (dataDir = userDataDir ?? join(root, 'data')) => {
 		const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git, allowLocalRepositories: true });
 		t.after(() => service.dispose());
@@ -369,9 +371,11 @@ test('the SSH address of a repository connected over HTTPS is refused, and the o
 	]) {
 		const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 		const remote = seeded();
-		const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+		// Only the address that is connected has a test repository behind it.
+		// The other form never should reach git, and here it cannot.
+		const real = localGit(remote.root, new Map([[connectedAs, remote.url]]));
 		const calls = [];
-		const git = (args, options) => (calls.push(args), real(args.map((arg) => (arg === connectedAs ? remote.url : arg)), options));
+		const git = (args, options) => (calls.push(args), real(args, options));
 		git.stopAll = () => real.stopAll();
 		const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git });
 		t.after(() => service.dispose());
@@ -719,7 +723,7 @@ test('with one connected, a request may name it or leave it out, and any other i
 	}
 	assert.equal(proposalsIn(remote).length, 2);
 	// The one connected repository still answers for a name it does not have, and for one that is no name.
-	assert.deepEqual(await call('PUT', '/team/packages/nothing/installed', { body: {} }), { status: 404, body: { error: { code: 'NOT_FOUND', message: 'The team repository has no package named nothing.' } } });
+	assert.deepEqual(await call('PUT', '/team/packages/nothing/installed', { body: {} }), { status: 404, body: { error: { code: 'NOT_FOUND', message: `${remote.url} has no package named nothing.` } } });
 	assert.deepEqual(code(await call('PUT', '/team/packages/Bad_Name/installed', { body: { repository: id } })), [400, 'INVALID']);
 	assert.deepEqual(readdirSync(join(matchDir, 'team')).sort(), ['goodbyes', 'support']);
 });
@@ -744,7 +748,7 @@ test('installing with no repository named uses the one connected repository that
 	assert.deepEqual([code(bad), bad.body.error.message], [[400, 'INVALID'], 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.']);
 
 	// Named, a repository is the only one asked: the second does not offer the first's package.
-	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: idOf(other) } }), { status: 404, body: { error: { code: 'NOT_FOUND', message: 'The team repository has no package named goodbyes.' } } });
+	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: idOf(other) } }), { status: 404, body: { error: { code: 'NOT_FOUND', message: `${other.url} has no package named goodbyes.` } } });
 	assert.equal(existsSync(join(matchDir, 'team', 'goodbyes')), false);
 	assert.equal((await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: idOf(remote) } })).status, 200);
 	assert.equal(from('goodbyes'), remote.url);
@@ -916,7 +920,7 @@ test('the app reconnects every repository from its settings at the next start, a
 test('the window is told once for each repository fetched at start, and not at all with none', async (t) => {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	const [first, second] = [seeded(), another(OTHER)];
-	const git = createGit({ allowLocal: true, env: gitEnv(first.root) });
+	const git = localGit(first.root);
 	let told = 0;
 	const start = async (dataDir) => {
 		const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git, allowLocalRepositories: true, onChange: () => (told += 1) });
@@ -1000,11 +1004,16 @@ test('at start the repositories are fetched side by side: one that stalls keeps 
 	let ended = false;
 	again.service.teamFetched().then(() => (ended = true));
 
-	// The second answers. Looked at until it has been fetched, for five seconds at most.
+	// The second answers. Looked at until its fetch has ended: its commit has
+	// moved and the time of the fetch is written, which comes a moment later.
+	// The limit is only there so that a failure ends. It can be long without
+	// proving less: the first stays held until this test lets it go, so however
+	// long the wait, the second can only have been fetched beside it.
+	const fetched = (status) => of(status, other).commit === theirs && of(status, other).fetchedAt > before;
 	let status = await again.service.teamStatus();
-	for (const until = Date.now() + 5000; of(status, other).commit !== theirs && Date.now() < until; status = await again.service.teamStatus()) await new Promise((resolve) => setTimeout(resolve, 25));
+	for (const until = Date.now() + 30_000; !fetched(status) && Date.now() < until; status = await again.service.teamStatus()) await new Promise((resolve) => setTimeout(resolve, 25));
 	assert.equal(of(status, other).commit, theirs, 'the second repository was not fetched while the first was waiting');
-	assert.ok(of(status, other).fetchedAt > before);
+	assert.ok(of(status, other).fetchedAt > before, 'the second repository\'s fetch did not end while the first was waiting');
 	// The first is still waiting, so the start's fetching as a whole has not ended.
 	assert.deepEqual([of(status, context.remote).commit === mine, ended], [false, false]);
 
@@ -1280,7 +1289,7 @@ test('with two connected, a change of match folder is followed by both', async (
 test('when git stops working, the status still answers, and the repository can still be disconnected', async (t) => {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	const remote = seeded();
-	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	const real = localGit(remote.root);
 	let broken = false;
 	const git = (args, options) => (broken ? Promise.reject(Object.assign(new Error('Git is not installed on this computer.'), { code: 'GIT_FAILED', kind: 'missing' })) : real(args, options));
 	git.stopAll = () => {};
@@ -1301,7 +1310,7 @@ test('when git stops working, the status still answers, and the repository can s
 
 test('a repository that connects but cannot be listed is still connected, says why, and can be left', async (t) => {
 	const remote = seeded();
-	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	const real = localGit(remote.root);
 	const git = (args, options) => (args.includes('ls-tree') ? Promise.reject(Object.assign(new Error('Git sent more than the app can read.'), { code: 'GIT_FAILED', kind: 'too-large' })) : real(args, options));
 	git.stopAll = () => {};
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
@@ -1330,7 +1339,7 @@ test('a package the app did not read cannot be installed, because it was not che
 	const team = createTeam({
 		dataDir: join(root, 'data'),
 		address: parseRepositoryAddress(remote.url, { allowLocal: true }),
-		git: createGit({ allowLocal: true, env: gitEnv(remote.root) }),
+		git: localGit(remote.root),
 		installed: () => createTeamPackages({ matchDir: join(root, 'match') }),
 		// Room to read the first package, manifest and all, but not the second.
 		limits: { totalBytes: 260 },
@@ -1348,7 +1357,7 @@ test('a package the app did not read cannot be installed, because it was not che
 test('closing the app stops any git call still under way', async (t) => {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	let stopped = 0;
-	const git = createGit({ allowLocal: true });
+	const git = localGit(root);
 	const watching = (args, options) => git(args, options);
 	watching.stopAll = () => (stopped += 1);
 	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git: watching });
@@ -1364,7 +1373,7 @@ function twoTeams({ first = seeded(), second = seeded() } = {}) {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teams-'));
 	const matchDir = join(root, 'match');
 	const packages = createTeamPackages({ matchDir, allowLocal: true });
-	const real = createGit({ allowLocal: true, env: gitEnv(first.root) });
+	const real = localGit(first.root);
 	// Every git call, so a test can show that none was made.
 	const calls = [];
 	const git = (args, options) => (calls.push(args), real(args, options));
@@ -1496,8 +1505,7 @@ test('a package installed under the SSH address is still its own when the reposi
 	const address = parseRepositoryAddress('https://github.com/acme/team-snippets');
 	// The app as it runs, with no folders allowed as addresses. Git alone is
 	// pointed at the test repository when it is asked for the GitHub address.
-	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
-	const git = (args, options) => real(args.map((arg) => (arg === address.url ? remote.url : arg)), options);
+	const git = localGit(remote.root, new Map([[address.url, remote.url]]));
 	const packages = createTeamPackages({ matchDir: join(root, 'match') });
 	const team = createTeam({ dataDir: join(root, 'data'), address, git, installed: () => packages });
 	const markerFile = join(root, 'match', 'team', 'goodbyes', '.snippet-editor.json');

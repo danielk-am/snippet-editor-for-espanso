@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGit } from '../core/git.js';
 import { parseRepositoryAddress } from '../core/teamAddress.js';
 import { createTeamRepo } from '../core/teamRepo.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from './helpers/teamRemote.js';
 
 function setup({ remote = seeded(), identity = true, limits, now } = {}) {
 	const dataDir = mkdtempSync(join(tmpdir(), 'snippet-editor-team-'));
-	const git = createGit({ allowLocal: true, env: gitEnv(remote.root, { identity }) });
+	const git = localGit(remote.root, undefined, { identity });
 	const address = parseRepositoryAddress(remote.url, { allowLocal: true });
 	const repo = createTeamRepo({ dataDir, address, git, limits, now });
 	return { remote, dataDir, git, address, repo };
@@ -83,13 +82,14 @@ test('a web address is given for each package when the repository has one', asyn
 });
 
 test('the files of a package come back as bytes, manifest included', async () => {
-	const { repo } = setup();
+	const { repo, remote } = setup();
 	await repo.connect();
 	const { commit, package: described, files } = await repo.packageFiles('support');
 	assert.deepEqual([commit, described.name, described.matchCount], [(await repo.status()).commit, 'support', 4]);
 	assert.deepEqual(files.map((file) => file.name), ['_manifest.yml', 'escalations.yml', 'replies.yml']);
 	assert.equal(files[2].bytes.toString('utf8'), MATCHES([':refund', 'Your refund is on its way.']));
-	await rejectsWith(repo.packageFiles('nothing'), (error) => assert.equal(error.code, 'NOT_FOUND'));
+	// Said of this repository by its name. A test's folder has no owner, so its path stands in.
+	await rejectsWith(repo.packageFiles('nothing'), (error) => assert.deepEqual([error.code, error.message], ['NOT_FOUND', `${remote.url} has no package named nothing.`]));
 });
 
 test('fetching picks up a new commit, and a tree changes only for the package that changed', async () => {

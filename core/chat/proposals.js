@@ -5,6 +5,7 @@ import { repositoryLabel } from '../../shared/repositoryLabel.js';
 import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
 import { whichRepository } from '../apiRouter.js';
 import { isSafeFileName } from '../store.js';
+import { repositoryKey } from '../teamAddress.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
 import { createInProcessApi } from './inProcess.js';
 
@@ -111,8 +112,12 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 	const which = (repositories, what) => teamRefusal('AMBIGUOUS', whichRepository(repositories.map((repository) => ({ name: repositoryLabel(repository.repository), id: repository.id })), what));
 
 	// The repository a card was made for, as it is now, or nothing when it has
-	// been disconnected since. A card remembers its repository's address.
-	const stillConnected = async (address) => (await route('GET', '/team')).repositories.find((repository) => repository.repository === address);
+	// been disconnected since. A card remembers its repository's address, and
+	// a repository is its host, owner and name. Disconnected and connected
+	// again under the other form of its address, it is still the card's own.
+	// A folder, which only a test connects, has no such name: it is itself.
+	const sameRepository = (one, other) => one === other || (repositoryKey(one) !== '' && repositoryKey(one) === repositoryKey(other));
+	const stillConnected = async (address) => (await route('GET', '/team')).repositories.find((repository) => sameRepository(repository.repository, address));
 
 	// --- the app's own words, for the person ---------------------------------
 
@@ -263,7 +268,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 					if (!source) throw teamRefusal('NOT_FOUND', `No connected repository has a package named ${name}.`);
 				}
 				const pkg = source.packages.find((item) => item.name === name);
-				if (!pkg) throw teamRefusal('NOT_FOUND', `The team repository has no package named ${name}.`);
+				if (!pkg) throw teamRefusal('NOT_FOUND', `${repositoryLabel(source.repository)} has no package named ${name}.`);
 				// The name is held by another repository's package. A card for it could only fail.
 				if (pkg.installedFrom) throw teamRefusal('EXISTS', `A package named ${name} is already installed from ${repositoryLabel(pkg.installedFrom)}. Remove it first, then install this one.`);
 				if (pkg.matchCount === null) throw refused('This package was not read, so it cannot be installed from here.');

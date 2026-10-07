@@ -128,6 +128,10 @@ test('only a link inside the connected repository on its own host may be opened'
 		'https://github.com/acme/team',
 		'https://github.com/acme/team/compare/main...snippet-editor/goodbyes-20261006-101500?expand=1',
 		'https://github.com/acme/team/tree/main/packages/goodbyes',
+		// Other encodings in the path are left alone, and so is whatever follows it.
+		'https://github.com/acme/team/compare/main...snippet-editor/caf%C3%A9-20261006-101500',
+		'https://github.com/acme/team/compare/main...x?expand=1&title=a%2Fb%2E%5C',
+		'https://github.com/acme/team/tree/main#L1%2F2',
 	]) {
 		assert.equal(isTeamLink(url, web), true, url);
 	}
@@ -140,6 +144,24 @@ test('only a link inside the connected repository on its own host may be opened'
 		'https://github.com/evil/repo/compare/main...x',
 		'https://github.com/acme/team-evil/compare/main...x',
 		'https://github.com/acme/team/../../evil/repo',
+		// An encoded slash or backslash is one path segment to this app and can
+		// be a separator to whoever answers the link. An encoded dot can be a
+		// step up that the address bar would not show. None is in a link the
+		// app makes, so a link that holds one is not opened.
+		'https://github.com/acme/team/..%2f..%2fthird',
+		'https://github.com/acme/team/..%2F..%2Fthird',
+		'https://github.com/acme/team/..%5c..%5cthird',
+		'https://github.com/acme/team/..%5C..%5Cthird',
+		'https://github.com/acme/team/tree/main%2fpackages',
+		'https://github.com/acme/team/%2e%2e/%2e%2e/evil/repo',
+		'https://github.com/acme/team/%2e%2e/team/compare/main...x',
+		'https://github.com/acme/team/.%2E/team',
+		'https://github.com/acme/team/%2E/tree/main',
+		'https://github.com/acme/team/tree/main/a%2eb',
+		'https://github.com/acme/team%2f..%2f..%2fevil/repo',
+		'https://github.com/acme%2Fteam',
+		'https://github%2Ecom/acme/team',
+		'https://github.com/acme/team/..%2f..%2fthird?expand=1#top',
 		'javascript:alert(1)',
 		'file:///etc/hosts',
 		'github.com/acme/team',

@@ -4,14 +4,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRouter } from '../core/apiRouter.js';
 import { createProposals } from '../core/chat/proposals.js';
-import { createGit } from '../core/git.js';
 import { parseMatchFile } from '../core/matchFile.js';
 import { createApiClient } from '../mcp/client.mjs';
 import { createTools } from '../mcp/tools.mjs';
 import { diffLines } from '../renderer/lib/diff.js';
 import { oddBreak } from '../shared/text.js';
 import { startApi } from './helpers/apiFixture.js';
-import { MANIFEST, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, localGit, seeded } from './helpers/teamRemote.js';
 
 // Espanso ends a line at four characters that most YAML readers, this app's
 // among them, take for ordinary text: a carriage return with no line feed
@@ -135,7 +134,7 @@ test('an AI tool cannot hide a command behind one: the change is refused, with o
 test('a team package that hides a command behind one counts as a package that may run commands', async (t) => {
 	const remote = seeded();
 	remote.commit({ 'packages/sly/_manifest.yml': MANIFEST('sly'), 'packages/sly/package.yml': HIDDEN(BREAKS['U+2028']) });
-	const api = await startApi(t, { enabled: false, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
+	const api = await startApi(t, { enabled: false, serviceOptions: { git: localGit(remote.root), allowLocalRepositories: true } });
 	await api.service.connectTeam(remote.url);
 	const sly = (await api.service.teamStatus()).repositories[0].packages.find((pkg) => pkg.name === 'sly');
 	// Not read, so not counted, and marked as one that may run commands.

@@ -9,10 +9,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, ipcMain } from 'electron';
 import { spawn } from 'node:child_process';
-import { createGit } from '../core/git.js';
 import { startBackend } from '../electron/bootstrap.js';
 import { mcpSetup } from '../electron/mcpSetup.js';
-import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, localGit, seeded } from './helpers/teamRemote.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -136,13 +135,7 @@ async function run() {
 	// never gets as far as git, so nothing here can reach the network.
 	const TEAM = { first: 'https://github.com/acme/team-snippets.git', second: 'git@github.com:acme/support-snippets.git' };
 	const folders = new Map([[TEAM.first, remote.url], [TEAM.second, second.url]]);
-	const realGit = createGit({ allowLocal: true, env: gitEnv(remote.root) });
-	const git = (args, options) => {
-		const stray = args.find((arg) => /^(https?:|ssh:|git@)/.test(arg) && !folders.has(arg));
-		if (stray) return Promise.reject(Object.assign(new Error(`This check has no repository for ${stray}.`), { code: 'GIT_FAILED' }));
-		return realGit(args.map((arg) => folders.get(arg) ?? arg), options);
-	};
-	git.stopAll = () => realGit.stopAll();
+	const git = localGit(remote.root, folders);
 	const opened = [];
 	// The assistant's backends are stand-ins: a script that starts the app's
 	// real MCP server and prints what Codex would. No model is called. Which
