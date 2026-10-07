@@ -10,7 +10,7 @@ import {
 	removeMatch,
 	writeHeaderMeta,
 } from './matchFile.js';
-import { searchFiles } from '../shared/search.js';
+import { likelyFiles, searchFiles } from '../shared/search.js';
 import { oddBreak, oddBreakMessage, toText } from '../shared/text.js';
 
 // The match folder is the only store: Espanso reads these files directly, so
@@ -463,6 +463,13 @@ export function createStore({ matchDir, backupDir, maxBackups = 20, maxFileBytes
 		async search(query, options) {
 			const { files, packages, team } = await inventory();
 			return searchFiles([...files, ...[...packages, ...team].flatMap((pkg) => pkg.files)], query, options);
+		},
+
+		// For a sentence written to the assistant: the snippets that hold
+		// enough of its words, the closest first.
+		async likely(text, options) {
+			const { files, packages, team } = await inventory();
+			return likelyFiles([...files, ...[...packages, ...team].flatMap((pkg) => pkg.files)], text, options);
 		},
 	};
 }

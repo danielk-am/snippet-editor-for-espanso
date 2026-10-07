@@ -295,6 +295,18 @@ test('only the newest backups are kept', async () => {
 	assert.ok(read(dir, backups[1]).includes('replace: "three"'));
 });
 
+test('the closest matches to a sentence come from local files and packages alike', async () => {
+	const { store } = sandbox();
+	assert.deepEqual(await store.search('find my goodbye snippet please'), []);
+	const hits = await store.likely('find my goodbye snippet please');
+	assert.deepEqual(
+		hits.map((h) => [h.fileId, h.index, h.source]),
+		[['package:goodbyes:package.yml', 0, 'package']]
+	);
+	assert.equal((await store.likely('thank you hello', { limit: 1 })).length, 1);
+	assert.deepEqual(await store.likely('please find the snippet'), []);
+});
+
 test('search finds snippets across local files and packages', async () => {
 	const { store } = sandbox();
 	const hits = await store.search('goodbye');
