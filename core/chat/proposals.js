@@ -6,6 +6,7 @@ import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
 import { whichRepository } from '../apiRouter.js';
 import { isSafeFileName } from '../store.js';
 import { repositoryKey } from '../teamAddress.js';
+import { heldBy } from '../teamPackages.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
 import { createInProcessApi } from './inProcess.js';
 
@@ -97,11 +98,13 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 
 	const teamRefusal = (code, message) => refused(explain({ body: { error: { code, message } } }, { tool: 'team' }));
 
-	async function connectedRepositories() {
-		const { repositories } = await ask('GET', '/team');
-		if (!repositories.length) throw teamRefusal('NOT_CONNECTED');
-		return repositories;
+	// The team status, when at least one repository is connected.
+	async function connectedTeam() {
+		const status = await ask('GET', '/team');
+		if (!status.repositories.length) throw teamRefusal('NOT_CONNECTED');
+		return status;
 	}
+	const connectedRepositories = async () => (await connectedTeam()).repositories;
 
 	function repositoryWithId(repositories, id) {
 		const found = repositories.find((repository) => repository.id === id);
@@ -254,15 +257,26 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 
 		snippets_install_team_package: {
 			async build({ name, repository }) {
-				const repositories = await connectedRepositories();
-				let source;
-				if (repository !== undefined) source = repositoryWithId(repositories, repository);
-				else {
+				const { repositories, installedOnly } = await connectedTeam();
+				// A repository that is named has to be connected, whatever else is so.
+				let source = repository === undefined ? null : repositoryWithId(repositories, repository);
+				// Held by a repository that is not connected. No card for the name
+				// could be applied until it is removed, whichever repository the
+				// call names or leaves out. So that is said now, as the app's route
+				// says it, and not after asking which.
+				const away = installedOnly.find((item) => item.name === name && item.repository);
+				if (away) throw teamRefusal('EXISTS', heldBy(name, away.repository, { connected: false }));
+				if (!source) {
 					const offering = repositories.filter((item) => item.packages.some((pkg) => pkg.name === name));
+					const offered = (item) => item.packages.find((pkg) => pkg.name === name);
 					// Several offer it. If one of them holds the name already, the card
 					// is for that one, as the app's route would have it: an update.
-					const holding = offering.filter((item) => item.packages.some((pkg) => pkg.name === name && pkg.installed));
-					if (offering.length > 1 && holding.length !== 1) throw which(offering, `offer ${name}`);
+					const holding = offering.filter((item) => offered(item).installed);
+					if (offering.length > 1 && holding.length !== 1) {
+						// Held by a repository that offers it no more: each of these would be refused.
+						if (offered(offering[0]).installedFrom) throw teamRefusal('EXISTS', heldBy(name, offered(offering[0]).installedFrom));
+						throw which(offering, `offer ${name}`);
+					}
 					// The only one connected answers for a name it does not have.
 					source = offering.length > 1 ? holding[0] : (offering[0] ?? (repositories.length === 1 ? repositories[0] : null));
 					if (!source) throw teamRefusal('NOT_FOUND', `No connected repository has a package named ${name}.`);
@@ -270,7 +284,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				const pkg = source.packages.find((item) => item.name === name);
 				if (!pkg) throw teamRefusal('NOT_FOUND', `${repositoryLabel(source.repository)} has no package named ${name}.`);
 				// The name is held by another repository's package. A card for it could only fail.
-				if (pkg.installedFrom) throw teamRefusal('EXISTS', `A package named ${name} is already installed from ${repositoryLabel(pkg.installedFrom)}. Remove it first, then install this one.`);
+				if (pkg.installedFrom) throw teamRefusal('EXISTS', heldBy(name, pkg.installedFrom));
 				if (pkg.matchCount === null) throw refused('This package was not read, so it cannot be installed from here.');
 				return {
 					card: {

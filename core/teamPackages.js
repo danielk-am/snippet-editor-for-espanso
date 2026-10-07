@@ -29,6 +29,14 @@ const INCOMING = '_incoming.tmp';
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isPackageFile = (name) => name === MANIFEST || isSafeFileName(name);
 
+// What a caller is told when the name is held by another repository's
+// package. The holder is named as owner/repo. `connected: false` adds that it
+// is not connected now: its package is then found on the Team packages page
+// under the repositories that are not connected, and nowhere else. The
+// routes and the assistant's cards say it in these words too.
+export const heldBy = (name, repository, { connected = true } = {}) =>
+	`A package named ${name} is already installed from ${repositoryLabel(repository)}${connected ? '' : ', which is not connected'}. Remove it first, then install this one.`;
+
 // `allowLocal` exists for tests, whose repositories are folders on this
 // computer. The app itself never passes it.
 export function createTeamPackages({ matchDir, now = () => new Date(), allowLocal = false }) {
@@ -57,7 +65,7 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 	const refuseIfHeld = (name, marker, repository) => {
 		const holder = marker ? keyOf(marker.repository) : '';
 		if (holder && holder !== keyOf(repository)) {
-			throw fail('EXISTS', `A package named ${name} is already installed from ${repositoryLabel(marker.repository)}. Remove it first, then install this one.`);
+			throw fail('EXISTS', heldBy(name, marker.repository));
 		}
 	};
 

@@ -201,6 +201,10 @@ function TeamCard({ state, navigate, refresh }) {
 	const [busy, setBusy] = useState(null);
 	// The repository the question "Disconnect?" is about.
 	const [leaving, setLeaving] = useState(null);
+	// The repository a disconnect has just ended for, until the keyboard has
+	// been given somewhere to be.
+	const [landing, setLanding] = useState(null);
+	const body = useRef(null);
 	const working = useRef(false);
 	// Counts what has been shown, so an answer that was overtaken is dropped.
 	const latest = useRef(0);
@@ -218,6 +222,20 @@ function TeamCard({ state, navigate, refresh }) {
 		);
 	}, [state]);
 
+	// Once a disconnect has ended, the keyboard is given somewhere to be. The
+	// Disconnect button that was pressed is off while it runs, and then leaves
+	// the page with its entry, so the keyboard would be left on the page
+	// behind. It goes to the field for another address. If the disconnect
+	// failed, the entry is still there, and it goes back to its button.
+	// Someone who has put the keyboard somewhere meanwhile is left there.
+	useEffect(() => {
+		if (!landing) return;
+		const root = body.current;
+		const adrift = !document.activeElement || document.activeElement === document.body;
+		if (adrift) (root?.querySelector(`[data-disconnect="${landing.id}"]`) ?? root?.querySelector('.setting__team input'))?.focus();
+		setLanding(null);
+	}, [landing]);
+
 	const act = async (what, id, work, done) => {
 		if (working.current) return;
 		working.current = true;
@@ -230,10 +248,20 @@ function TeamCard({ state, navigate, refresh }) {
 			await refresh();
 			if (done) toast({ title: done });
 		} catch (failure) {
+			// What failed on a repository can still have changed what there is to
+			// show: a check that could not reach it is recorded on it. So the
+			// status is read again, as the Team page does, and is shown together
+			// with the reason, which is then said once. A connect that failed
+			// changed nothing, and its reason is shown at once.
+			const mine = id ? (latest.current += 1) : latest.current;
+			const status = id ? await api.team().catch(() => null) : null;
 			// The work goes on when this page is left. If it fails then, the
 			// reason is still said, where it can be seen.
-			if (here.current) setError({ at: id ?? 'connect', message: failure.message });
-			else toast({ tone: 'error', title: 'That did not work', description: failure.message });
+			if (!here.current) toast({ tone: 'error', title: 'That did not work', description: failure.message });
+			else {
+				if (status && mine === latest.current) setTeam(status);
+				setError({ at: id ?? 'connect', message: failure.message });
+			}
 		} finally {
 			working.current = false;
 			setBusy(null);
@@ -261,17 +289,21 @@ function TeamCard({ state, navigate, refresh }) {
 
 	const repository = (item) => {
 		const checked = item.fetchedAt ? new Date(item.fetchedAt).toLocaleString() : '';
+		// What went wrong with this repository's own button. It is said once:
+		// when the repository's line already gives the same reason, as it does
+		// after a check that could not reach it, it is not repeated in red.
+		const failure = error?.at === item.id && error.message !== item.problem ? error.message : '';
 		return html`<li key=${item.id}>
 			<div class="setting" role="group" aria-label=${repositoryLabel(item.repository)}>
 				<${PathRow} path=${item.repository} what="Address" />
 				<p class="field__help">${item.branch ? `Branch ${item.branch}.` : 'Not copied yet.'} ${checked && `Last checked ${checked}.`}</p>
 				${item.problem && html`<${Alert} tone="warning" icon="alert" title="The repository could not be reached"><p>${item.problem}</p><//>`}
-				${error?.at === item.id && html`<${Alert} tone="danger" icon="alert" title=${error.message} />`}
+				${failure && html`<${Alert} tone="danger" icon="alert" title=${failure} />`}
 				<div class="setting__actions">
 					<${Button} variant="outline" icon="refresh" disabled=${Boolean(busy)} onClick=${() => act('check', item.id, () => api.refreshTeam(item.id), 'Checked for updates')}>
 						${doing('check', item.id) ? 'Checking…' : 'Check for updates'}
 					<//>
-					<${Button} variant="ghost" disabled=${Boolean(busy)} onClick=${() => setLeaving(item)}>${doing('disconnect', item.id) ? 'Disconnecting…' : 'Disconnect'}<//>
+					<${Button} variant="ghost" disabled=${Boolean(busy)} data-disconnect=${item.id} onClick=${() => setLeaving(item)}>${doing('disconnect', item.id) ? 'Disconnecting…' : 'Disconnect'}<//>
 				</div>
 			</div>
 		</li>`;
@@ -286,7 +318,7 @@ function TeamCard({ state, navigate, refresh }) {
 		description=${description}
 		actions=${connected.length > 0 && html`<${Button} variant="outline" size="sm" icon="team" onClick=${() => navigate({ view: 'team' })}>Browse team packages<//>`}
 	>
-		<div class="setting">
+		<div class="setting" ref=${body}>
 			${team.problem && html`<${Alert} tone="warning" icon="alert" title=${team.problem} />`}
 			${connected.length > 0 && html`<ul class="team-repos" aria-label="Connected repositories">${connected.map(repository)}</ul>`}
 			${connected.length < MAX_TEAM_REPOSITORIES
@@ -317,10 +349,12 @@ function TeamCard({ state, navigate, refresh }) {
 			description="The app forgets this repository and removes its copy of it. Team packages you installed from it stay until you remove them."
 			confirmLabel="Disconnect"
 			onClose=${() => setLeaving(null)}
-			onConfirm=${() => {
+			onConfirm=${async () => {
 				const { id } = leaving;
 				setLeaving(null);
-				act('disconnect', id, () => api.disconnectTeam(id), 'Repository disconnected');
+				await act('disconnect', id, () => api.disconnectTeam(id), 'Repository disconnected');
+				// Not when this page was left meanwhile: the keyboard is elsewhere by then.
+				if (here.current) setLanding({ id });
 			}}
 		/>`}
 	<//>`;

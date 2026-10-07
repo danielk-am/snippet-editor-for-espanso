@@ -81,7 +81,8 @@ test('team:disconnect carries the id of the repository to leave, and with none g
 	assert.deepEqual([two.ok, two.data?.repositories.map((repository) => repository.repository)], [true, [urlOf('acme/first'), SECOND_BY_SSH]]);
 
 	// Two connected, and which one is not said: neither goes, and the reply says so.
-	const noId = [[], [undefined], [null]];
+	// Nothing but text that is not empty names one: a number or an object is an id that went wrong on its way here.
+	const noId = [[], [undefined], [null], [''], [0], [42], [false], [{}], [[]], [{ id: idOf('acme/first') }]];
 	for (const args of noId) assert.deepEqual(await invoke('team:disconnect', ...args), NOT_NAMED, JSON.stringify(args));
 	assert.deepEqual([await service.teamStatus(), service.settings().teamRepositories], [two.data, [urlOf('acme/first'), SECOND_BY_SSH]]);
 	const left = await invoke('team:disconnect', idOf(SECOND_BY_SSH));
@@ -89,7 +90,7 @@ test('team:disconnect carries the id of the repository to leave, and with none g
 	assert.deepEqual(left.data, await service.teamStatus());
 	assert.deepEqual(service.settings().teamRepositories, [urlOf('acme/first')]);
 	// Pressed twice, or an id that is not one: the list as it is.
-	for (const id of [idOf(SECOND_BY_SSH), 'nothing', 42, { id: idOf('acme/first') }]) assert.deepEqual(await invoke('team:disconnect', id), left, JSON.stringify(id));
+	for (const id of [idOf(SECOND_BY_SSH), 'nothing', '0123456789ab']) assert.deepEqual(await invoke('team:disconnect', id), left, JSON.stringify(id));
 
 	// One connected: no id does not mean that one. A missing id never disconnects anything.
 	for (const args of noId) assert.deepEqual(await invoke('team:disconnect', ...args), NOT_NAMED, JSON.stringify(args));
@@ -227,7 +228,7 @@ test('the window\'s calls reach the routes and the channels, and say which repos
 	await fails(api.openTeamLink('https://github.com/acme/third'), (error) => assert.deepEqual([error.code, error.message], ['INVALID', 'That link is not part of a connected repository.']));
 
 	// Disconnecting: the one named, and no other. With none named, none goes.
-	for (const id of [undefined, null]) await fails(api.disconnectTeam(id), (error) => assert.deepEqual([error.code, error.message], ['INVALID', 'No repository was named, so nothing was disconnected.']));
+	for (const id of [undefined, null, '', 0, {}]) await fails(api.disconnectTeam(id), (error) => assert.deepEqual([error.code, error.message], ['INVALID', 'No repository was named, so nothing was disconnected.']));
 	assert.deepEqual((await api.team()).repositories.map((repository) => repository.id), [one, two]);
 	const left = await api.disconnectTeam(two);
 	assert.deepEqual([left.repositories.map((repository) => repository.id), left.installedOnly], [[one], [{ name: 'tools', repository: urlOf('acme/second') }]]);

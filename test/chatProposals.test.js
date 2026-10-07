@@ -644,6 +644,45 @@ test('with several repositories, an install card is made for the one that offers
 	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'Goodbye for now'], [':cheers', 'Cheers,']));
 });
 
+test('no install card is made for a name held by a repository that is not connected, and the assistant is not first asked which', async (t) => {
+	const { propose, proposals, cards, one, two, service, matchDir, route } = await teams(t);
+	const REMOVE_FIRST = 'These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.';
+	const third = createRemote();
+	third.commit({ 'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes', { title: 'Third goodbyes' }), 'packages/goodbyes/package.yml': MATCHES([':ta', 'Ta-ra']) });
+	await service.connectTeam(third.url);
+	// A card made while the name was free, for one of the two that will be left.
+	const early = await propose('snippets_install_team_package', { name: 'goodbyes', repository: one });
+	const theirs = await propose('snippets_install_team_package', { name: 'goodbyes', repository: idOf(third) });
+	assert.equal((await proposals.apply(theirs.id)).status, 'applied');
+	await service.disconnectTeam(idOf(third));
+	const made = cards.length;
+
+	// Whichever it named it would be refused, so it is not asked which: one call, one answer.
+	const away = `A package named goodbyes is already installed from ${third.url}, which is not connected. Remove it first, then install this one.`;
+	for (const args of [{ name: 'goodbyes' }, { name: 'goodbyes', repository: one }, { name: 'goodbyes', repository: two }]) {
+		assert.equal((await propose('snippets_install_team_package', args)).error, `${away} ${REMOVE_FIRST}`, JSON.stringify(args));
+	}
+	assert.equal(cards.length, made);
+	// A repository that is named still has to be connected, and that is said first.
+	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes', repository: idOf(third) })).error, NOT_CONNECTED);
+	// The card from before says the same at Apply, in the app's words, and nothing is replaced.
+	const held = await proposals.apply(early.id);
+	assert.deepEqual([held.status, held.message, held.code], ['pending', away, 'EXISTS']);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':ta', 'Ta-ra']));
+
+	// A holder that is connected and offers the name no more: said at once too, in the install rule's words.
+	await service.connectTeam(third.url);
+	third.commit({ 'packages/goodbyes/_manifest.yml': null, 'packages/goodbyes/package.yml': null });
+	await service.refreshTeam(idOf(third));
+	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, `${TAKEN('goodbyes', third.url)} ${REMOVE_FIRST}`);
+	assert.equal(cards.length, made);
+
+	// Removed, the name is free: which one has to be said, and the early card applies.
+	await route('DELETE', '/team/packages/goodbyes/installed');
+	assert.match((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, /^Two repositories offer goodbyes: /);
+	assert.equal((await proposals.apply(early.id)).status, 'applied');
+});
+
 test('an install card whose repository was disconnected, or dropped the package, is stale, and nothing is installed from another', async (t) => {
 	const { propose, proposals, second, two, service, matchDir } = await teams(t);
 	const goodbyes = await propose('snippets_install_team_package', { name: 'goodbyes', repository: two });

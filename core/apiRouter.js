@@ -1,5 +1,6 @@
 import { parseDocument, stringify } from 'yaml';
 import { stringifyMatch } from './matchFile.js';
+import { heldBy } from './teamPackages.js';
 import { PACKAGE_NAME } from './teamRepo.js';
 import { repositoryLabel } from '../shared/repositoryLabel.js';
 import { isPlainObject } from '../shared/text.js';
@@ -151,7 +152,23 @@ async function repositoryOffering(service, name) {
 	// held. A damaged marker shows as installed in each, and then none holds it.
 	const holding = teams.filter((team, index) => offered(index)?.installed);
 	if (holding.length === 1) return holding[0];
+	// Held by a repository that offers it no more. Each of these would refuse
+	// it, in these words. That is said now, and not after asking which.
+	const holder = offered(teams.indexOf(offering[0])).installedFrom;
+	if (holder) throw fail('EXISTS', heldBy(name, holder));
 	throw ambiguous(offering, `offer ${name}`);
+}
+
+// A name can be held by a repository that is not connected. No connected one
+// can install it until it is removed, so that is the answer at once,
+// whichever repository the request names or leaves out. Asked "which?"
+// first, the caller would be refused whatever it answered. Read from the
+// status, which is where "not connected" is decided: nothing is fetched.
+async function refuseIfHeldAway(service, name) {
+	if (!service.teams().length) return;
+	const { installedOnly } = await service.teamStatus();
+	const held = installedOnly.find((item) => item.name === name && item.repository);
+	if (held) throw fail('EXISTS', heldBy(name, held.repository, { connected: false }));
 }
 
 // --- routes -----------------------------------------------------------------
@@ -224,7 +241,10 @@ const routes = [
 
 	['PUT', 'team/packages/:name/installed', async ({ service, params, body }) => {
 		const id = repositoryIn(body);
-		const team = id === undefined ? await repositoryOffering(service, params.name) : repositoryWithId(service, id);
+		// A repository that is named has to be connected, whatever else is so.
+		const named = id === undefined ? null : repositoryWithId(service, id);
+		await refuseIfHeldAway(service, params.name);
+		const team = named ?? (await repositoryOffering(service, params.name));
 		await team.install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined });
 		return service.teamStatus();
 	}],

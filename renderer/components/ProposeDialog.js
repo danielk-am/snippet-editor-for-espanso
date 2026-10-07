@@ -24,6 +24,7 @@ export function ProposeDialog({ file, onClose, navigate }) {
 	const [sent, setSent] = useState(null);
 	// Checked at once, so a second click in the same instant sends nothing.
 	const busy = useRef(false);
+	const form = useRef(null);
 
 	useEffect(() => {
 		api.team().then(
@@ -42,6 +43,15 @@ export function ProposeDialog({ file, onClose, navigate }) {
 
 	const repositories = team?.repositories ?? [];
 	const several = repositories.length > 1;
+	// With several connected, the repository is the first thing to choose, and
+	// Send stays off until it is chosen. So that is where the keyboard starts.
+	// The dialog is open before the repositories are known, with the keyboard
+	// in Summary, so it is moved once they are. Only from where the dialog put
+	// it: someone who has begun to type, or gone elsewhere, is left there.
+	useEffect(() => {
+		const fields = form.current?.elements;
+		if (several && fields?.repository && document.activeElement === fields.summary && !fields.summary.value) fields.repository.focus();
+	}, [several]);
 	const repository = repositories.find((item) => item.id === chosen) ?? null;
 	// The packages offered follow the repository: each has its own names.
 	const choose = (id) => {
@@ -115,7 +125,7 @@ export function ProposeDialog({ file, onClose, navigate }) {
 		? [...repository.packages.map((pkg) => ({ id: pkg.name, label: pkg.title })), { id: NEW, label: 'A new package' }]
 		: [{ id: NEW, label: several ? 'Choose a repository first' : 'A new package' }];
 
-	return html`<form onSubmit=${send}>
+	return html`<form ref=${form} onSubmit=${send}>
 		<${Dialog}
 			title="Propose to team"
 			description=${says}

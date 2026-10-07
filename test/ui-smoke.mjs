@@ -618,6 +618,7 @@ async function run() {
 		await js(`window.__ui.click('Propose to team')`);
 		await need(`document.querySelector('.dialog select[name=target]') && !document.querySelector('.dialog select[name=target]').disabled`, 'the proposal dialog');
 		check(!(await js(`Boolean(document.querySelector('.dialog select[name=repository]'))`)), 'with one repository connected the dialog asked which');
+		check(await js(`document.activeElement === document.querySelector('.dialog input[name=summary]')`), 'with one repository connected the proposal dialog did not open in Summary');
 		check(await js(`document.querySelector('.dialog__head p').textContent.includes(${JSON.stringify(TEAM.first)})`), 'the dialog does not say where the file would go');
 		await js(`window.__ui.click('Cancel')`);
 
@@ -674,6 +675,15 @@ async function run() {
 		fs.renameSync(`${second.url}.away`, second.url);
 		await press(inSettings(TEAM.second, 'Check for updates'), 'Check for updates once the repository is back');
 		await need(`${unreached(entry(TEAM.second))} === ''`, 'the problem to clear once the repository is back');
+		// Out of reach once more, and this time it is Settings that finds out.
+		// Its entry says so at once, with nothing else pressed, and says it once.
+		fs.renameSync(second.url, `${second.url}.away`);
+		await press(inSettings(TEAM.second, 'Check for updates'), 'Check for updates in Settings on a repository that has gone');
+		await waitFor(`${unreached(entry(TEAM.second))} === 'The repository could not be reached: Git could not reach that repository.'`, 'a check that failed in Settings to be said on that repository, once');
+		check((await js(unreached(entry(TEAM.first)))) === '', 'a check that failed in Settings is said on the other repository too');
+		fs.renameSync(`${second.url}.away`, second.url);
+		await press(inSettings(TEAM.second, 'Check for updates'), 'Check for updates in Settings once the repository is back again');
+		await need(`${unreached(entry(TEAM.second))} === ''`, 'the problem to clear again');
 
 		// One package from each. The second's goodbyes takes the name, so the
 		// first's cannot be installed, and says where the name is held.
@@ -700,6 +710,8 @@ async function run() {
 		const target = `document.querySelector('.dialog select[name=target]')`;
 		const offered = (select) => `[...${select}.options].map((option) => option.textContent).join(' | ')`;
 		await need(which, 'the repository choice in the proposal dialog');
+		// Send stays off until the repository is chosen, so that choice is where the keyboard starts.
+		await waitFor(`document.activeElement === ${which}`, 'the proposal dialog to open on the repository choice');
 		check((await js(offered(which))) === `Choose a repository… | ${FIRST} | ${SECOND}`, `the repositories offered were: ${await js(offered(which))}`);
 		// Where a file goes is not chosen for you.
 		check(await js(`${which}.value === '' && ${target}.disabled && window.__ui.byText('Send proposal').disabled`), 'a proposal could be sent before its repository was chosen');
@@ -833,6 +845,9 @@ async function run() {
 		await js(`${confirm}.click()`);
 		// The card is as it was before any was connected, and says what is still installed.
 		await need(`${fieldLabel} === 'Repository address' && !document.querySelector('.team-repos')`, 'Settings with no repository connected');
+		// The button that was pressed went with its entry. The keyboard is not
+		// left on the page behind: it is in the field for an address.
+		await waitFor(`document.activeElement === document.querySelector('.setting__team input')`, 'the keyboard to be in the address field after a disconnect');
 		const stillInstalled = `[...document.querySelectorAll('.card .field__help')].find((el) => el.querySelector('.link'))`;
 		check((await js(`${stillInstalled}?.textContent.replace(/\\s+/g, ' ').trim()`)) === '2 team packages are still installed. Manage them', `with none connected Settings says of what is installed: ${await js(`${stillInstalled}?.textContent`)}`);
 		check(!(await js(`Boolean(window.__ui.byText('Browse team packages'))`)), 'with none connected Settings still offers to browse team packages');

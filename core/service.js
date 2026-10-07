@@ -205,7 +205,10 @@ export async function createService({ userDataDir, env = process.env, onChange =
 			// Which one has to be said. With no id, `team` answers the only one
 			// connected. That is never what a disconnect means: an id that went
 			// missing on its way here must not take a repository with it.
-			if (noId(id)) throw fail('INVALID', 'No repository was named, so nothing was disconnected.');
+			// An id is text. Anything else, and text that is empty, is an id that
+			// went wrong on its way here. Answering the list as it is would tell
+			// the person all was well when nothing was disconnected.
+			if (typeof id !== 'string' || !id) throw fail('INVALID', 'No repository was named, so nothing was disconnected.');
 			return inTurn(async () => {
 				const leaving = teamOf(id);
 				if (!leaving) return teamStatus();

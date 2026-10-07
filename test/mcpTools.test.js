@@ -527,13 +527,14 @@ test('errors point at the next call that fits what went wrong', async (t) => {
 	assert.ok((await call('snippets_install_team_package', { name: 'support/installed?x=' })).error);
 	assert.equal(existsSync(join(matchDir, 'team', 'support')), false);
 	// A name another repository holds is not a folder to move: the person removes that package first, in the app.
+	// The holder here is no longer connected, and the reply says so: its package is listed apart in the app.
 	await call('snippets_install_team_package', { name: 'support' });
 	const other = createRemote();
 	other.commit({ 'packages/support/_manifest.yml': MANIFEST('support'), 'packages/support/package.yml': MATCHES([':s', 'Another support']) });
 	await service.disconnectTeam(idOf(remote));
 	await service.connectTeam(other.url);
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), {
-		error: `A package named support is already installed from ${remote.url}. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`,
+		error: `A package named support is already installed from ${remote.url}, which is not connected. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`,
 	});
 	assert.ok(readFileSync(join(matchDir, 'team', 'support', 'replies.yml'), 'utf8').includes(':refund'));
 	// An empty file has no positions to offer.
@@ -842,6 +843,34 @@ test('no description speaks of one team repository, and each team tool says what
 	}
 });
 
+test('a name held by a repository that is not connected is refused at once, and the tool is not first asked which', async (t) => {
+	const { call, first, second, one, two, matchDir, service } = await twoRepositories(t);
+	const REMOVE_FIRST = 'These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.';
+	// Installed from a third repository, which is then disconnected. The two that are left both offer the name.
+	const third = createRemote();
+	third.commit({ 'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes', { title: 'Third goodbyes' }), 'packages/goodbyes/package.yml': MATCHES([':ta', 'Ta-ra']) });
+	await service.connectTeam(third.url);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: idOf(third) }), { name: 'goodbyes', repository: idOf(third), installed: true, update_available: false });
+	await service.disconnectTeam(idOf(third));
+
+	const refusal = { error: `A package named goodbyes is already installed from ${third.url}, which is not connected. Remove it first, then install this one. ${REMOVE_FIRST}` };
+	// One call, one answer: it is not told "say which" and then refused whichever it says.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), refusal);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: one }), refusal);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: two }), refusal);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':ta', 'Ta-ra']));
+	// The list says the same of it: installed, from an address that is not connected.
+	const listed = await call('snippets_list_team_packages');
+	assert.deepEqual(listed.installed_only, [{ name: 'goodbyes', repository: null, installed_from: third.url }]);
+	assert.deepEqual(listed.packages.filter((pkg) => pkg.name === 'goodbyes').map((pkg) => [pkg.repository, pkg.installed, pkg.installed_from]), [[one, false, third.url], [two, false, third.url]]);
+	// A holder that is connected and offers it no more is said plainly, at once too.
+	await service.connectTeam(third.url);
+	third.commit({ 'packages/goodbyes/_manifest.yml': null, 'packages/goodbyes/package.yml': null });
+	await service.refreshTeam(idOf(third));
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), { error: `A package named goodbyes is already installed from ${third.url}. Remove it first, then install this one. ${REMOVE_FIRST}` });
+	assert.deepEqual([first.url, second.url].includes(third.url), false);
+});
+
 test('a refusal over which repository, or over a name already taken, says what to do next', async () => {
 	const { explain } = await import('../mcp/tools.mjs');
 	const told = (code, message, context = { tool: 'team' }) => explain({ status: 409, body: { error: { code, message } } }, context);
@@ -850,6 +879,10 @@ test('a refusal over which repository, or over a name already taken, says what t
 	assert.equal(
 		told('EXISTS', 'A package named goodbyes is already installed from acme/team. Remove it first, then install this one.'),
 		'A package named goodbyes is already installed from acme/team. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.'
+	);
+	assert.equal(
+		told('EXISTS', 'A package named goodbyes is already installed from acme/team, which is not connected. Remove it first, then install this one.'),
+		'A package named goodbyes is already installed from acme/team, which is not connected. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.'
 	);
 	// A folder someone else made is still theirs to move.
 	assert.equal(

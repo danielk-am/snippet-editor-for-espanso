@@ -485,7 +485,7 @@ test('disconnecting twice, or an id that is not connected, answers the list as i
 
 	const before = await service.teamStatus();
 	calls.length = 0;
-	for (const id of [idOf(remote), 'nothing', '', 42, other.url]) assert.deepEqual(await service.disconnectTeam(id), before, String(id));
+	for (const id of [idOf(remote), 'nothing', '0123456789ab', other.url]) assert.deepEqual(await service.disconnectTeam(id), before, String(id));
 	assert.deepEqual([service.settings().teamRepositories, copies()], [[other.url], [idOf(other)]]);
 	// Nothing was removed, and nothing was written.
 	assert.deepEqual(calls.filter((args) => ['clone', 'fetch', 'ls-remote'].includes(args[0])), []);
@@ -496,8 +496,12 @@ test('disconnecting with no id changes nothing and says so, whether none, one or
 	const other = another(OTHER);
 	const notNamed = (error) => assert.deepEqual([error.code, error.message], ['INVALID', 'No repository was named, so nothing was disconnected.']);
 	const saved = () => JSON.parse(readFileSync(join(root, 'data', 'settings.json'), 'utf8')).teamRepositories;
+	// Nothing but text that is not empty names a repository. Anything else is
+	// an id that went wrong on its way here, and the person is told so: were
+	// the list answered as it is, a Disconnect that did nothing would look done.
+	const NO_ID = [undefined, null, '', 0, 42, false, true, NaN, {}, [], ['0123456789ab'], { id: idOf(remote) }];
 	const untouched = async (status, urls) => {
-		for (const id of [undefined, null]) await fails(service.disconnectTeam(id), notNamed);
+		for (const id of NO_ID) await fails(service.disconnectTeam(id), notNamed);
 		await fails(service.disconnectTeam(), notNamed);
 		assert.deepEqual([await service.teamStatus(), service.settings().teamRepositories, saved(), copies().length], [status, urls, urls, urls.length]);
 	};
@@ -847,17 +851,87 @@ test('a name that two repositories offer and one of them holds means the holder,
 	assert.equal((await call('PUT', path, { body: { repository: idOf(other) } })).status, 200);
 
 	// The holder stops offering it. The name is still its own, so no other
-	// could install it, and the request is not handed to one of them.
+	// could install it, and the request is not handed to one of them. It is
+	// not asked which of them either: whichever it named would be refused, so
+	// that refusal is the answer at once.
 	other.commit({ 'packages/goodbyes/_manifest.yml': null, 'packages/goodbyes/package.yml': null });
 	await service.refreshTeam(idOf(other));
-	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
+	const held = { status: 409, body: { error: { code: 'EXISTS', message: taken('goodbyes', other.url) } } };
+	assert.deepEqual(await call('PUT', path, { body: {} }), held);
+	for (const one of [remote, third]) assert.deepEqual(await call('PUT', path, { body: { repository: idOf(one) } }), held);
 	assert.equal(installedText(), MATCHES([':bye', 'A newer goodbye']));
-	// The holder is disconnected: the same.
+	// The holder is disconnected: refused at once too, and told that it is not connected.
 	await service.disconnectTeam(idOf(other));
-	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
-	// Removed, the name is free, and still which one has to be said.
+	const heldAway = { status: 409, body: { error: { code: 'EXISTS', message: takenAway('goodbyes', other.url) } } };
+	assert.deepEqual(await call('PUT', path, { body: {} }), heldAway);
+	for (const one of [remote, third]) assert.deepEqual(await call('PUT', path, { body: { repository: idOf(one) } }), heldAway);
+	assert.equal(installedText(), MATCHES([':bye', 'A newer goodbye']));
+	// Removed, the name is free, and which one has to be said.
 	assert.equal((await call('DELETE', path)).status, 200);
 	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
+});
+
+test('a name held by a repository that is not connected is refused at once, whichever repository is named or none', async (t) => {
+	const { service, call, remote, matchDir, calls } = await setup(t);
+	const path = '/team/packages/goodbyes/installed';
+	const marker = join(matchDir, 'team', 'goodbyes', '.snippet-editor.json');
+	const installedText = () => readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8');
+	// Installed from the first, which is then disconnected. Two others offer the name.
+	await service.connectTeam(remote.url);
+	await service.team().install('goodbyes');
+	const original = installedText();
+	await service.disconnectTeam(idOf(remote));
+	const [second, third] = [another({ goodbyes: MATCHES([':bye', 'The second goodbye']), shipping: MATCHES([':sent', 'Sent.']) }), another({ goodbyes: MATCHES([':bye', 'The third goodbye']) })];
+	await service.connectTeam(second.url);
+	await service.connectTeam(third.url);
+	const heldAway = { status: 409, body: { error: { code: 'EXISTS', message: takenAway('goodbyes', remote.url) } } };
+
+	// Asked which, the caller would be refused whatever it answered. So it is
+	// not asked: the refusal that was certain is the first thing it hears.
+	calls.length = 0;
+	for (const body of [undefined, {}, { acceptCommands: true }, { repository: idOf(second) }, { repository: idOf(third) }]) assert.deepEqual(await call('PUT', path, { body }), heldAway, JSON.stringify(body));
+	assert.equal(installedText(), original);
+	assert.equal(JSON.parse(readFileSync(marker, 'utf8')).repository, remote.url);
+	// Read from the copies and the markers: nothing was fetched to find out.
+	assert.deepEqual(calls.filter((args) => ['clone', 'fetch', 'ls-remote', 'push'].includes(args[0])), []);
+
+	// What was wrong with the request itself is still said first.
+	assert.deepEqual(await call('PUT', path, { body: { repository: idOf(remote) } }), NOT_CONNECTED);
+	assert.deepEqual(await call('PUT', path, { body: { repository: 42 } }), NOT_TEXT);
+	// A name nobody holds is installed as ever.
+	assert.equal((await call('PUT', '/team/packages/shipping/installed', { body: {} })).status, 200);
+
+	// With one connected it is said the same way, named or not.
+	await service.disconnectTeam(idOf(third));
+	for (const body of [{}, { repository: idOf(second) }]) assert.deepEqual(await call('PUT', path, { body }), heldAway, JSON.stringify(body));
+	// The team by itself knows nothing of what else is connected, and says who holds the name.
+	await fails(service.team().install('goodbyes'), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', taken('goodbyes', remote.url)]));
+	await service.connectTeam(third.url);
+
+	// A marker that names no repository is held by nobody: either may repair it, once it is said which.
+	const written = readFileSync(marker, 'utf8');
+	writeFileSync(marker, '{ not json');
+	assert.deepEqual(code(await call('PUT', path, { body: {} })), [409, 'AMBIGUOUS']);
+	writeFileSync(marker, written);
+	assert.deepEqual(await call('PUT', path, { body: {} }), heldAway);
+
+	// The holder is connected again: the request with no repository is for it once more.
+	await service.connectTeam(remote.url);
+	assert.equal((await call('PUT', path, { body: {} })).status, 200);
+	assert.equal(JSON.parse(readFileSync(marker, 'utf8')).repository, remote.url);
+	await service.disconnectTeam(idOf(remote));
+
+	// Removed, as the refusal says to, the name is free.
+	assert.equal((await call('DELETE', path)).status, 200);
+	assert.deepEqual(code(await call('PUT', path, { body: {} })), [409, 'AMBIGUOUS']);
+	assert.equal((await call('PUT', path, { body: { repository: idOf(third) } })).status, 200);
+	assert.equal(installedText(), MATCHES([':bye', 'The third goodbye']));
+
+	// With none connected there is nothing to install from, and that is what is said.
+	await service.disconnectTeam(idOf(second));
+	await service.disconnectTeam(idOf(third));
+	assert.deepEqual(code(await call('PUT', path, { body: {} })), [409, 'NOT_CONNECTED']);
+	assert.deepEqual(await call('PUT', path, { body: { repository: idOf(third) } }), NOT_CONNECTED);
 });
 
 test('with several connected, a proposal says which repository it is for, and goes to that one only', async (t) => {
@@ -1384,6 +1458,7 @@ function twoTeams({ first = seeded(), second = seeded() } = {}) {
 
 const shown = (status, name) => (({ installed, updateAvailable, installedFrom }) => [installed, updateAvailable, installedFrom])(named(status.packages)[name]);
 const taken = (name, from) => `A package named ${name} is already installed from ${from}. Remove it first, then install this one.`;
+const takenAway = (name, from) => `A package named ${name} is already installed from ${from}, which is not connected. Remove it first, then install this one.`;
 
 test('a package shows as installed only for the repository it came from; the other says where it is from', async () => {
 	const { first, second, remotes } = twoTeams();

@@ -261,16 +261,38 @@ test('text that is not an address has no key, and asking never throws', () => {
 // --- how a repository is named for a person ---------------------------------------------
 
 test('a repository is named by its owner and name, whichever form its address has', () => {
-	for (const input of ['acme/team-snippets', 'https://github.com/acme/team-snippets.git', 'git@github.com:acme/team-snippets.git', 'ssh://git@github.com:22/acme/team-snippets']) {
+	for (const input of ['acme/team-snippets', 'https://github.com/acme/team-snippets.git', 'git@github.com:acme/team-snippets.git', 'ssh://git@github.com:22/acme/team-snippets', 'https://GitHub.com/acme/team-snippets']) {
 		assert.equal(repositoryLabel(parseRepositoryAddress(input).url), 'acme/team-snippets', input);
 	}
 	// As it was typed, capitals and all: this is for a person to read, not for comparing.
-	assert.equal(repositoryLabel(parseRepositoryAddress('https://ghe.example.com:8443/Acme/Team.git').url), 'Acme/Team');
+	assert.equal(repositoryLabel(parseRepositoryAddress('https://github.com/Acme/Team.git').url), 'Acme/Team');
 	// A folder, which only a test connects, has no owner. Its path stands in.
 	assert.equal(repositoryLabel(parseRepositoryAddress('/tmp/remotes/one/remote.git', { allowLocal: true }).url), '/tmp/remotes/one/remote.git');
 });
 
-test('the name is the owner and name the address was parsed into, for every form the app keeps', () => {
+test('a repository on a host of its own is named with that host, so two of one owner and name are told apart', () => {
+	// The same owner and name on GitHub and on a company's own GitHub are two
+	// repositories. Both can be connected, and each has to read as itself in a
+	// choice, a heading, a question and a refusal.
+	const onGitHub = parseRepositoryAddress('https://github.com/acme/team');
+	const onTheirOwn = parseRepositoryAddress('git@ghe.corp.example:acme/team.git');
+	assert.notEqual(onGitHub.key, onTheirOwn.key);
+	assert.deepEqual([repositoryLabel(onGitHub.url), repositoryLabel(onTheirOwn.url)], ['acme/team', 'ghe.corp.example/acme/team']);
+	// Every form of one repository's address reads the same. A port is not
+	// part of which repository it is, and nor are capitals in the host.
+	for (const input of ['https://ghe.corp.example/acme/team', 'https://ghe.corp.example:8443/acme/team.git', 'git@ghe.corp.example:acme/team', 'ssh://git@ghe.corp.example/acme/team.git', 'ssh://git@ghe.corp.example:2222/acme/team', 'https://GHE.Corp.Example/acme/team']) {
+		const address = parseRepositoryAddress(input);
+		assert.deepEqual([address.key, repositoryLabel(address.url)], [onTheirOwn.key, 'ghe.corp.example/acme/team'], input);
+	}
+	// The owner and name stay as typed.
+	assert.equal(repositoryLabel(parseRepositoryAddress('https://ghe.example.com:8443/Acme/Team.git').url), 'ghe.example.com/Acme/Team');
+	// A host that only looks like GitHub is another host, and says so.
+	for (const [input, label] of [['https://github.com.evil.example/acme/team', 'github.com.evil.example/acme/team'], ['git@notgithub.com:acme/team.git', 'notgithub.com/acme/team'], ['https://www.github.com/acme/team', 'www.github.com/acme/team']]) {
+		assert.equal(repositoryLabel(parseRepositoryAddress(input).url), label, input);
+	}
+});
+
+test('the name is the owner and name the address was parsed into, with the host unless it is GitHub, for every form the app keeps', () => {
 	const owners = ['acme', 'Acme-Org', 'a', 'a.b_c-d', '0day'];
 	const repos = ['team-snippets', 'Team.Snippets', 'x', 'snippets.git.git', 'a.git-b', 'dot.', 'under_score', '9'];
 	const forms = [
@@ -288,7 +310,9 @@ test('the name is the owner and name the address was parsed into, for every form
 		for (const repo of repos) {
 			for (const form of forms) {
 				const address = parseRepositoryAddress(form(owner, repo));
-				assert.equal(repositoryLabel(address.url), `${address.owner}/${address.repo}`, address.url);
+				// On GitHub itself the owner and name are enough. Anywhere else the host comes first.
+				const expected = address.host === 'github.com' ? `${address.owner}/${address.repo}` : `${address.host}/${address.owner}/${address.repo}`;
+				assert.equal(repositoryLabel(address.url), expected, address.url);
 				checked += 1;
 			}
 		}
