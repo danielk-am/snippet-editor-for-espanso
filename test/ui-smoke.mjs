@@ -155,12 +155,18 @@ async function run() {
 			? chatEntry('ollama', 'Ollama', 'ready', { models: [{ name: 'in-the-cloud:cloud', cloud: true }, { name: 'on-this-computer:8b', cloud: false }] })
 			: chatEntry('ollama', 'Ollama', 'not-running', { message: 'Ollama is not answering on this computer. Open Ollama, then press Check again.' }),
 	];
+	// Everything the chat has told the window, in order. A step can wait here
+	// for the app itself to say an answer has ended.
+	const chatEvents = [];
 	const backend = await startBackend({
 		ipcMain,
 		userDataDir: app.getPath('userData'),
 		env: { SNIPPET_EDITOR_MATCH_DIR: matchDir },
 		onChange: () => win?.webContents.send('data:changed'),
-		onChatEvent: (event) => win?.webContents.send('chat:event', event),
+		onChatEvent: (event) => {
+			chatEvents.push(event);
+			win?.webContents.send('chat:event', event);
+		},
 		// A look at the backends is old at once here, so one is made after every answer, as it is after a minute in the app.
 		chatOptions: { backends: { status: async () => chatStatus(), locate: async () => path.join(here, 'helpers', 'fakeAgent.mjs') }, limits: { statusMs: 0 } },
 		getWindow: () => win,
@@ -1290,12 +1296,21 @@ async function run() {
 			await ask('SAY Interrupted by a reload.\nHANG');
 			await waitFor(`document.querySelector('.chat__working')`, 'an answer under way before the reload');
 			await sleep(500);
+			const toldBefore = chatEvents.length;
 			const loaded = new Promise((resolve) => win.webContents.once('did-finish-load', resolve));
 			win.webContents.reload();
 			await loaded;
 			await js(HELPERS);
 			await waitFor(`document.querySelector('.chat:not([hidden]) .msg--assistant')`, 'the panel and its conversation after a reload');
 			check(await js(`[...document.querySelectorAll('.msg--assistant')].at(-1).querySelector('.msg__ending')?.textContent === 'Stopped.'`), 'the answer cut off by the reload does not say it was stopped');
+			// The new window asks the app to stop what the old one started, and the
+			// app is busy with that answer until its program has really gone. How
+			// long that takes is up to the machine, and a message sent before then
+			// is refused, as it should be. So this waits for the app to say the
+			// answer has ended, and only then sends the next message.
+			const endedAfterReload = () => chatEvents.slice(toldBefore).some((event) => ['done', 'error', 'stopped'].includes(event.type));
+			for (const until = Date.now() + 20000; !endedAfterReload() && Date.now() < until; ) await sleep(50);
+			check(chatEvents.slice(toldBefore).some((event) => event.type === 'stopped'), `the app did not say the answer cut off by the reload was stopped: ${JSON.stringify(chatEvents.slice(toldBefore).map((event) => event.type))}`);
 			await ask('SAY After the reload.');
 			await waitFor(`!document.querySelector('.chat__working') && [...document.querySelectorAll('.msg--assistant')].at(-1).textContent.includes('After the reload.')`, 'a message to be answered after the reload', 20000);
 			check(!(await js(`Boolean(document.querySelector('.chat__notice .alert--danger'))`)), `after a reload the next message was refused: ${await js(`document.querySelector('.chat__notice')?.textContent`)}`);
