@@ -141,6 +141,26 @@ test('stopAll() ends every program under way, and only those', async () => {
 	runner.stopAll();
 });
 
+test('shutDown() stops every program at once, even one that ignores a polite stop, and starts no more', { skip: process.platform === 'win32' }, async () => {
+	// A long wait after a polite stop: the app closing must not sit through it.
+	const runner = createRunner({ grace: 5000 });
+	const lines = [];
+	const stubborn = runner.run({ ...program(`process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000);`), onLine: (line) => lines.push(line) });
+	while (!lines.length) await wait(10);
+	// Already asked politely, and taking no notice.
+	stubborn.stop();
+	const began = Date.now();
+	runner.shutDown();
+	assert.equal((await stubborn.done).reason, 'stopped');
+	const took = Date.now() - began;
+	assert.ok(took < 1500, `it took ${took} ms`);
+	assert.equal(await gone(Number(lines[0])), true);
+	// Nothing is started after that.
+	const late = await collect(runner, program(`console.log('ran')`));
+	assert.deepEqual([late.result.reason, late.lines], ['stopped', []]);
+	runner.shutDown();
+});
+
 test('a fault in the reader of the lines stops the program instead of the app', async () => {
 	const started = createRunner().run({
 		...program(`setInterval(() => console.log('line'), 20);`),

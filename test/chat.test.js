@@ -307,6 +307,22 @@ test('a stop that arrives while an answer is still starting ends it before any p
 	assert.deepEqual(later.left(), []);
 });
 
+test('closing the app does not wait for a program that ignores a polite stop', options, async (t) => {
+	for (const backend of ['claude', 'codex']) {
+		const { chat, events, left } = await setup(t);
+		await chat.send({ backend, messages: [{ role: 'user', text: 'STUBBORN\nPID\nHANG' }] });
+		while (!events.some((event) => event.type === 'text')) await wait(20);
+		const pid = Number(events.filter((event) => event.type === 'text').map((event) => event.text).join(''));
+		const began = Date.now();
+		await chat.dispose();
+		const took = Date.now() - began;
+		// Asked politely it would be waited on for two seconds.
+		assert.ok(took < 1000, `${backend}: closing took ${took} ms`);
+		assert.throws(() => process.kill(pid, 0), `${backend}: the program is still running`);
+		assert.deepEqual(left(), []);
+	}
+});
+
 test('closing the app while a message is still being checked means the answer never starts', options, async (t) => {
 	const { chat, events, left, chatDir } = await setup(t, { statusDelay: 300 });
 	const sending = chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });

@@ -4,17 +4,32 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { quitWhenDisposed } from '../electron/quit.js';
 
 // Electron's app, as far as quitting goes: 'will-quit' can be held back, and
-// quit() asks again.
+// quit() asks again. One rule of the real one matters: while it is telling
+// 'will-quit' it takes no notice of another quit. That lasts until the call
+// into the listener has fully returned, which is after every promise already
+// settled has run its callbacks. A quit asked for there is lost, silently.
 function fakeApp() {
 	const listeners = [];
+	let telling = false;
 	const app = {
 		quits: 0,
 		gone: false,
+		relaunches: 0,
+		// What it was asked to do, in order.
+		asked: [],
+		relaunch() {
+			app.relaunches += 1;
+			app.asked.push('relaunch');
+		},
 		on(name, listener) {
 			if (name === 'will-quit') listeners.push(listener);
 		},
 		quit() {
 			app.quits += 1;
+			app.asked.push('quit');
+			if (telling) return;
+			telling = true;
+			setImmediate(() => (telling = false));
 			let held = false;
 			for (const listener of listeners) listener({ preventDefault: () => (held = true) });
 			if (!held) app.gone = true;
@@ -65,4 +80,52 @@ test('a fault while stopping things does not keep the app open, and is logged', 
 		assert.equal(app.gone, true);
 	}
 	assert.deepEqual(logged, ['could not stop', 'could not stop']);
+});
+
+test('while it is closing no window may open, and asking for one brings the app back once it has gone', async () => {
+	const app = fakeApp();
+	let finish;
+	const leaving = quitWhenDisposed({ app, dispose: () => new Promise((resolve) => (finish = resolve)) });
+	// Open: a window may open, and nothing is remembered.
+	assert.equal(leaving.mayOpen(), true);
+	app.quit();
+	// Closing: what a window would talk to has been stopped. Asked twice, it comes back once.
+	assert.equal(leaving.mayOpen(), false);
+	assert.equal(leaving.mayOpen(), false);
+	assert.deepEqual([app.gone, app.relaunches], [false, 0]);
+	finish();
+	await wait(10);
+	assert.deepEqual([app.gone, app.relaunches], [true, 1]);
+	// Asked to come back before it is asked to go, or it would not come back at all.
+	assert.deepEqual(app.asked.slice(-2), ['relaunch', 'quit']);
+});
+
+test('an app nobody asked for again goes and stays gone', async () => {
+	const app = fakeApp();
+	const leaving = quitWhenDisposed({ app, dispose: async () => {} });
+	assert.equal(leaving.mayOpen(), true);
+	app.quit();
+	await wait(10);
+	assert.deepEqual([app.gone, app.relaunches], [true, 0]);
+});
+
+test('asked for in its last moment, when everything is already stopped, it still comes back, once', async () => {
+	const app = fakeApp();
+	const leaving = quitWhenDisposed({ app, dispose: async () => {} });
+	app.quit();
+	await wait(10);
+	assert.equal(leaving.mayOpen(), false);
+	assert.equal(leaving.mayOpen(), false);
+	assert.equal(app.relaunches, 1);
+});
+
+test('with nothing to wait for, the app still goes: the last quit is not asked for while Electron is not listening', async () => {
+	// Nothing to stop, or all of it stopped without waiting: the usual case.
+	for (const dispose of [() => {}, async () => {}, () => Promise.resolve()]) {
+		const app = fakeApp();
+		quitWhenDisposed({ app, dispose });
+		app.quit();
+		await wait(20);
+		assert.equal(app.gone, true);
+	}
 });

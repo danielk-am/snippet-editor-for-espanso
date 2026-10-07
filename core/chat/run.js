@@ -26,6 +26,8 @@ const TAIL = 500;
 export function createRunner({ grace = 2000 } = {}) {
 	const grouped = process.platform !== 'win32';
 	const live = new Set();
+	// Set when the app is going: from then on nothing is started.
+	let shut = false;
 
 	function run({ program, args = [], cwd, env = process.env, input = '', onLine, idleMs = 120_000, totalMs = 600_000, maxBytes = 64 * 1024 * 1024, maxLine = 8 * 1024 * 1024 }) {
 		let settle;
@@ -37,6 +39,7 @@ export function createRunner({ grace = 2000 } = {}) {
 		let whole;
 		let force;
 		let child;
+		if (shut) return { done: Promise.resolve({ reason: 'stopped', code: null, stderrTail: '' }), stop: () => {} };
 
 		const signal = (name) => {
 			try {
@@ -56,6 +59,15 @@ export function createRunner({ grace = 2000 } = {}) {
 			force = setTimeout(() => signal('SIGKILL'), grace);
 		};
 		const stop = () => end('stopped');
+		// The app is going, so there is no asking and no waiting. What a polite
+		// stop already began is finished here.
+		const kill = () => {
+			if (finished) return;
+			reason ??= 'stopped';
+			clearTimeout(force);
+			signal('SIGKILL');
+		};
+		const handle = { stop, kill };
 
 		const finish = (result) => {
 			if (finished) return;
@@ -63,7 +75,7 @@ export function createRunner({ grace = 2000 } = {}) {
 			clearTimeout(idle);
 			clearTimeout(whole);
 			clearTimeout(force);
-			live.delete(stop);
+			live.delete(handle);
 			// The program has gone. Whatever it started and left behind goes too:
 			// a helper may heed neither a polite stop nor its input closing.
 			if (child?.pid) signal('SIGKILL');
@@ -76,7 +88,7 @@ export function createRunner({ grace = 2000 } = {}) {
 			finish({ reason: 'failed', code: null, stderrTail: String(error.message).slice(-TAIL) });
 			return { done, stop };
 		}
-		live.add(stop);
+		live.add(handle);
 
 		const stir = () => {
 			clearTimeout(idle);
@@ -137,7 +149,14 @@ export function createRunner({ grace = 2000 } = {}) {
 	return {
 		run,
 		stopAll() {
-			for (const stop of [...live]) stop();
+			for (const one of [...live]) one.stop();
+		},
+		// For the app closing: every program is stopped at once, and no other
+		// is started. A program asked politely gets two seconds to go, and for
+		// that long the app would be neither open nor gone.
+		shutDown() {
+			shut = true;
+			for (const one of [...live]) one.kill();
 		},
 	};
 }

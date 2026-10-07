@@ -203,7 +203,7 @@ How it is kept in bounds:
 - **A listener that cannot write.** Claude Code and Codex reach your snippets through a listener on this computer that exists only while an answer is under way, with a token made for that answer. It can read, and it can hand over a proposal. It has no route that changes anything.
 - **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request, and a file name or trigger cannot pass itself off as part of your message. Whatever the assistant makes of one, it can still only propose.
 - **Who answers is your choice.** The first backend found ready becomes the choice, shown in the footer. If it stops being ready, the panel says so. It does not move on to another by itself. With Ollama, a model that stays on your computer is picked before a cloud one. The first time a backend would send your text away, the panel says where, and nothing is sent until you have pressed OK.
-- **Nothing is left running.** An answer has a time limit, and Stop ends it at once. Quitting the app waits, up to four seconds, for an answer under way to be stopped, with its program and its listener.
+- **Nothing is left running.** An answer has a time limit, and Stop ends it at once. Quitting the app stops an answer under way at once, with its program and its listener, and waits up to four seconds for that to finish. If you open the app again in that moment, no window opens on the half-closed app: it starts afresh as soon as it has gone.
 - **An answer is shown as text.** Nothing in it is a link, and nothing in it can run as part of the page.
 - **Commands carry a warning.** A snippet with a `shell` or `script` variable runs a command each time it is used. A card for one says so above Apply. A whole-file change over 256 KB is not made into a card at all: it is too long to check and too long to read.
 - **History stays here.** The last 20 conversations, up to 100 messages each, are kept in the window's own storage. "Clear history" removes them. Nothing is added to Claude Code's or Codex's own history.
@@ -292,6 +292,12 @@ npm run test:ui
 ```
 
 Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token. The assistant is driven too, from "none is ready" to an applied card, with a stand-in for Codex that starts the app's real MCP server and calls no model.
+
+```bash
+npm run test:quit
+```
+
+Starts the real app from source in a folder of its own, asks it to quit the way the system does, and fails if it is still running eight seconds later. It is there because an earlier version closed its window on quitting and stayed running, and no other check sees that.
 
 ## Colours and design
 

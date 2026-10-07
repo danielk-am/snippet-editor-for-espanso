@@ -325,3 +325,14 @@ Two points from the review are left as they are, for Daniel to decide:
 - Claude Code's `--restricted` ignores settings files, and its help text says `CLAUDE.md` is skipped only with `--bare`, which cannot be used because it also skips the subscription sign-in. So a person's own `CLAUDE.md` probably travels with each message. Not checked, because Claude Code is signed out here.
 
 The review also listed tests that passed whether or not the code was right. Each now has a test that fails when the code is broken: 21 planted faults (10 in the proposals, 9 in the chat, 2 in the runner) were all caught, and the window check now covers every row of a long card, the command warning, Dismiss, "Apply all", what the assistant is told about its cards, a reload mid-answer, and shutting down with an answer under way.
+
+## Found in use
+
+Reported on 2026-10-07: "Sometimes I still get 'the app is closing' error."
+
+| What happened | Why | What changed |
+| --- | --- | --- |
+| After quitting, the app's window closed but the app stayed running in the Dock. Opened again from there, every message to the assistant was refused with "The app is closing." | Quitting holds the app open until everything it started has been stopped, then quits for good. When nothing needed waiting for, which is the usual case, that last quit was asked for while Electron was still announcing the first one. Electron takes no notice of a quit asked for then, and says nothing. So the app stayed, with its assistant and its file watcher shut down. With "API for other tools" on, or with an answer under way, there was something to wait for and the app did quit. Every earlier check had one of the two, which is why none caught it. | The last quit is asked for on a later turn. |
+| With an answer under way, quitting took two seconds. A window opened in that time met the same message, and then the app went. | The answer's program was asked politely to stop and given two seconds. For that long the app was neither open nor gone. | When the app is closing, programs are stopped at once. And while it is closing no window opens: the wish is kept, and the app starts afresh as soon as it has gone. Starting the app a second time in that moment does the same. |
+
+Checks. The stand-in app in the unit tests now follows Electron's rule, and failed five of them before the change. `npm run test:quit` is new: it starts the real app, asks it to quit the way the system does, and expects it gone. On the code as published the app was still running 8 seconds later. With the change it was gone in about 150 milliseconds. A small Electron program that asks for a window mid-quit showed the second row: before, a window opened on the stopped assistant; after, none did and the app came back.

@@ -17,6 +17,7 @@
     "demo": "node scripts/demo.mjs",
     "test": "node --test \"test/*.test.js\"",
     "test:ui": "electron test/ui-smoke.mjs",
+    "test:quit": "node test/quit-smoke.mjs",
     "test:packaged": "node test/packaged-smoke.mjs",
     "mcp": "node mcp/server.mjs",
     "test:espanso": "node test/espanso-check.mjs",
