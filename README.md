@@ -184,15 +184,21 @@ How well an AI tool can use the tools was checked: ten questions with one right 
 
 Press Cmd+J (Ctrl+J on Windows and Linux), or the speech-bubble button at the top right, to open a chat panel beside your snippets. Ask in plain words: find a snippet, explain one, draft a new one, tidy the one you have open. The panel is told which file and snippet you have open.
 
+**The closest matches show at once.** When you send a message, the app searches your snippets for its words before any AI is asked, and lists up to eight under "Closest matches" at the top of the answer. In the packaged app they were on screen 17 milliseconds after Send. Press a row to open that snippet. If the file has changed since, the row opens the snippet where it is now, or its file if the snippet is gone. This search is made for sentences: it sets aside words like "find", "my" and "yes", reads a word that starts with a sign (`;brb`) as the name of a trigger, and keeps a snippet that holds at least half of the rest or whose trigger you named. A long message that asks for two things at once may list nothing. The assistant then searches for itself, as it did before.
+
+The same matches go to the assistant with your message, together with the snippet you have open and a summary of the file you have open. So a find needs no further step from it, and a change to what is open needs one.
+
 **It changes nothing by itself.** When it wants to add, change or delete something, you get a card. Every line the change would add or remove is on that card, in a box that scrolls when there are many. Nothing is written until you press Apply, and Apply also needs "Let AI tools change snippets" switched on in Settings. If the file changed after the card was made, the app checks that the card still means the same thing. If it does not, nothing is written and the card tells you to ask again.
 
 It answers through one of three tools on your own computer. The app holds no key and never signs in for you.
 
-| Backend | What it needs | Where your messages, and the snippets it reads, go |
+| Backend | What it needs | Where your text goes |
 | --- | --- | --- |
 | Claude Code | Installed, version 2.1.259 or newer, and signed in (`claude auth login`) | To Anthropic, under your own sign-in |
 | Codex | Installed and signed in (`codex login`). The copy inside the ChatGPT app works. | To OpenAI, under your own sign-in |
 | Ollama | Running on this computer, with a model that can use tools | Nowhere with a local model. To Ollama with a cloud model. |
+
+"Your text" is your messages, the snippets that match them, what you have open, and the snippets the assistant reads. The matches and what you have open go with every message, whether or not the answer turns out to need them.
 
 "Who answers", in the panel's footer and its menu, shows which of the three are ready and the one step each still needs. The assistant does not need "API for other tools" switched on.
 
@@ -201,8 +207,8 @@ How it is kept in bounds:
 - **Only the snippet tools.** Each message starts the backend fresh. Claude Code is started with its own tools off. Its first line of output lists the tools it has. Nothing it writes is taken before that line, and if the list holds anything but the app's twelve tools, the answer is stopped before it begins. Codex is started with its shell, web search, sub-agents and image tools off, in a read-only sandbox. With either, the answer is stopped the moment it is seen to do anything the app does not know to be harmless: a command, a changed file, a web search, a tool that is not one of the twelve, or a kind of step the app has not seen before.
 - **The assistant's own tools cannot write.** In chat they only read, and a change is handed over as a proposal. Should one ever try to write, it is refused before it reaches the app's routes.
 - **A listener that cannot write.** Claude Code and Codex reach your snippets through a listener on this computer that exists only while an answer is under way, with a token made for that answer. It can read, and it can hand over a proposal. It has no route that changes anything.
-- **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request, and a file name or trigger cannot pass itself off as part of your message. Whatever the assistant makes of one, it can still only propose.
-- **Who answers is your choice.** The first backend found ready becomes the choice, shown in the footer. If it stops being ready, the panel says so. It does not move on to another by itself. With Ollama, a model that stays on your computer is picked before a cloud one. The first time a backend would send your text away, the panel says where, and nothing is sent until you have pressed OK.
+- **Other people's text stays text.** Packages and team packages hold snippets someone else wrote. The assistant is told that what a snippet says is data, not a request, and a file name, a trigger or the text of a match cannot pass itself off as part of your message: in what the app looks up, every angle bracket is written as an escape, so no tag in any spelling survives, and the text still reads back exactly as the file holds it. A match from someone else's package reaches the assistant without it asking, so this matters more than it did. Whatever the assistant makes of one, it can still only propose.
+- **Who answers is your choice.** The first backend found ready becomes the choice, shown in the footer. If it stops being ready, the panel says so. It does not move on to another by itself. With Ollama, a model that stays on your computer is picked before a cloud one. The first time a backend would send your text away, the panel says what and where, and nothing is sent until you have pressed OK. When a later version sends more than you agreed to, it asks once more.
 - **Nothing is left running.** An answer has a time limit, and Stop ends it at once. Quitting the app waits, up to four seconds, for an answer under way to be stopped, with its program and its listener.
 - **An answer is shown as text.** Nothing in it is a link, and nothing in it can run as part of the page.
 - **Commands carry a warning.** A snippet with a `shell` or `script` variable runs a command each time it is used. A card for one says so above Apply. A whole-file change over 256 KB is not made into a card at all: it is too long to check and too long to read.
@@ -210,13 +216,16 @@ How it is kept in bounds:
 
 What was checked, and what was not:
 
-- **Codex was checked for real**, with Codex 0.160.1: finding a snippet, proposing one and applying it, a snippet that tried to give the assistant orders (it summarised the snippet and proposed nothing), and a request to run a command (it said it could not).
+- **Codex was checked for real**, with Codex 0.160.1: finding a snippet, proposing one and applying it, a snippet that tried to give the assistant orders (it summarised the snippet and proposed nothing), and a request to run a command (it said it could not). The order-giving snippet was tried again as a closest match handed over up front: the assistant answered with the right snippet, said the other held instructions meant for it, and proposed nothing.
+- **Speed was measured with Codex**, before and after the app began to look first. One reading each, on one day, so these show the size of the change and are not averages. A find: one tool call and 9.6 seconds before, no tool call and 5.1 seconds after, with the matches listed at once. Adding a snippet to the open file: three tool calls and a card at 9.6 seconds before, one and a card at 8.0 after. Changing the open snippet: three tool calls and a card at 11.3 seconds before, one and a card at 7.8 after. What is left is Codex itself: about 5 seconds to its first words, and about 8 to its first tool call. The same find through the packaged app's own window, after a minute's idle: matches on screen at 17 milliseconds, answer done at 4.8 seconds.
 - **Claude Code was checked as far as its tool list.** Started signed out, it lists exactly the twelve snippet tools. A whole answer from Claude Code has not been run: it was signed out on the computer this was built on. How its answers are read is tested against output written from Anthropic's documentation.
 - **Ollama has not been run.** It was not installed on that computer. That backend is written from Ollama's API reference and tested against a stand-in.
 - **Finding the three tools on Windows and Linux has not been run** on those systems.
 - **Your own instruction files may travel.** Codex adds your `AGENTS.md` to each message itself (seen). Claude Code may do the same with your `CLAUDE.md` (not checked). The app cannot switch either off without touching that tool's sign-in, which it never does.
 
-An independent review of this piece found eleven things, each with a reproduction. All are fixed, and the reproductions were run again. The two that mattered most: a snippet that runs a command could be hidden from a card behind a line break only Espanso reads (see "How it treats your files"), and quitting mid-answer could leave a program and its token file behind.
+An independent review of the faster assistant found fourteen things and no serious one. Thirteen are fixed, each with a test that fails without the fix. The two that mattered most: text in a lookup could close its frame with a tag spelled slightly differently, and the guard against that also changed the text of the snippet you had open before the assistant saw it. The one left is where the keyboard lands when a row is pressed while the panel covers the page. The design lists them all.
+
+An independent review of the first version of this piece found eleven things, each with a reproduction. All are fixed, and the reproductions were run again. The two that mattered most: a snippet that runs a command could be hidden from a card behind a line break only Espanso reads (see "How it treats your files"), and quitting mid-answer could leave a program and its token file behind.
 
 ## How it treats your files
 
@@ -264,9 +273,9 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
 | `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repository, path resolution, settings. |
-| `core/chat/` | The assistant behind the window: finding the backends, starting Claude Code and Codex and reading their output, the Ollama loop, proposals, and the listener an answer calls back on. |
+| `core/chat/` | The assistant behind the window: finding the backends, the lookups made before one is asked, starting Claude Code and Codex and reading their output, the Ollama loop, proposals, and the listener an answer calls back on. |
 | `mcp/` | The MCP server: the protocol, the twelve tools and the client for the app's API. It imports nothing from the rest of the app. The assistant uses the same tools, in a mode where a change is handed over as a proposal. |
-| `shared/` | Pure modules used by both sides: the snippet and variable models, search, the IPC channel list. |
+| `shared/` | Pure modules used by both sides: the snippet and variable models, the two searches (every word, and closest to a sentence), finding a listed match again, the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
 | `build/`, `electron-builder.yml` | The app icon and the packaging settings. |
@@ -291,7 +300,7 @@ Asks the real Espanso program to read files this app has written, in a temporary
 npm run test:ui
 ```
 
-Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token. The assistant is driven too, from "none is ready" to an applied card, with a stand-in for Codex that starts the app's real MCP server and calls no model.
+Starts the real app off-screen against a temporary copy of the fixtures, drives it end to end, checks what reached the disk, and saves screenshots to `test/.artifacts/`. It also fails on any console error, any control without an accessible name, and any control smaller than 24 pixels. One step drops deliberately malformed files into the folder and checks that every screen still opens. Another switches the API on in Settings and reads the snippets over HTTP, with and without the token. The assistant is driven too, from "none is ready" to an applied card, with a stand-in for Codex that starts the app's real MCP server and calls no model. That includes the closest matches: listed while the answer is under way, at the panel's narrowest, and opened after the file has changed.
 
 ## Colours and design
 

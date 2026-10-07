@@ -112,6 +112,8 @@ The app sends `/api/chat` with the tool list and `stream: true`, reads the answe
 
 Each message starts the tool fresh. The app sends the instructions, the recent conversation as text (the last 20 messages, up to 24,000 characters), what you have open in the window, and your new message.
 
+Since `2026-10-07-assistant-speed-design.md` it also sends what the app looked up first: the closest matches to the message, the open snippet and a summary of the open file.
+
 | Approach | For | Against |
 | --- | --- | --- |
 | **Send the conversation each time (chosen)** | One way of working for all three. Nothing is left in Claude Code's or Codex's own history. Stop is simply ending the process. | The assistant does not see earlier tool results again, only what was said. It can read a file again when it needs to. |
@@ -201,6 +203,8 @@ Links in an answer show as text and are not clickable. The assistant's Markdown 
 | Ollama, cloud model | To Ollama, under your own Ollama sign-in. |
 
 The footer always names who answers. The first time you pick a backend that sends text away, the panel says so once.
+
+What is sent grew with `2026-10-07-assistant-speed-design.md`: the closest matches and what is open now go with every message. The notice says so and is asked once more.
 
 ## Other people's text
 
