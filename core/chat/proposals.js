@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { brokenFile, createTools, explain, fileRuns, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
+import { repositoryLabel } from '../../shared/repositoryLabel.js';
 import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
 import { whichRepository } from '../apiRouter.js';
 import { isSafeFileName } from '../store.js';
-import { parseRepositoryAddress, repositoryName } from '../teamAddress.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
 import { createInProcessApi } from './inProcess.js';
 
@@ -42,16 +42,6 @@ const stale = () => Object.assign(new Error(STALE), { code: 'STALE' });
 const oneLine = (value, most) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= most && !/[\r\n]/.test(value);
 const pathOf = (fileId) => `/files/${encodeURIComponent(fileId)}`;
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
-// How a repository is named for a person: owner/repo. A test connects a
-// folder, which is no address to the app as it runs, so that is named by the
-// address it was connected under.
-const nameOf = (url) => {
-	try {
-		return repositoryName(parseRepositoryAddress(url));
-	} catch {
-		return url;
-	}
-};
 
 export function createProposals({ router, aiWrite, onCard = () => {}, log = console.error, limit = 200 }) {
 	// The app's routes, for making a card and for Apply.
@@ -118,7 +108,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 		return found;
 	}
 
-	const which = (repositories, what) => teamRefusal('AMBIGUOUS', whichRepository(repositories.map((repository) => ({ name: nameOf(repository.repository), id: repository.id })), what));
+	const which = (repositories, what) => teamRefusal('AMBIGUOUS', whichRepository(repositories.map((repository) => ({ name: repositoryLabel(repository.repository), id: repository.id })), what));
 
 	// The repository a card was made for, as it is now, or nothing when it has
 	// been disconnected since. A card remembers its repository's address.
@@ -275,14 +265,14 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				const pkg = source.packages.find((item) => item.name === name);
 				if (!pkg) throw teamRefusal('NOT_FOUND', `The team repository has no package named ${name}.`);
 				// The name is held by another repository's package. A card for it could only fail.
-				if (pkg.installedFrom) throw teamRefusal('EXISTS', `A package named ${name} is already installed from ${nameOf(pkg.installedFrom)}. Remove it first, then install this one.`);
+				if (pkg.installedFrom) throw teamRefusal('EXISTS', `A package named ${name} is already installed from ${repositoryLabel(pkg.installedFrom)}. Remove it first, then install this one.`);
 				if (pkg.matchCount === null) throw refused('This package was not read, so it cannot be installed from here.');
 				return {
 					card: {
 						kind: 'install',
 						title: `${pkg.installed ? 'Update' : 'Install'} the team package ${name}`,
 						subject: name,
-						lines: [`Repository: ${nameOf(source.repository)}`, pkg.title, pkg.description, count(pkg.matchCount, 'snippet')].filter(Boolean),
+						lines: [`Repository: ${repositoryLabel(source.repository)}`, pkg.title, pkg.description, count(pkg.matchCount, 'snippet')].filter(Boolean),
 						warnings: pkg.runsCommands ? ['This package runs commands on your computer when its snippets are used.'] : [],
 					},
 					made: { repository: source.repository, runsCommands: pkg.runsCommands === true },

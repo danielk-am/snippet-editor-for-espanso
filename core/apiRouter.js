@@ -1,7 +1,7 @@
 import { parseDocument, stringify } from 'yaml';
 import { stringifyMatch } from './matchFile.js';
-import { repositoryName } from './teamAddress.js';
 import { PACKAGE_NAME } from './teamRepo.js';
+import { repositoryLabel } from '../shared/repositoryLabel.js';
 import { isPlainObject } from '../shared/text.js';
 
 // The app's one contract. A request comes in as plain data, whichever way it
@@ -122,7 +122,7 @@ export function whichRepository(listed, what) {
 	return `${COUNTED[listed.length - 2]} repositories ${what}: ${names.slice(0, -1).join(', ')} and ${names.at(-1)}. Say which: set \`repository\` to one of the ids in brackets.`;
 }
 
-const ambiguous = (teams, what) => fail('AMBIGUOUS', whichRepository(teams.map((team) => ({ name: repositoryName(team.address), id: team.address.id })), what));
+const ambiguous = (teams, what) => fail('AMBIGUOUS', whichRepository(teams.map((team) => ({ name: repositoryLabel(team.address.url), id: team.address.id })), what));
 
 // Where a proposal goes when the request names no repository: to the only one.
 function onlyRepository(service) {

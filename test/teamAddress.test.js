@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRepositoryAddress, repositoryKey, repositoryName } from '../core/teamAddress.js';
+import { readFileSync } from 'node:fs';
+import * as teamAddress from '../core/teamAddress.js';
+import { parseRepositoryAddress, repositoryKey } from '../core/teamAddress.js';
+import { repositoryLabel } from '../shared/repositoryLabel.js';
 
 const refused = (input, options) =>
 	assert.throws(
@@ -233,12 +236,86 @@ test('text that is not an address has no key, and asking never throws', () => {
 	assert.equal(repositoryKey('  acme/team-snippets  '), 'github.com/acme/team-snippets');
 });
 
-test('a message names a repository by its owner and name, whichever form its address has', () => {
+// --- how a repository is named for a person ---------------------------------------------
+
+test('a repository is named by its owner and name, whichever form its address has', () => {
 	for (const input of ['acme/team-snippets', 'https://github.com/acme/team-snippets.git', 'git@github.com:acme/team-snippets.git', 'ssh://git@github.com:22/acme/team-snippets']) {
-		assert.equal(repositoryName(parseRepositoryAddress(input)), 'acme/team-snippets', input);
+		assert.equal(repositoryLabel(parseRepositoryAddress(input).url), 'acme/team-snippets', input);
 	}
 	// As it was typed, capitals and all: this is for a person to read, not for comparing.
-	assert.equal(repositoryName(parseRepositoryAddress('https://ghe.example.com:8443/Acme/Team.git')), 'Acme/Team');
+	assert.equal(repositoryLabel(parseRepositoryAddress('https://ghe.example.com:8443/Acme/Team.git').url), 'Acme/Team');
 	// A folder, which only a test connects, has no owner. Its path stands in.
-	assert.equal(repositoryName(parseRepositoryAddress('/tmp/remotes/one/remote.git', { allowLocal: true })), '/tmp/remotes/one/remote.git');
+	assert.equal(repositoryLabel(parseRepositoryAddress('/tmp/remotes/one/remote.git', { allowLocal: true }).url), '/tmp/remotes/one/remote.git');
+});
+
+test('the name is the owner and name the address was parsed into, for every form the app keeps', () => {
+	const owners = ['acme', 'Acme-Org', 'a', 'a.b_c-d', '0day'];
+	const repos = ['team-snippets', 'Team.Snippets', 'x', 'snippets.git.git', 'a.git-b', 'dot.', 'under_score', '9'];
+	const forms = [
+		(owner, repo) => `${owner}/${repo}`,
+		(owner, repo) => `https://github.com/${owner}/${repo}`,
+		(owner, repo) => `https://github.com/${owner}/${repo}.git/`,
+		(owner, repo) => `https://ghe.example.com:8443/${owner}/${repo}.git`,
+		(owner, repo) => `git@github.com:${owner}/${repo}.git`,
+		(owner, repo) => `git@ghe.example.com:${owner}/${repo}`,
+		(owner, repo) => `ssh://git@github.com/${owner}/${repo}.git`,
+		(owner, repo) => `ssh://git@ghe.example.com:2222/${owner}/${repo}`,
+	];
+	let checked = 0;
+	for (const owner of owners) {
+		for (const repo of repos) {
+			for (const form of forms) {
+				const address = parseRepositoryAddress(form(owner, repo));
+				assert.equal(repositoryLabel(address.url), `${address.owner}/${address.repo}`, address.url);
+				checked += 1;
+			}
+		}
+	}
+	assert.equal(checked, owners.length * repos.length * forms.length);
+	// One ".git" is the address's own ending. Any before it belongs to the name.
+	assert.equal(repositoryLabel('https://github.com/acme/snippets.git.git'), 'acme/snippets.git');
+});
+
+test('text that is not an address the app keeps is named as it is, and nothing but text is named at all', () => {
+	for (const text of [
+		'',
+		'acme/team-snippets',
+		'https://github.com/acme/team-snippets',
+		'https://github.com/acme/team-snippets.GIT',
+		'https://github.com/acme.git',
+		'https://github.com/acme/team/snippets.git',
+		'https://someone:secret@github.com/acme/team-snippets.git',
+		'http://github.com/acme/team-snippets.git',
+		'git@github.com:acme/team/snippets.git',
+		'ssh://someone@github.com/acme/team-snippets.git',
+		'file:///tmp/acme/team-snippets.git',
+		'ext::sh -c "touch /tmp/owned" acme/team.git',
+		' https://github.com/acme/team-snippets.git',
+		'https://github.com/acme/team-snippets.git\n',
+		'/tmp/remotes/one/remote.git',
+		'C:\\remotes\\one\\remote.git',
+	]) {
+		assert.equal(repositoryLabel(text), text, JSON.stringify(text));
+	}
+	for (const value of [undefined, null, 42, true, {}, [], ['https://github.com/acme/team.git'], { url: 'https://github.com/acme/team.git', owner: 'acme', repo: 'team' }]) {
+		assert.equal(repositoryLabel(value), '', JSON.stringify(value));
+	}
+	// A very long text is answered at once, as it is.
+	const long = `https://github.com/${'a'.repeat(200_000)}/${'b.'.repeat(200_000)}`;
+	const started = Date.now();
+	assert.equal(repositoryLabel(long), long);
+	assert.equal(repositoryLabel(`${long}.git`).length, 600_001);
+	assert.ok(Date.now() - started < 1000, 'naming a very long text took too long');
+});
+
+test('there is one function that names a repository, and the window can load it', () => {
+	// The window cannot load Node's modules or anything in core/.
+	const source = readFileSync(new URL('../shared/repositoryLabel.js', import.meta.url), 'utf8');
+	assert.doesNotMatch(source, /\bimport\b|\brequire\(/);
+	// Nothing else writes the name: the address module no longer has its own.
+	assert.deepEqual(Object.keys(teamAddress).sort(), ['isTeamLink', 'parseRepositoryAddress', 'repositoryKey']);
+	const written = /\$\{[^}]*\bowner\}\/\$\{[^}]*\brepo\}/;
+	for (const file of ['core/apiRouter.js', 'core/team.js', 'core/teamPackages.js', 'core/service.js', 'core/chat/proposals.js', 'mcp/tools.mjs', 'electron/ipc.js', 'renderer/lib/api.js', 'renderer/components/SettingsPage.js', 'renderer/components/TeamPage.js', 'renderer/components/ProposeDialog.js']) {
+		assert.doesNotMatch(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), written, `${file} writes owner/repo by itself`);
+	}
 });

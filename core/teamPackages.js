@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isSafeFileName } from './store.js';
-import { parseRepositoryAddress, repositoryKey, repositoryName } from './teamAddress.js';
+import { parseRepositoryAddress, repositoryKey } from './teamAddress.js';
 import { MANIFEST, PACKAGE_NAME } from './teamRepo.js';
+import { repositoryLabel } from '../shared/repositoryLabel.js';
 import { isPlainObject, toText } from '../shared/text.js';
 
 // Team packages as Espanso sees them: one folder each under match/team/.
@@ -49,14 +50,14 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 			return '';
 		}
 	};
-	// How a message names a repository: owner/repo. A folder has no owner.
-	const called = (url) => repositoryName(parseRepositoryAddress(url, { allowLocal }));
 	// A folder whose marker names no repository is damaged, and any repository
 	// may repair it. One that names a repository is that repository's alone.
+	// The message names the holder as owner/repo. What a marker names is by
+	// now an address as the app keeps it, which is what the label is made from.
 	const refuseIfHeld = (name, marker, repository) => {
 		const holder = marker ? keyOf(marker.repository) : '';
 		if (holder && holder !== keyOf(repository)) {
-			throw fail('EXISTS', `A package named ${name} is already installed from ${called(marker.repository)}. Remove it first, then install this one.`);
+			throw fail('EXISTS', `A package named ${name} is already installed from ${repositoryLabel(marker.repository)}. Remove it first, then install this one.`);
 		}
 	};
 

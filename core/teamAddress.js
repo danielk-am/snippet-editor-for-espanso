@@ -79,10 +79,6 @@ export function repositoryKey(url, { allowLocal = false } = {}) {
 	}
 }
 
-// How a message names a repository for a person: its owner and name. A
-// folder, which only a test connects, has no owner, so its path stands in.
-export const repositoryName = (address) => (address.owner ? `${address.owner}/${address.repo}` : address.url);
-
 // Whether a link leads into one repository's own pages. The window asks the
 // app to open pull request pages in the browser, and nothing else should be
 // reachable through that request. With several repositories connected, the
