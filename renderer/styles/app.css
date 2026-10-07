@@ -2060,6 +2060,81 @@ li:first-child > .file-row {
   border-top: 1px solid var(--ui-border);
 }
 
+/* --- the closest matches --- */
+
+.found {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.found__title {
+  color: var(--ui-muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.found__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-card);
+}
+
+.found__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  align-items: baseline;
+  gap: 1px 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.found__row:hover {
+  background: var(--ui-muted);
+}
+
+.found__triggers {
+  font-weight: 500;
+}
+
+.found__file {
+  max-width: 14ch;
+  color: var(--ui-muted-foreground);
+  font-size: 12px;
+}
+
+.found__preview {
+  grid-column: 1 / -1;
+  color: var(--ui-muted-foreground);
+  font-size: 13px;
+}
+
+.found__more {
+  justify-self: start;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: none;
+  color: var(--ui-link);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.found__more:hover {
+  background: var(--ui-muted);
+}
+
 /* --- a proposed change --- */
 
 .proposal {

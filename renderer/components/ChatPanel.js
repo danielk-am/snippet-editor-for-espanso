@@ -1,7 +1,8 @@
 import { html, useCallback, useEffect, useRef, useState } from '../vendor/preact-htm.js';
 import { api } from '../lib/api.js';
 import { chatInitial, saveChat } from '../lib/chatSession.js';
-import { titleOf } from '../lib/chatStore.js';
+import { whereNow } from '../../shared/found.js';
+import { titleOf, toldKey } from '../lib/chatStore.js';
 import { Icon } from '../lib/icons.js';
 import { Alert, Badge, Button, IconButton, Select } from '../lib/ui.js';
 import { Markdown } from './Markdown.js';
@@ -9,7 +10,9 @@ import { ProposalCard } from './ProposalCard.js';
 
 // The assistant: a panel on the right, where you ask in plain words and it
 // finds, explains and drafts snippets. It changes nothing itself. A change
-// arrives as a card, and is written when you press Apply.
+// arrives as a card, and is written when you press Apply. The snippets
+// closest to a message are listed the moment it is sent: that is the app's
+// own search, and it does not wait for the assistant.
 
 export const CHAT_MIN = 320;
 export const CHAT_MAX = 720;
@@ -30,6 +33,11 @@ const TOOL_WORDS = {
 	snippets_install_team_package: ['Proposing an install', 'Proposed an install'],
 	snippets_propose_to_team: ['Proposing to send a file', 'Proposed sending a file'],
 };
+
+// How many of the closest matches are listed before "Show all".
+const FIRST_MATCHES = 3;
+// What a backend that is not on this computer is sent.
+const SENT = 'your messages, the snippets that match them, what you have open, and the snippets it reads';
 
 const STATE_WORDS = { ready: 'Ready', missing: 'Not installed', 'signed-out': 'Not signed in', 'not-running': 'Not running', 'no-models': 'No models', old: 'Too old' };
 
@@ -94,6 +102,29 @@ const STARTERS = [
 	{ label: 'Explain this file', send: 'Explain what this file is for and how its snippets are organised.', needs: 'file' },
 ];
 
+// --- the closest matches --------------------------------------------------------------------
+
+function Found({ hits, onOpen }) {
+	const [all, setAll] = useState(false);
+	const shown = all ? hits : hits.slice(0, FIRST_MATCHES);
+	return html`<section class="found" aria-label="Closest matches">
+		<h3 class="found__title">Closest matches</h3>
+		<ul class="found__list">
+			${shown.map(
+				(hit) => html`<li key=${`${hit.fileId}#${hit.index}`}>
+					<button class="found__row" title="Open this snippet" onClick=${() => onOpen(hit)}>
+						<span class="found__triggers mono truncate">${hit.triggers.join('  ') || 'No trigger'}</span>
+						<span class="found__file truncate">${hit.package ? `${hit.package} · ${hit.fileName}` : hit.fileName}</span>
+						<span class="found__preview truncate">${hit.label || hit.preview || 'No text'}</span>
+					</button>
+				</li>`
+			)}
+		</ul>
+		${hits.length > FIRST_MATCHES &&
+		html`<button class="found__more" aria-expanded=${all ? 'true' : 'false'} onClick=${() => setAll(!all)}>${all ? 'Show fewer' : `Show all ${hits.length}`}</button>`}
+	</section>`;
+}
+
 // --- who answers ----------------------------------------------------------------------------
 
 function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, onCheck }) {
@@ -127,8 +158,8 @@ function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, 
 					</label>`}
 					<p class="backend__sends">
 						${backend.id === 'ollama'
-							? 'Local models stay on this computer. Cloud models send your messages, and the snippets they read, to Ollama.'
-							: `Sends your messages, and the snippets it reads, to ${backend.sendsTo}, under your own sign-in.`}
+							? 'Local models stay on this computer. With a cloud model, your messages, the snippets that match them, what you have open, and the snippets it reads go to Ollama.'
+							: `Sends ${SENT}, to ${backend.sendsTo}, under your own sign-in.`}
 					</p>
 				</li>`
 			)}
@@ -139,7 +170,7 @@ function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, 
 
 // --- the panel ------------------------------------------------------------------------------
 
-export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refresh, navigate, onClose }) {
+export function ChatPanel({ open, sheet, prefs, setPrefs, context, files, isDirty, refresh, navigate, onClose }) {
 	const [conversations, setConversations] = useState(chatInitial.conversations);
 	const [currentId, setCurrentId] = useState(chatInitial.current);
 	const [view, setView] = useState('chat');
@@ -160,6 +191,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	const box = useRef(null);
 	const drag = useRef(null);
 	const pinned = useRef(true);
+	const bottom = useRef(0);
 	const menuButton = useRef(null);
 
 	const conversation = conversations.find((item) => item.id === currentId) ?? null;
@@ -204,7 +236,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	// With no model chosen, one that stays on this computer comes first.
 	const model = chosen?.id === 'ollama' ? (chosen.models.find((item) => item.name === prefs.model) ?? chosen.models.find((item) => !item.cloud) ?? chosen.models[0]) : null;
 	const sendsTo = !chosen ? null : chosen.id === 'ollama' ? (model?.cloud ? 'Ollama' : null) : chosen.sendsTo;
-	const mustTell = Boolean(sendsTo) && !prefs.told.includes(chosen.id);
+	const mustTell = Boolean(sendsTo) && !prefs.told.includes(toldKey(chosen.id));
 	const provider = chosen ? (model ? `Ollama · ${model.name}` : chosen.label) : status === null ? 'Checking…' : 'Not set up';
 
 	// The first one found ready becomes the person's choice there and then,
@@ -239,7 +271,9 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 			return;
 		}
 		flush(target);
-		if (event.type === 'tool') {
+		if (event.type === 'found') {
+			patch(target, (message) => ({ ...message, found: Array.isArray(event.hits) ? event.hits : [] }));
+		} else if (event.type === 'tool') {
 			patch(target, (message) => ({
 				...message,
 				tools: message.tools.some((tool) => tool.id === event.id)
@@ -289,7 +323,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 		setNotice(null);
 		setHeld(null);
 		const question = { id: newId(), role: 'user', text: body };
-		const answer = { id: newId(), role: 'assistant', text: '', backend: chosen.id, tools: [], cards: [], ending: null, error: null };
+		const answer = { id: newId(), role: 'assistant', text: '', backend: chosen.id, found: [], tools: [], cards: [], ending: null, error: null };
 		const earlier = conversation?.messages ?? [];
 		const conversationId = conversation?.id ?? newId();
 		if (conversation) {
@@ -383,8 +417,10 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	// Follow the answer down, unless the person has scrolled up to read.
 	useEffect(() => {
 		const el = log.current;
-		if (el && pinned.current) el.scrollTop = el.scrollHeight;
-	}, [conversations, working, view, currentId]);
+		if (!el || !pinned.current) return;
+		el.scrollTop = el.scrollHeight;
+		bottom.current = el.scrollTop;
+	}, [conversations, working, view, currentId, open, sheet, prefs.width, prefs.wide]);
 
 	useEffect(() => {
 		if (open && view === 'chat') box.current?.focus();
@@ -431,6 +467,13 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 	const leaveFor = (target) => {
 		if (sheet || prefs.wide) onClose();
 		navigate(target);
+	};
+
+	// A row of the closest matches says where a snippet was. It is opened where it is now.
+	const openFound = (hit) => {
+		const where = whereNow(files, hit);
+		if (where) leaveFor(where);
+		else setNotice(`${hit.fileName || 'That file'} is no longer among your snippets.`);
 	};
 
 	const closeMenu = () => {
@@ -538,6 +581,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 			const waiting = message.cards.filter((card) => card.status === 'pending').length;
 			const tools = toolLine(message.tools);
 			return html`<article class="msg msg--assistant" aria-label="Assistant">
+				${message.found.length > 0 && html`<${Found} hits=${message.found} onOpen=${openFound} />`}
 				${tools && html`<p class="msg__tools">${tools}</p>`}
 				${pieces(message).map(({ text, card }) =>
 					card
@@ -646,7 +690,11 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 			tabindex="0"
 			onScroll=${(event) => {
 				const el = event.currentTarget;
-				pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+				// At the end, the panel follows. Away from the end it stops, unless it
+				// is only where the panel itself last put it: more has arrived below
+				// since, and that is not the person scrolling up to read.
+				if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) pinned.current = true;
+				else if (Math.abs(el.scrollTop - bottom.current) > 1) pinned.current = false;
 			}}
 		>
 			${status === null && view === 'chat' && !messages.length ? html`<p class="chat__lead" role="status">Checking who can answer…</p>` : body}
@@ -667,8 +715,8 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, isDirty, refr
 		${mustTell &&
 		view === 'chat' &&
 		html`<div class="chat__notice">
-			<${Alert} actions=${html`<${Button} size="sm" variant="outline" onClick=${() => setPrefs({ told: [...prefs.told, chosen.id] })}>OK<//>`}>
-				${chosen.label} sends your messages, and the snippets it reads, to ${sendsTo}, under your own sign-in.
+			<${Alert} actions=${html`<${Button} size="sm" variant="outline" onClick=${() => setPrefs({ told: [...prefs.told, toldKey(chosen.id)] })}>OK<//>`}>
+				${chosen.label} sends ${SENT}, to ${sendsTo}, under your own sign-in.
 			<//>
 		</div>`}
 

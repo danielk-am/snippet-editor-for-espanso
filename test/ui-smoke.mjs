@@ -667,7 +667,7 @@ async function run() {
 			chatReady.codex = true;
 			await js(`${inChat('Check again')}.click()`);
 			await waitFor(`document.querySelector('.chat__starter')`, 'the starters once a backend is ready');
-			check(await js(`document.querySelector('.chat__notice')?.textContent.includes('Codex sends your messages, and the snippets it reads, to OpenAI')`), 'nothing said where the text goes');
+			check(await js(`document.querySelector('.chat__notice')?.textContent.includes('Codex sends your messages, the snippets that match them, what you have open, and the snippets it reads, to OpenAI')`), 'nothing said where the text goes');
 			// Until that has been read, nothing can be sent.
 			await js(`window.__ui.type('.chat__box', 'Sent before the notice was read')`);
 			await sleep(100);
@@ -772,6 +772,55 @@ async function run() {
 			await answered(7);
 			check((await js(`${lastAnswer}.querySelector('.alert')?.textContent.trim()`)) === 'Codex stopped unexpectedly: You have hit your usage limit.', 'the failure was not shown');
 
+			// A find. The app's own closest matches are listed at once, while the
+			// answer is still under way: they do not wait for the assistant.
+			const zebras = (first) => `matches:\n${first}${Array.from({ length: 6 }, (_, index) => `  - trigger: ":zebra${index}"\n    replace: "Zebra number ${index}"\n`).join('')}`;
+			const longZebra = `  - trigger: ":zebra-${'long-'.repeat(14)}trigger"\n    replace: "${'A zebra with a great deal to say. '.repeat(8)}"\n`;
+			fs.writeFileSync(path.join(matchDir, 'zebras.yml'), zebras(longZebra));
+			await waitFor(`[...document.querySelectorAll('.nav-item--file')].some((el) => el.textContent.includes('zebras.yml'))`, 'the new file to be seen');
+			const rows = `[...${lastAnswer}.querySelectorAll('.found__row')]`;
+			await ask('Which zebra snippets do I have?\nSAY These.\nHANG');
+			await waitFor(`document.querySelector('.chat__working') && ${rows}.length === 3`, 'the closest matches while the answer is under way');
+			check((await js(`${lastAnswer}.children[0].className`)) === 'found', 'the closest matches are not at the top of the answer');
+			// They arrive a moment after the message, and the panel follows them down.
+			const atBottom = `(() => { const log = document.querySelector('.chat__log'); return log.scrollHeight - log.scrollTop - log.clientHeight < 2; })()`;
+			await sleep(200);
+			check(await js(atBottom), 'the panel did not follow the closest matches down');
+			check((await js(`${lastAnswer}.querySelector('.found__title').textContent`)) === 'Closest matches', 'the closest matches have no heading');
+			check(
+				JSON.stringify(await js(`${rows}.map((el) => [el.querySelector('.found__triggers').textContent.slice(0, 12), el.querySelector('.found__file').textContent, el.querySelector('.found__preview').textContent.slice(0, 14)])`)) ===
+					JSON.stringify([[':zebra-long-', 'zebras.yml', 'A zebra with a'], [':zebra0', 'zebras.yml', 'Zebra number 0'], [':zebra1', 'zebras.yml', 'Zebra number 1']]),
+				`the closest matches read: ${JSON.stringify(await js(`${rows}.map((el) => el.textContent)`))}`
+			);
+			check((await js(`${lastAnswer}.querySelector('.found__more').textContent`)) === 'Show all 7', `the rest are offered as: ${await js(`${lastAnswer}.querySelector('.found__more')?.textContent`)}`);
+			const fits = `${rows}.every((el) => el.scrollWidth <= el.clientWidth && [...el.children].every((part) => part.getBoundingClientRect().right <= el.getBoundingClientRect().right + 0.5)) && document.querySelector('.chat__log').scrollWidth <= document.querySelector('.chat__log').clientWidth`;
+			check(await js(fits), 'a long match spills out of its row');
+			await shot('19l-assistant-found');
+			await js(`${lastAnswer}.querySelector('.found__more').click()`);
+			await waitFor(`${rows}.length === 7 && ${lastAnswer}.querySelector('.found__more').textContent === 'Show fewer' && ${lastAnswer}.querySelector('.found__more').getAttribute('aria-expanded') === 'true'`, 'every match to be listed');
+			// At the panel's narrowest, nothing is cut off or spills.
+			await js(`document.querySelector('.chat__resize').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+			await waitFor(`Math.round(document.querySelector('.chat').getBoundingClientRect().width) === 320`, 'the panel at its narrowest');
+			await sleep(200);
+			check(await js(atBottom), 'made narrower, the panel lost its place at the end of the conversation');
+			check(await js(fits), 'at 320 wide a match spills out of its row');
+			await shot('19m-assistant-found-narrow');
+			for (let press = 0; press < 5; press += 1) await js(`document.querySelector('.chat__resize').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))`);
+			await js(`${inChat('Stop')}.click()`);
+			await waitFor(`!document.querySelector('.chat__working') && ${lastAnswer}.querySelector('.msg__ending')?.textContent === 'Stopped.'`, 'the find to stop');
+			check(await js(`${rows}.length === 7`), 'stopping the answer took the matches away');
+
+			// A row opens its snippet. The file has changed since, and the
+			// snippet is opened where it is now, not where it was.
+			fs.writeFileSync(path.join(matchDir, 'zebras.yml'), zebras('  - trigger: ":stripes"\n    replace: "New at the top"\n  - trigger: ":hooves"\n    replace: "And another"\n'));
+			await waitFor(`[...document.querySelectorAll('.nav-item--file')].find((el) => el.textContent.includes('zebras.yml'))?.querySelector('.nav-count')?.textContent === '8'`, 'the changed file to be seen');
+			await js(`${rows}.find((el) => el.querySelector('.found__triggers').textContent === ':zebra1').click()`);
+			await waitFor(`document.querySelector('.crumbs__current')?.textContent === ':zebra1'`, 'the row to open its snippet where it is now');
+			// The long one is gone from the file: its row opens the file.
+			await js(`${rows}[0].click()`);
+			await waitFor(`document.querySelector('.crumbs__current')?.textContent === 'zebras.yml' && document.querySelector('.snippet-list')`, 'a row whose snippet is gone to open its file');
+			check(!(await js(`document.querySelector('.chat').hidden`)), 'beside the page, the assistant closed when a row was opened');
+
 			// History, and a new conversation.
 			await js(`${inChat('New conversation')}.click()`);
 			await waitFor(`document.querySelector('.chat__starter')`, 'a new, empty conversation');
@@ -782,7 +831,8 @@ async function run() {
 			await waitFor(`document.querySelectorAll('.chat__conversation').length === 1`, 'the conversation in History');
 			await shot('19g-assistant-history');
 			await js(`document.querySelector('.chat__conversation').click()`);
-			await waitFor(`document.querySelectorAll('.msg--assistant').length === 7`, 'the conversation to come back');
+			await waitFor(`document.querySelectorAll('.msg--assistant').length === 8`, 'the conversation to come back');
+			check(await js(`document.querySelectorAll('.found').length === 1 && document.querySelectorAll('.found__row').length === 3`), 'the closest matches were not kept with the conversation');
 
 			// The one that was chosen stops being ready while another is. The
 			// panel says so. It does not quietly send to the other.

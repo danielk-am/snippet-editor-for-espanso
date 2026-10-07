@@ -319,6 +319,7 @@ function App() {
 			prefs=${chatPrefs}
 			setPrefs=${setChatPrefs}
 			context=${chatContext}
+			files=${state ? allFiles(state) : []}
 			isDirty=${(fileId) => dirty.current && (route.fileId ?? '').toLowerCase() === fileId.toLowerCase()}
 			refresh=${refresh}
 			navigate=${navigate}
