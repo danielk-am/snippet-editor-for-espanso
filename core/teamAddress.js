@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 // A team repository's address, as a person types it. Only the forms listed
@@ -25,6 +26,13 @@ const hasControlOrSpace = (text) =>
 
 const withoutGit = (name) => (name.toLowerCase().endsWith('.git') ? name.slice(0, -4) : name);
 
+// `key` says which repository an address means: its host, owner and name,
+// whichever form was typed. Two addresses with one key are one repository.
+// `id` names the app's copy of it, and is the folder that copy is kept in. It
+// comes from the address git is given, so it stays what it was before there
+// could be several.
+const identified = (address, key) => ({ ...address, key, id: createHash('sha256').update(address.url).digest('hex').slice(0, 12) });
+
 export function parseRepositoryAddress(input, { allowLocal = false } = {}) {
 	if (typeof input !== 'string') throw invalid(`That is not a repository address. ${FORMS}`);
 	const text = input.trim();
@@ -41,7 +49,7 @@ export function parseRepositoryAddress(input, { allowLocal = false } = {}) {
 	// An SSH port says nothing about where the web pages are.
 	const found = (host, owner, name, url, webPort = '') => {
 		const repo = withoutGit(name);
-		return { url: url(repo), host, owner, repo, webUrl: `https://${host}${webPort}/${owner}/${repo}` };
+		return identified({ url: url(repo), host, owner, repo, webUrl: `https://${host}${webPort}/${owner}/${repo}` }, `${host}/${owner}/${repo}`.toLowerCase());
 	};
 
 	let match;
@@ -53,10 +61,22 @@ export function parseRepositoryAddress(input, { allowLocal = false } = {}) {
 	// Tests point the app at a repository in a temporary folder. The app
 	// itself never passes this option, so no setting can switch it on.
 	if (allowLocal && path.isAbsolute(text)) {
-		return { url: text, host: 'local', owner: '', repo: withoutGit(path.basename(text)), webUrl: null };
+		// A folder is known by its whole path: two test repositories often share
+		// a folder name. A slash at the end is still the same folder.
+		return identified({ url: text, host: 'local', owner: '', repo: withoutGit(path.basename(text)), webUrl: null }, `local/${text.replace(/[\\/]+$/, '') || text}`);
 	}
 
 	throw invalid(`That is not a repository address. ${FORMS}`);
+}
+
+// Which repository an address means, or '' when the text is not an address.
+// A marker file or a settings file can hold anything, so this never throws.
+export function repositoryKey(url, { allowLocal = false } = {}) {
+	try {
+		return parseRepositoryAddress(url, { allowLocal }).key;
+	} catch {
+		return '';
+	}
 }
 
 // Whether a link leads into the connected repository's own pages. The window

@@ -53,7 +53,7 @@ test('with no repository connected, the status says so and every other team rout
 test('connecting saves the address and lists the packages', async (t) => {
 	const { service, call, remote } = await setup(t);
 	await service.connectTeam(remote.url);
-	assert.equal(service.settings().teamRepository, remote.url);
+	assert.deepEqual(service.settings().teamRepositories, [remote.url]);
 	const { body } = await call('GET', '/team');
 	assert.deepEqual([body.connected, body.repository, body.branch, body.commit, body.problem], [true, remote.url, 'main', remote.head(), '']);
 	assert.deepEqual(body.packages.map((pkg) => [pkg.name, pkg.matchCount, pkg.installed, pkg.updateAvailable]), [['goodbyes', 2, false, false], ['support', 4, false, false]]);
@@ -62,10 +62,10 @@ test('connecting saves the address and lists the packages', async (t) => {
 test('an address that is refused, or a repository that cannot be reached, changes nothing', async (t) => {
 	const { service, call, remote, root } = await setup(t);
 	await fails(service.connectTeam('ext::sh -c "touch /tmp/owned"'), (error) => assert.equal(error.code, 'INVALID'));
-	assert.equal(service.settings().teamRepository, null);
+	assert.deepEqual(service.settings().teamRepositories, []);
 	await service.connectTeam(remote.url);
 	await fails(service.connectTeam(join(root, 'nowhere.git')), (error) => assert.deepEqual([error.code, error.kind], ['GIT_FAILED', 'unreachable']));
-	assert.equal(service.settings().teamRepository, remote.url);
+	assert.deepEqual(service.settings().teamRepositories, [remote.url]);
 	assert.equal((await call('GET', '/team')).body.packages.length, 2);
 });
 
@@ -134,7 +134,7 @@ test('removing deletes the installed copy, and works with no repository connecte
 	assert.deepEqual(code(await call('DELETE', '/team/packages/goodbyes/installed')), [404, 'NOT_FOUND']);
 
 	await service.disconnectTeam();
-	assert.equal(service.settings().teamRepository, null);
+	assert.deepEqual(service.settings().teamRepositories, []);
 	const status = (await call('GET', '/team')).body;
 	assert.deepEqual([status.connected, status.packages, status.installedOnly], [false, [], [{ name: 'support' }]]);
 	assert.equal(existsSync(join(matchDir, 'team', 'support', 'replies.yml')), true);
@@ -202,7 +202,7 @@ test('connecting another repository replaces the first, and its copy is removed'
 	const other = createRemote();
 	other.commit({ 'packages/other/_manifest.yml': MANIFEST('other'), 'packages/other/package.yml': MATCHES([':o', 'Other']) });
 	await service.connectTeam(other.url);
-	assert.equal(service.settings().teamRepository, other.url);
+	assert.deepEqual(service.settings().teamRepositories, [other.url]);
 	assert.deepEqual((await call('GET', '/team')).body.packages.map((pkg) => pkg.name), ['other']);
 	assert.equal(readdirSync(join(root, 'data', 'team')).length, 1);
 });
@@ -296,7 +296,7 @@ test('when git stops working, the status still answers, and the repository can s
 	assert.deepEqual([reply.status, reply.body.connected, reply.body.repository, reply.body.problem, reply.body.packages], [200, true, remote.url, 'Git is not installed on this computer.', []]);
 	assert.deepEqual(code(await handle({ method: 'POST', path: '/api/v1/team/refresh' })), [502, 'GIT_FAILED']);
 	const after = await service.disconnectTeam();
-	assert.deepEqual([after.connected, service.settings().teamRepository], [false, null]);
+	assert.deepEqual([after.connected, service.settings().teamRepositories], [false, []]);
 });
 
 test('a repository that connects but cannot be listed is still connected, says why, and can be left', async (t) => {

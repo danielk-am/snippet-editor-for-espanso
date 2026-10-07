@@ -62,9 +62,11 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		teamPackages = createTeamPackages({ matchDir: location.matchDir });
 		team = null;
 		teamProblem = '';
-		if (settings.teamRepository) {
+		// The setting is a list. Until the service holds several, it uses the first.
+		const [saved] = settings.teamRepositories;
+		if (saved) {
 			try {
-				team = teamFor(parseRepositoryAddress(settings.teamRepository, { allowLocal: allowLocalRepositories }));
+				team = teamFor(parseRepositoryAddress(saved, { allowLocal: allowLocalRepositories }));
 			} catch {
 				// The settings file can be edited by hand. An address the app would
 				// refuse in its own field is refused here too.
@@ -128,7 +130,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 				const next = team?.address.url === address.url ? team : teamFor(address);
 				await next.connect();
 				if (team && team !== next) await team.disconnect();
-				settings = await writeSettings(settingsFile, { teamRepository: address.url });
+				settings = await writeSettings(settingsFile, { teamRepositories: [address.url] });
 				team = next;
 				teamProblem = '';
 				return team.status();
@@ -137,7 +139,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		disconnectTeam() {
 			return inTurn(async () => {
 				await team?.disconnect();
-				settings = await writeSettings(settingsFile, { teamRepository: null });
+				settings = await writeSettings(settingsFile, { teamRepositories: [] });
 				team = null;
 				teamProblem = '';
 				return this.teamStatus();
