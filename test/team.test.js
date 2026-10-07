@@ -487,17 +487,32 @@ test('disconnecting twice, or an id that is not connected, answers the list as i
 	assert.deepEqual(calls.filter((args) => ['clone', 'fetch', 'ls-remote'].includes(args[0])), []);
 });
 
-test('with no id, disconnecting means the one connected repository, and nothing when there are several', async (t) => {
-	const { service, remote, copies } = await setup(t);
+test('disconnecting with no id changes nothing and says so, whether none, one or several are connected', async (t) => {
+	const { service, remote, root, copies } = await setup(t);
 	const other = another(OTHER);
+	const notNamed = (error) => assert.deepEqual([error.code, error.message], ['INVALID', 'No repository was named, so nothing was disconnected.']);
+	const saved = () => JSON.parse(readFileSync(join(root, 'data', 'settings.json'), 'utf8')).teamRepositories;
+	const untouched = async (status, urls) => {
+		for (const id of [undefined, null]) await fails(service.disconnectTeam(id), notNamed);
+		await fails(service.disconnectTeam(), notNamed);
+		assert.deepEqual([await service.teamStatus(), service.settings().teamRepositories, saved(), copies().length], [status, urls, urls, urls.length]);
+	};
+
+	// None connected: there is still nothing a missing id could mean.
+	await fails(service.disconnectTeam(), notNamed);
+	// One connected. "The only one" is what `team()` answers with no id. It is
+	// never what a disconnect means: an id that went missing on its way here
+	// must not take a repository with it.
 	await service.connectTeam(remote.url);
+	assert.equal(service.team(), service.teams()[0]);
+	await untouched(await service.teamStatus(), [remote.url]);
+	// Several connected.
 	await service.connectTeam(other.url);
-	// Which one is not said: neither goes.
-	assert.equal((await service.disconnectTeam()).repositories.length, 2);
-	assert.deepEqual([service.settings().teamRepositories, copies().length], [[remote.url, other.url], 2]);
-	await service.disconnectTeam(idOf(other));
-	// The window's Disconnect, as it calls today.
-	assert.deepEqual(await service.disconnectTeam(), { connected: false, repositories: [], installedOnly: [], problem: '' });
+	await untouched(await service.teamStatus(), [remote.url, other.url]);
+
+	// Named, each goes.
+	assert.deepEqual((await service.disconnectTeam(idOf(remote))).repositories.map((repository) => repository.repository), [other.url]);
+	assert.deepEqual(await service.disconnectTeam(idOf(other)), { connected: false, repositories: [], installedOnly: [], problem: '' });
 	assert.deepEqual([service.settings().teamRepositories, copies()], [[], []]);
 });
 

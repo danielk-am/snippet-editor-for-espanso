@@ -1343,6 +1343,26 @@ pre,
   min-width: 0;
 }
 
+/* The connected repositories in Settings, one under another, with the field
+   for another under the last. */
+.team-repos {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.team-repos > li + li,
+.team-repos + .setting,
+.team-repos + .field__help {
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.team-repos + .setting,
+.team-repos + .field__help {
+  margin-top: 6px;
+}
+
 .link {
   padding: 0;
   border: 0;
@@ -1355,6 +1375,43 @@ pre,
 }
 
 /* --- team packages -------------------------------------------------------- */
+
+/* Under the page's heading: a section for each connected repository, then
+   the installed packages that are on offer nowhere. */
+.team-sections {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+}
+
+.team-repo,
+.team-left {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.team-repo .section-title,
+.team-left .section-title {
+  margin: 0;
+}
+
+.team-repo__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
+}
+
+.team-repo__text {
+  flex: 1;
+  min-width: min(100%, 240px);
+  overflow-wrap: anywhere;
+}
+
+.team-repo__text .field__help {
+  margin-top: 2px;
+}
 
 .team-list {
   display: grid;
@@ -1381,7 +1438,7 @@ pre,
   gap: 8px;
 }
 
-.team-card__head h2 {
+.team-card__head h3 {
   flex: 1;
   min-width: 8ch;
   margin: 0;
@@ -1401,9 +1458,21 @@ pre,
 }
 
 .team-card__meta,
-.team-card__notes {
+.team-card__notes,
+.team-card__held {
   color: var(--ui-muted-foreground);
   font-size: 12.5px;
+}
+
+/* Why Install is off: the name is held by another repository's package. */
+.team-card__held {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.team-card__held strong {
+  color: var(--ui-foreground);
+  font-weight: 600;
 }
 
 .team-card__notes {
@@ -1434,6 +1503,22 @@ pre,
   padding: 8px 12px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
+}
+
+/* A left-behind package and where it came from, which can be a long address. */
+.team-leftovers__what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.team-leftovers__from {
+  min-width: 0;
+  color: var(--ui-muted-foreground);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 
 /* --- overlays ------------------------------------------------------------- */

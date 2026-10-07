@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { MAX_TEAM_REPOSITORIES } from '../shared/teamLimits.js';
 
-// How many team repositories can be connected at once.
-export const MAX_TEAM_REPOSITORIES = 10;
+// How many team repositories can be connected at once. The number is kept
+// where the window can read it too.
+export { MAX_TEAM_REPOSITORIES };
 
 // A function, so that no two callers are handed the same list.
 const defaults = () => ({ matchDirOverride: null, maxBackups: 20, apiEnabled: false, apiPort: 27187, teamRepositories: [], aiWrite: false });

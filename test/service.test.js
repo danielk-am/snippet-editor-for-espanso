@@ -54,8 +54,11 @@ test('with no team repository, the team status lists none and nothing is waited 
 	assert.equal(await service.teamFetched(), undefined);
 	const empty = { connected: false, repositories: [], installedOnly: [], problem: '' };
 	assert.deepEqual(await service.teamStatus(), empty);
-	// Checking for updates with none connected is not a failure: it answers the same.
-	assert.deepEqual([await service.refreshTeam(), await service.disconnectTeam(), await service.disconnectTeam('0123456789ab')], [empty, empty, empty]);
+	// Checking for updates with none connected is not a failure: it answers the
+	// same. So does disconnecting one that is not there.
+	assert.deepEqual([await service.refreshTeam(), await service.disconnectTeam('0123456789ab')], [empty, empty]);
+	// Disconnecting has to say which. With none said, it says so.
+	await assert.rejects(service.disconnectTeam(), { code: 'INVALID', message: 'No repository was named, so nothing was disconnected.' });
 });
 
 test('choosing another match folder switches the files and the backups folder', async (t) => {

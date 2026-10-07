@@ -200,7 +200,12 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		// Removes one repository's copy and leaves every other alone. An id that
 		// is not connected, such as one disconnected a moment ago, answers the
 		// list as it is. What was installed from it stays installed.
-		disconnectTeam(id) {
+		// async, so that a call with no id rejects like every other failure.
+		async disconnectTeam(id) {
+			// Which one has to be said. With no id, `team` answers the only one
+			// connected. That is never what a disconnect means: an id that went
+			// missing on its way here must not take a repository with it.
+			if (noId(id)) throw fail('INVALID', 'No repository was named, so nothing was disconnected.');
 			return inTurn(async () => {
 				const leaving = teamOf(id);
 				if (!leaving) return teamStatus();

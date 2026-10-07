@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { createGit } from '../core/git.js';
 import { startBackend } from '../electron/bootstrap.js';
 import { mcpSetup } from '../electron/mcpSetup.js';
-import { MANIFEST, MATCHES, gitEnv, seeded } from './helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
 import { createMainWindow, isTrustedSender } from '../electron/window.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +66,14 @@ window.__ui = {
 	key(key, init = {}) {
 		(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
 	},
+	// Picks an option of a select, as a person would.
+	choose(selector, value) {
+		const el = document.querySelector(selector);
+		if (!el) throw new Error('No element: ' + selector);
+		if (![...el.options].some((option) => option.value === value)) throw new Error('No option ' + value + ' in ' + selector);
+		el.value = value;
+		el.dispatchEvent(new Event('change', { bubbles: true }));
+	},
 	// Controls a screen reader could not name, and controls too small to hit.
 	audit() {
 		const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
@@ -106,13 +114,35 @@ async function run() {
 	let win = null;
 	// What the app copies lands here, not on the real clipboard.
 	const copied = [];
-	// A team repository in the sandbox, reached with the real git. Links the
-	// app would open in a browser land in `opened` instead.
+	// Two team repositories in the sandbox, reached with the real git. Both
+	// offer `goodbyes`. The first also offers `support` and `tools`, which runs
+	// commands, and the second `shipping`. Links the app would open in a
+	// browser land in `opened` instead.
 	const remote = seeded(path.join(sandbox, 'team-remote'));
 	remote.commit({
 		'packages/tools/_manifest.yml': MANIFEST('tools'),
 		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
 	});
+	const second = createRemote(path.join(sandbox, 'team-remote-2'));
+	second.commit({
+		'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes', { description: 'How the support desk signs off' }),
+		'packages/goodbyes/package.yml': MATCHES([':later', 'See you later']),
+		'packages/shipping/_manifest.yml': MANIFEST('shipping'),
+		'packages/shipping/package.yml': MATCHES([':sent', 'Your parcel is on its way.'], [':late', 'Your parcel is late.']),
+	});
+	// The app runs as it really does, where only an address on GitHub is a
+	// repository. Git alone is pointed at a folder in the sandbox when it is
+	// asked for one of these addresses. An address with no folder behind it
+	// never gets as far as git, so nothing here can reach the network.
+	const TEAM = { first: 'https://github.com/acme/team-snippets.git', second: 'git@github.com:acme/support-snippets.git' };
+	const folders = new Map([[TEAM.first, remote.url], [TEAM.second, second.url]]);
+	const realGit = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	const git = (args, options) => {
+		const stray = args.find((arg) => /^(https?:|ssh:|git@)/.test(arg) && !folders.has(arg));
+		if (stray) return Promise.reject(Object.assign(new Error(`This check has no repository for ${stray}.`), { code: 'GIT_FAILED' }));
+		return realGit(args.map((arg) => folders.get(arg) ?? arg), options);
+	};
+	git.stopAll = () => realGit.stopAll();
 	const opened = [];
 	// The assistant's backends are stand-ins: a script that starts the app's
 	// real MCP server and prints what Codex would. No model is called. Which
@@ -139,8 +169,7 @@ async function run() {
 		isTrustedSender,
 		clipboard: { writeText: (text) => copied.push(text) },
 		openExternal: async (url) => opened.push(url),
-		git: createGit({ allowLocal: true, env: gitEnv(remote.root) }),
-		allowLocalRepositories: true,
+		git,
 		mcp: mcpSetup({ packaged: false, execPath: process.execPath, resourcesPath: process.resourcesPath, appPath: path.join(here, '..') }),
 	});
 	const services = backend.service;
@@ -154,6 +183,18 @@ async function run() {
 		await sleep(stateDelay);
 		return loadState();
 	};
+	// The next connect or disconnect can be held back for a while, so that a
+	// step can leave the page, or open another, while it is still under way.
+	let teamDelay = 0;
+	for (const name of ['connectTeam', 'disconnectTeam']) {
+		const real = services[name].bind(services);
+		services[name] = async (...args) => {
+			const wait = teamDelay;
+			teamDelay = 0;
+			await sleep(wait);
+			return real(...args);
+		};
+	}
 
 	win = createMainWindow({ show: false, width: 1440, height: 900, webPreferences: { offscreen: true } });
 	win.webContents.on('console-message', (event) => {
@@ -437,98 +478,348 @@ async function run() {
 	});
 
 	await step('team snippets', async () => {
-		const card = (title) => `[...document.querySelectorAll('.team-card')].find((el) => el.querySelector('h2').textContent === ${JSON.stringify(title)})`;
-		const inCard = (title, label) => `[...${card(title)}.querySelectorAll('button')].find((el) => el.textContent.trim() === ${JSON.stringify(label)})`;
-		const badge = (title, label) => `[...(${card(title)}?.querySelectorAll('.badge') ?? [])].some((el) => el.textContent.trim() === ${JSON.stringify(label)})`;
+		const FIRST = 'acme/team-snippets';
+		const SECOND = 'acme/support-snippets';
+		const section = (label) => `[...document.querySelectorAll('.team-repo')].find((el) => el.querySelector('.section-title').textContent === ${JSON.stringify(label)})`;
+		const sections = `[...document.querySelectorAll('.team-repo .section-title')].map((el) => el.textContent).join(' | ')`;
+		const card = (label, title) => `[...(${section(label)}?.querySelectorAll('.team-card') ?? [])].find((el) => el.querySelector('h3').textContent === ${JSON.stringify(title)})`;
+		const inCard = (label, title, button) => `[...(${card(label, title)}?.querySelectorAll('button') ?? [])].find((el) => el.textContent.trim() === ${JSON.stringify(button)})`;
+		const badge = (label, title, text) => `[...(${card(label, title)}?.querySelectorAll('.badge') ?? [])].some((el) => el.textContent.trim() === ${JSON.stringify(text)})`;
+		const inSection = (label, button) => `[...(${section(label)}?.querySelectorAll('.team-repo__head button') ?? [])].find((el) => el.textContent.trim() === ${JSON.stringify(button)})`;
+		// The left-behind lists under the sections: each with its heading and its rows.
+		const leftBehind = `JSON.stringify([...document.querySelectorAll('.team-left')].map((el) => [el.querySelector('.section-title').textContent, ...[...el.querySelectorAll('li')].map((row) => row.querySelector('code').textContent + ' ' + row.querySelector('.team-leftovers__from').textContent)]))`;
+		// Settings: the addresses listed, and one repository's own buttons.
+		const connected = `[...document.querySelectorAll('.team-repos .copy-row code')].map((el) => el.textContent).join(' | ')`;
+		const inSettings = (address, button) =>
+			`[...([...document.querySelectorAll('.team-repos > li')].find((el) => el.querySelector('.copy-row code').textContent === ${JSON.stringify(address)})?.querySelectorAll('button') ?? [])].find((el) => el.textContent.trim() === ${JSON.stringify(button)})`;
+		const fieldLabel = `document.querySelector('.setting__team')?.closest('.field').querySelector('label').textContent`;
+		const fieldError = `document.querySelector('.setting__team')?.closest('.field').querySelector('.field__error')?.textContent`;
 		const teamFile = (...parts) => path.join(matchDir, 'team', ...parts);
+		// Each thing this step waits for needs the one before it. When one does
+		// not come, the step ends there: what follows would only wait in vain too.
+		const need = async (expression, label, timeout) => {
+			if (!(await waitFor(expression, label, timeout))) throw new Error(`gave up at "${label}"`);
+		};
+		const goTo = (label) => js(`window.__ui.click(${JSON.stringify(label)}, '.nav-item__label')`);
+		const confirm = `[...document.querySelectorAll('.dialog__foot button')].at(-1)`;
+		const proposalsIn = (repository) => repository.branches().filter((name) => name.startsWith('snippet-editor/'));
+		const idOf = (address) => services.teams().find((team) => team.address.url === address)?.address.id;
+		const saved = () => JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')).teamRepositories;
 		// The page's buttons are off while one thing runs, as a person would
 		// find them. Wait for the button to be ready, then press it.
 		const press = async (button, label) => {
-			await waitFor(`(${button}) && !(${button}).disabled`, `${label} to be ready`);
+			await need(`(${button}) && !(${button}).disabled`, `${label} to be ready`);
 			await js(`(${button}).click()`);
 		};
+		const theme = async (name) => {
+			await js(`document.querySelector('.sidebar__footer [aria-label="${name}"]').click()`);
+			await need(`document.documentElement.dataset.theme === '${name.toLowerCase()}'`, `the ${name.toLowerCase()} theme`);
+		};
+		// The team card is some way down Settings. It is brought to the top of
+		// the pane, with a little room above it.
+		const showTeamCard = () =>
+			js(`{ const pane = document.querySelector('.content'); pane.scrollTop += document.querySelector('.setting__team, .team-repos').closest('.card').getBoundingClientRect().top - pane.getBoundingClientRect().top - 16; } true`);
+		const toTop = () => js(`document.querySelector('.content').scrollTop = 0; true`);
+		// Passing notices are let go before a picture, so that none covers what it is of.
+		const picture = async (name, settle = async () => {}) => {
+			await need(`document.querySelectorAll('.toast').length === 0`, `the notices to go before picturing ${name}`, 9000);
+			await settle();
+			await shot(`team-${name}`);
+		};
+		// One screen, pictured four ways: as it is, in the dark, and both again
+		// in a narrow window.
+		const pictures = async (name, settle = async () => {}) => {
+			await picture(name, settle);
+			try {
+				await theme('Dark');
+				await shot(`team-${name}-dark`);
+				win.setContentSize(760, 560);
+				await sleep(300);
+				await settle();
+				await shot(`team-${name}-760-dark`);
+				await theme('Light');
+				await shot(`team-${name}-760`);
+			} finally {
+				// The steps that follow expect the window as it was.
+				await js(`document.querySelector('.sidebar__footer [aria-label="Light"]').click()`);
+				win.setContentSize(1440, 900);
+				await sleep(300);
+			}
+			await settle();
+		};
+
+		// --- one repository: as it was before there could be several ---
 
 		// Connect, from Settings.
+		await need(`document.querySelector('.setting__team input')`, 'the field for a repository address');
+		check((await js(fieldLabel)) === 'Repository address', `with none connected the field is labelled: ${await js(fieldLabel)}`);
 		await js(`window.__ui.type('.setting__team input', 'ext::sh -c "touch /tmp/owned"')`);
 		await js(`window.__ui.click('Connect')`);
-		await waitFor(`document.querySelector('.setting__team + .field__error, .field__error')?.textContent.startsWith('That is not a repository address.')`, 'a bad address to be refused in the field');
-		await js(`window.__ui.type('.setting__team input', ${JSON.stringify(remote.url)})`);
+		await need(`${fieldError}?.startsWith('That is not a repository address.')`, 'a bad address to be refused in the field');
+		await js(`window.__ui.type('.setting__team input', ${JSON.stringify(FIRST)})`);
 		await js(`window.__ui.click('Connect')`);
-		await waitFor(`[...document.querySelectorAll('.copy-row code')].some((el) => el.textContent === ${JSON.stringify(remote.url)})`, 'Settings to show the connected repository');
-		await shot('09e-settings-team');
-		// The test repository is a folder, which has no web pages. Give it the
-		// web address a GitHub repository would have, so the link to the pull
-		// request page can be followed through to the browser stand-in.
-		backend.service.team().address.webUrl = 'https://github.com/acme/team-snippets';
+		await need(`${connected} === ${JSON.stringify(TEAM.first)}`, 'Settings to show the connected repository');
+		// Under the list, the field offers another, and is empty again.
+		check((await js(fieldLabel)) === 'Connect another repository', `with one connected the field is labelled: ${await js(fieldLabel)}`);
+		check((await js(`document.querySelector('.setting__team input').value`)) === '', 'the address stayed in the field after connecting');
+		await picture('0a-settings-one', showTeamCard);
 
 		// Browse and install.
-		await js(`window.__ui.click('Team packages', '.nav-item__label')`);
-		await waitFor(`document.querySelectorAll('.team-card').length === 3`, 'three team packages');
-		await shot('17-team');
-		await press(inCard('Support replies', 'Install'), 'Install on the support package');
-		await waitFor(badge('Support replies', 'Installed'), 'the support package to be installed');
+		await goTo('Team packages');
+		await need(`document.querySelectorAll('.team-card').length === 3`, 'three team packages');
+		check((await js(sections)) === FIRST, `with one connected the sections are: ${await js(sections)}`);
+		await picture('0b-page-one');
+		await press(inCard(FIRST, 'Support replies', 'Install'), 'Install on the support package');
+		await need(badge(FIRST, 'Support replies', 'Installed'), 'the support package to be installed');
 		check(fs.readFileSync(teamFile('support', 'replies.yml'), 'utf8') === MATCHES([':refund', 'Your refund is on its way.']), 'the installed file is not the file in the repository');
-		await waitFor(`window.__ui.byText('Support replies', '.nav-item__label')`, 'the package in the sidebar');
-		await js(`window.__ui.click('escalations.yml', '.nav-item__label')`);
-		await waitFor(`document.querySelectorAll('.snippet-row').length === 3`, 'the three snippets of a team file');
+		await need(`window.__ui.byText('Support replies', '.nav-item__label')`, 'the package in the sidebar');
+		await goTo('escalations.yml');
+		await need(`document.querySelectorAll('.snippet-row').length === 3`, 'the three snippets of a team file');
 		check(!(await js(`Boolean(window.__ui.byText('New snippet', '.page-head__actions button'))`)), 'a team file offered New snippet');
 		await js(`document.querySelector('.snippet-row__open').click()`);
-		await waitFor(`document.querySelector('.alert__title')?.textContent === 'This snippet belongs to a team package'`, 'the read-only notice for a team snippet');
+		await need(`document.querySelector('.alert__title')?.textContent === 'This snippet belongs to a team package'`, 'the read-only notice for a team snippet');
 		check(await js(`document.querySelector('.editor textarea').disabled`), 'a team snippet was editable');
-		await shot('17b-team-snippet');
+		await picture('0c-team-snippet');
 
 		// A package that runs commands asks first.
-		await js(`window.__ui.click('Team packages', '.nav-item__label')`);
-		await waitFor(badge('Tools', 'Runs commands'), 'the warning on a package that runs commands');
-		await press(inCard('Tools', 'Install'), 'Install on the tools package');
-		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'This package runs commands'`, 'the question before installing it');
-		await shot('17c-team-runs-commands');
+		await goTo('Team packages');
+		await need(badge(FIRST, 'Tools', 'Runs commands'), 'the warning on a package that runs commands');
+		await press(inCard(FIRST, 'Tools', 'Install'), 'Install on the tools package');
+		await need(`document.querySelector('.dialog h2')?.textContent === 'This package runs commands'`, 'the question before installing it');
+		await picture('0d-runs-commands');
 		check(!fs.existsSync(teamFile('tools')), 'the package was installed before the answer');
-		await js(`[...document.querySelectorAll('.dialog__foot button')].at(-1).click()`);
-		await waitFor(badge('Tools', 'Installed'), 'the package to be installed once accepted');
+		await js(`${confirm}.click()`);
+		await need(badge(FIRST, 'Tools', 'Installed'), 'the package to be installed once accepted');
 
 		// A change in the repository shows as an update, for that package only.
 		remote.commit({ 'packages/support/replies.yml': MATCHES([':refund', 'Refund sent today.']) });
-		await press(`window.__ui.byText('Check for updates')`, 'Check for updates');
-		await waitFor(badge('Support replies', 'Update available'), 'the update notice');
-		check(!(await js(badge('Tools', 'Update available'))), 'an unchanged package was marked for update');
-		await shot('17d-team-update');
-		await press(inCard('Support replies', 'Update'), 'Update on the support package');
-		await waitFor(`!(${badge('Support replies', 'Update available')})`, 'the update to finish');
+		await press(inSection(FIRST, 'Check for updates'), 'Check for updates');
+		await need(badge(FIRST, 'Support replies', 'Update available'), 'the update notice');
+		check(!(await js(badge(FIRST, 'Tools', 'Update available'))), 'an unchanged package was marked for update');
+		await picture('0e-update');
+		await press(inCard(FIRST, 'Support replies', 'Update'), 'Update on the support package');
+		await need(`!(${badge(FIRST, 'Support replies', 'Update available')})`, 'the update to finish');
 		check(fs.readFileSync(teamFile('support', 'replies.yml'), 'utf8') === MATCHES([':refund', 'Refund sent today.']), 'the update did not reach the installed file');
 
 		// Remove, with a question first.
-		await press(inCard('Tools', 'Remove'), 'Remove on the tools package');
-		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Remove Tools?'`, 'the question before removing');
-		await js(`[...document.querySelectorAll('.dialog__foot button')].at(-1).click()`);
-		await waitFor(`${inCard('Tools', 'Install')}`, 'the package to be removed');
+		await press(inCard(FIRST, 'Tools', 'Remove'), 'Remove on the tools package');
+		await need(`document.querySelector('.dialog h2')?.textContent === 'Remove Tools?'`, 'the question before removing');
+		await js(`${confirm}.click()`);
+		await need(`${inCard(FIRST, 'Tools', 'Install')}`, 'the package to be removed');
 		check(!fs.existsSync(teamFile('tools')), 'the removed package is still on disk');
 
-		// Propose one of your own files.
-		await js(`window.__ui.click('dates.yml', '.nav-item__label')`);
-		await waitFor(`window.__ui.byText('Propose to team')`, 'the Propose button on a local file');
+		// With one connected, a proposal is not asked where it goes.
+		await goTo('dates.yml');
+		await need(`window.__ui.byText('Propose to team')`, 'the Propose button on a local file');
 		await js(`window.__ui.click('Propose to team')`);
-		await waitFor(`document.querySelector('.dialog select')`, 'the proposal dialog');
+		await need(`document.querySelector('.dialog select[name=target]') && !document.querySelector('.dialog select[name=target]').disabled`, 'the proposal dialog');
+		check(!(await js(`Boolean(document.querySelector('.dialog select[name=repository]'))`)), 'with one repository connected the dialog asked which');
+		check(await js(`document.querySelector('.dialog__head p').textContent.includes(${JSON.stringify(TEAM.first)})`), 'the dialog does not say where the file would go');
+		await js(`window.__ui.click('Cancel')`);
+
+		// --- a second repository ---
+
+		// The other form of the address that is connected is the same repository.
+		await goTo('Settings');
+		await need(`${connected} === ${JSON.stringify(TEAM.first)}`, 'Settings again');
+		await js(`window.__ui.type('.setting__team input', 'git@github.com:acme/team-snippets.git')`);
+		await js(`window.__ui.click('Connect')`);
+		await need(`${fieldError} === ${JSON.stringify(`This repository is already connected, as ${TEAM.first}.`)}`, 'the other form of a connected address to be refused in the field');
+		// Connecting takes a while, and the page is left meanwhile. The work
+		// finishes in the background, and what is open then shows it.
+		teamDelay = 2500;
+		await js(`window.__ui.type('.setting__team input', ${JSON.stringify(TEAM.second)})`);
+		await js(`window.__ui.click('Connect')`);
+		await need(`window.__ui.byText('Connecting…')`, 'the button to say it is connecting');
+		await goTo('Team packages');
+		await need(`${sections} === ${JSON.stringify(FIRST)}`, 'the Team page while the second repository is still connecting');
+		await need(`${sections} === ${JSON.stringify(`${FIRST} | ${SECOND}`)}`, 'the second section to arrive once it is connected, with nothing pressed', 15000);
+		check(await js(`document.querySelectorAll('.team-card').length === 5`), 'the two sections do not hold five packages between them');
+		// Back in Settings, the result is there.
+		await goTo('Settings');
+		await need(`${connected} === ${JSON.stringify(`${TEAM.first} | ${TEAM.second}`)}`, 'Settings to list both repositories');
+		check(JSON.stringify(saved()) === JSON.stringify([TEAM.first, TEAM.second]), `the settings file holds ${JSON.stringify(saved())}`);
+		await pictures('1-settings-two', showTeamCard);
+
+		// Checking one for updates leaves the other as it was.
+		const before = services.teams().map((team) => team.address.id);
+		second.commit({ 'packages/shipping/package.yml': MATCHES([':sent', 'Your parcel is on its way.'], [':late', 'Your parcel is late.'], [':lost', 'We are looking for your parcel.']) });
+		await press(inSettings(TEAM.second, 'Check for updates'), 'Check for updates on the second repository');
+		await need(`window.__ui.byText('Checked for updates', '.toast__title')`, 'the check to finish');
+		check(JSON.stringify(services.teams().map((team) => team.address.id)) === JSON.stringify(before), 'checking for updates changed which repositories are connected');
+
+		// One of the two cannot be reached. Its own section says so and still
+		// lists what it had. The other is as it was.
+		await goTo('Team packages');
+		await need(`${sections} === ${JSON.stringify(`${FIRST} | ${SECOND}`)}`, 'both sections');
+		check(await js(`${card(SECOND, 'Shipping')}.querySelector('.team-card__meta').textContent.includes('3 snippets')`), 'the check from Settings did not reach the Team page');
+		const unreached = (where) => `[...(${where}?.querySelectorAll('.alert') ?? [])].map((el) => el.querySelector('.alert__title').textContent + ': ' + (el.querySelector('p')?.textContent ?? '').slice(0, 36)).join(' | ')`;
+		fs.renameSync(second.url, `${second.url}.away`);
+		await press(inSection(SECOND, 'Check for updates'), 'Check for updates on a repository that has gone');
+		await need(`${unreached(section(SECOND))} === 'The repository could not be reached: Git could not reach that repository.'`, 'the section of a repository out of reach to say so');
+		check((await js(unreached(section(FIRST)))) === '', `the other section carries a problem too: ${await js(unreached(section(FIRST)))}`);
+		check(await js(`${section(SECOND)}.querySelectorAll('.team-card').length === 2 && ${section(FIRST)}.querySelectorAll('.team-card').length === 3`), 'a repository out of reach no longer lists what it had');
+		await picture('1b-page-out-of-reach', toTop);
+		// Settings says it on that repository's own entry.
+		await goTo('Settings');
+		const entry = (address) => `[...document.querySelectorAll('.team-repos > li')].find((el) => el.querySelector('.copy-row code').textContent === ${JSON.stringify(address)})`;
+		await need(`${unreached(entry(TEAM.second))} === 'The repository could not be reached: Git could not reach that repository.'`, 'Settings to say which repository is out of reach');
+		check((await js(unreached(entry(TEAM.first)))) === '', 'Settings marks the other repository as out of reach too');
+		await picture('1c-settings-out-of-reach', showTeamCard);
+		// Back in reach, a check clears it.
+		fs.renameSync(`${second.url}.away`, second.url);
+		await press(inSettings(TEAM.second, 'Check for updates'), 'Check for updates once the repository is back');
+		await need(`${unreached(entry(TEAM.second))} === ''`, 'the problem to clear once the repository is back');
+
+		// One package from each. The second's goodbyes takes the name, so the
+		// first's cannot be installed, and says where the name is held.
+		await goTo('Team packages');
+		await need(`${sections} === ${JSON.stringify(`${FIRST} | ${SECOND}`)}`, 'both sections again');
+		check((await js(unreached(section(SECOND)))) === '', 'the section still says its repository is out of reach');
+		await press(inCard(SECOND, 'Goodbyes', 'Install'), 'Install on the second repository\'s goodbyes');
+		await need(badge(SECOND, 'Goodbyes', 'Installed'), 'the second repository\'s goodbyes to be installed');
+		check(fs.readFileSync(teamFile('goodbyes', 'package.yml'), 'utf8') === MATCHES([':later', 'See you later']), 'the package installed is not the second repository\'s');
+		const held = `${card(FIRST, 'Goodbyes')}.querySelector('.team-card__held')`;
+		await need(`${held}?.textContent.trim() === ${JSON.stringify(`Installed from ${SECOND}. Remove it first, then install this one.`)}`, 'the first repository\'s goodbyes to say where the name is held');
+		check(await js(`${inCard(FIRST, 'Goodbyes', 'Install')}.disabled`), 'Install is on for a package whose name another repository holds');
+		check(await js(`${inCard(FIRST, 'Goodbyes', 'Install')}.getAttribute('aria-describedby') === ${held}.id && ${held}.id !== ''`), 'the Install that is off does not give its reason as its description');
+		check(!(await js(badge(FIRST, 'Goodbyes', 'Installed'))) && !(await js(badge(FIRST, 'Goodbyes', 'Update available'))), 'a package held by another repository shows as installed or as having an update');
+		check(await js(badge(FIRST, 'Support replies', 'Installed')), 'the first repository\'s own package no longer shows as installed');
+		await pictures('2-page-clash', toTop);
+
+		// --- a proposal says which repository it is for ---
+
+		await goTo('dates.yml');
+		await need(`window.__ui.byText('Propose to team')`, 'the Propose button with two connected');
+		await js(`window.__ui.click('Propose to team')`);
+		const which = `document.querySelector('.dialog select[name=repository]')`;
+		const target = `document.querySelector('.dialog select[name=target]')`;
+		const offered = (select) => `[...${select}.options].map((option) => option.textContent).join(' | ')`;
+		await need(which, 'the repository choice in the proposal dialog');
+		check((await js(offered(which))) === `Choose a repository… | ${FIRST} | ${SECOND}`, `the repositories offered were: ${await js(offered(which))}`);
+		// Where a file goes is not chosen for you.
+		check(await js(`${which}.value === '' && ${target}.disabled && window.__ui.byText('Send proposal').disabled`), 'a proposal could be sent before its repository was chosen');
+		check(await js(`[...document.querySelectorAll('.dialog label')].map((el) => el.textContent).indexOf('Repository') === 0`), 'the dialog does not start with the repository');
+		await picture('3a-propose-choose');
+		// The packages follow the repository.
+		await js(`window.__ui.choose('.dialog select[name=repository]', ${JSON.stringify(idOf(TEAM.first))})`);
+		await need(`${offered(target)} === 'Goodbyes | Support replies | Tools | A new package'`, 'the first repository\'s packages in the dialog');
+		await js(`window.__ui.choose('.dialog select[name=repository]', ${JSON.stringify(idOf(TEAM.second))})`);
+		await need(`${offered(target)} === 'Goodbyes | Shipping | A new package'`, 'the second repository\'s packages in the dialog');
+		check(await js(`document.querySelector('.dialog__head p').textContent.includes(${JSON.stringify(TEAM.second)})`), 'the dialog does not say which repository the file would go to');
 		await js(`window.__ui.type('.dialog input[name=summary]', 'Share the date snippets')`);
-		await shot('18-propose');
+		await pictures('3b-propose-repository');
 		await js(`{ const send = window.__ui.byText('Send proposal'); send.click(); send.click(); } true;`);
-		await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Proposal sent'`, 'the proposal to be sent', 15000);
-		const proposals = remote.branches().filter((name) => name.startsWith('snippet-editor/'));
-		check(proposals.length === 1, `a double click on Send made ${proposals.length} branches`);
-		check(remote.show(proposals[0], 'packages/goodbyes/dates.yml') + '\n' === onDisk('dates.yml'), 'the proposed file is not the file on disk');
+		await need(`document.querySelector('.dialog h2')?.textContent === 'Proposal sent'`, 'the proposal to be sent', 15000);
+		const proposals = proposalsIn(second);
+		check(proposals.length === 1, `a double click on Send made ${proposals.length} branches in the second repository`);
+		check(proposalsIn(remote).length === 0, `the proposal reached the first repository too: ${proposalsIn(remote).join(', ')}`);
+		check(second.show(proposals[0], 'packages/goodbyes/dates.yml') + '\n' === onDisk('dates.yml'), 'the proposed file is not the file on disk');
 		check(await js(`document.querySelector('.dialog code')?.textContent === ${JSON.stringify(proposals[0])}`), 'the dialog does not name the branch');
-		await shot('18b-proposal-sent');
+		check(await js(`document.querySelector('.dialog__body p').textContent.includes(${JSON.stringify(SECOND)})`), 'the dialog does not say which repository the branch is in');
+		await shot('team-3c-proposal-sent');
 		await js(`window.__ui.click('Open pull request page')`);
-		await waitFor(`true`, 'a moment');
 		await sleep(200);
-		check(opened.length === 1 && opened[0] === `https://github.com/acme/team-snippets/compare/main...${proposals[0]}?expand=1`, `the pull request page opened was ${JSON.stringify(opened)}`);
+		const pullRequest = `https://github.com/${SECOND}/compare/main...${proposals[0]}?expand=1`;
+		check(opened.length === 1 && opened[0] === pullRequest, `the pull request page opened was ${JSON.stringify(opened)}`);
 		await js(`window.__ui.click('Close')`);
 
-		// Only a link inside the connected repository can be opened.
-		for (const link of ['https://evil.example/acme/team-snippets/compare/main...x', 'https://github.com/evil/other/compare/main...x', 'file:///etc/hosts']) {
-			const refused = await js(`window.snippetEditor.invoke('team:openLink', ${JSON.stringify(link)}).then(JSON.stringify)`);
-			check(JSON.parse(refused).ok === false && opened.length === 1, `a link elsewhere was opened: ${link} ${refused}`);
+		// A link inside either connected repository opens. One inside neither does not.
+		const openLink = async (link) => JSON.parse(await js(`window.snippetEditor.invoke('team:openLink', ${JSON.stringify(link)}).then(JSON.stringify)`));
+		const inFirst = `https://github.com/${FIRST}/tree/main/packages/support`;
+		check((await openLink(inFirst)).ok === true && opened.at(-1) === inFirst, 'a link inside the first connected repository was not opened');
+		for (const link of ['https://evil.example/acme/support-snippets/compare/main...x', 'https://github.com/acme/other/compare/main...x', `https://github.com/${SECOND}-evil/compare/main...x`, 'file:///etc/hosts']) {
+			const refused = await openLink(link);
+			check(refused.ok === false && refused.error.message === 'That link is not part of a connected repository.' && opened.length === 2, `a link elsewhere was opened: ${link} ${JSON.stringify(refused)}`);
 		}
+
+		// --- the first repository is disconnected ---
+
+		await goTo('Settings');
+		await need(`${connected} === ${JSON.stringify(`${TEAM.first} | ${TEAM.second}`)}`, 'Settings before disconnecting');
+		await press(inSettings(TEAM.first, 'Disconnect'), 'Disconnect on the first repository');
+		await need(`document.querySelector('.dialog h2')?.textContent === ${JSON.stringify(`Disconnect ${FIRST}?`)}`, 'the question that names the repository to disconnect');
+		// It takes a while, and the Team page is opened meanwhile. Its section
+		// goes when the repository does, with nothing pressed on that page.
+		teamDelay = 2500;
+		await js(`${confirm}.click()`);
+		await goTo('Team packages');
+		await need(`${sections} === ${JSON.stringify(`${FIRST} | ${SECOND}`)}`, 'the Team page while the first repository is still being disconnected');
+		await need(`${sections} === ${JSON.stringify(SECOND)}`, 'the first section to go once its repository is disconnected', 15000);
+		// What was installed from it stays installed, and is listed apart with its address.
+		const apart = JSON.stringify([['From repositories that are not connected (1)', `support ${TEAM.first}`]]);
+		await need(`${leftBehind} === ${JSON.stringify(apart)}`, 'the first repository\'s package to be listed apart');
+		check(fs.existsSync(teamFile('support', 'replies.yml')) && fs.existsSync(teamFile('goodbyes', 'package.yml')), 'disconnecting removed an installed package');
+		check(JSON.stringify(saved()) === JSON.stringify([TEAM.second]), `after the disconnect the settings file holds ${JSON.stringify(saved())}`);
+		check(fs.readdirSync(path.join(app.getPath('userData'), 'team')).length === 1, 'the copy of the disconnected repository is still there');
+		check(await js(badge(SECOND, 'Goodbyes', 'Installed')), 'the other repository\'s package no longer shows as installed');
+		await pictures('4-after-disconnect', toTop);
+		// Its links open no more. The other's still do.
+		const gone = await openLink(inFirst);
+		check(gone.ok === false && opened.length === 2, `a link for a repository disconnected since was opened: ${JSON.stringify(gone)}`);
+		check((await openLink(pullRequest)).ok === true && opened.length === 3, 'a link for the repository still connected stopped opening');
+		// In Settings one is listed, and the field under it offers another.
+		await goTo('Settings');
+		await need(`${connected} === ${JSON.stringify(TEAM.second)}`, 'Settings to list the one repository left');
+		check((await js(fieldLabel)) === 'Connect another repository', 'after a disconnect the field no longer offers another repository');
+
+		// --- what a connected repository drops is listed apart too ---
+
+		await goTo('Team packages');
+		await press(inCard(SECOND, 'Shipping', 'Install'), 'Install on the shipping package');
+		await need(badge(SECOND, 'Shipping', 'Installed'), 'the shipping package to be installed');
+		second.commit({ 'packages/shipping/_manifest.yml': null, 'packages/shipping/package.yml': null });
+		await press(inSection(SECOND, 'Check for updates'), 'Check for updates after the package was dropped');
+		const both = JSON.stringify([
+			['Installed, but no longer in the repository (1)', `shipping ${SECOND}`],
+			['From repositories that are not connected (1)', `support ${TEAM.first}`],
+		]);
+		await need(`${leftBehind} === ${JSON.stringify(both)}`, 'the dropped package and the left-behind package, each in its list');
+		await picture('5-left-behind', toTop);
+		// Each can still be removed.
+		await press(`[...document.querySelectorAll('.team-left li')].find((row) => row.querySelector('code').textContent === 'shipping')?.querySelector('button')`, 'Remove on the dropped package');
+		await need(`document.querySelector('.dialog h2')?.textContent === 'Remove shipping?'`, 'the question before removing a dropped package');
+		await js(`${confirm}.click()`);
+		await need(`${leftBehind} === ${JSON.stringify(apart)}`, 'the dropped package to be removed');
+		check(!fs.existsSync(teamFile('shipping')), 'the removed package is still on disk');
+
+		// --- ten repositories, which is the most ---
+
+		const kits = [];
+		for (let number = 2; number <= 10; number += 1) {
+			const kit = createRemote(path.join(sandbox, `team-kit-${number}`));
+			kit.commit(Object.fromEntries(['notes', 'replies', 'sign-offs'].flatMap((name) => [[`packages/${name}-${number}/_manifest.yml`, MANIFEST(`${name}-${number}`)], [`packages/${name}-${number}/package.yml`, MATCHES([`:${name}${number}`, `From kit ${number}`])]])));
+			folders.set(`https://github.com/acme/kit-${number}.git`, kit.url);
+			kits.push(`acme/kit-${number}`);
+		}
+		for (const address of kits) await services.connectTeam(address);
+		check(services.teams().length === 10, `${services.teams().length} repositories are connected, not ten`);
+		await goTo('Overview');
+		await goTo('Team packages');
+		await need(`document.querySelectorAll('.team-repo').length === 10`, 'ten sections, one under another', 15000);
+		check((await js(sections)) === [SECOND, ...kits].join(' | '), `the ten sections are: ${await js(sections)}`);
+		check(await js(`document.querySelectorAll('.team-card').length === 28`), `ten repositories listed ${await js(`document.querySelectorAll('.team-card').length`)} packages, not 28`);
+		check(await js(`document.querySelector('.content').scrollHeight > document.querySelector('.content').clientHeight * 2`), 'ten sections do not make a page that scrolls');
+		await picture('6a-page-ten', toTop);
+		// The last section is as usable as the first.
+		await js(`${section('acme/kit-10')}.scrollIntoView(); true`);
+		await press(inCard('acme/kit-10', 'Notes-10', 'Install'), 'Install in the tenth section');
+		await need(badge('acme/kit-10', 'Notes-10', 'Installed'), 'a package of the tenth repository to be installed');
+		// With ten connected, Settings lists them all and offers no eleventh.
+		await goTo('Settings');
+		await need(`document.querySelectorAll('.team-repos > li').length === 10`, 'Settings to list ten repositories');
+		check(!(await js(`Boolean(document.querySelector('.setting__team'))`)), 'with ten connected the field for another is still shown');
+		check(await js(`[...document.querySelectorAll('.card .field__help')].some((el) => el.textContent.trim() === 'Ten repositories are connected, which is the most. Disconnect one to connect another.')`), 'with ten connected nothing says why no other can be added');
+		await picture('6b-settings-ten', showTeamCard);
+		// Back to the one, as the steps that follow expect.
+		await goTo('Team packages');
+		await press(inCard('acme/kit-10', 'Notes-10', 'Remove'), 'Remove in the tenth section');
+		await need(`document.querySelector('.dialog h2')?.textContent === 'Remove Notes-10?'`, 'the question before removing in the tenth section');
+		await js(`${confirm}.click()`);
+		await need(`${inCard('acme/kit-10', 'Notes-10', 'Install')}`, 'the tenth repository\'s package to be removed');
+		for (const team of services.teams().slice(1)) await services.disconnectTeam(team.address.id);
+		check(JSON.stringify(saved()) === JSON.stringify([TEAM.second]), `at the end of the team step the settings file holds ${JSON.stringify(saved())}`);
+		await goTo('Overview');
 	});
 
 	await step('external change is picked up', async () => {

@@ -241,7 +241,7 @@ function App() {
 	} else if (route.view === 'settings') {
 		page = html`<${SettingsPage} state=${state} theme=${theme} setTheme=${setTheme} refresh=${refresh} navigate=${navigate} />`;
 	} else if (route.view === 'team') {
-		page = html`<${TeamPage} navigate=${navigate} refresh=${refresh} />`;
+		page = html`<${TeamPage} state=${state} navigate=${navigate} refresh=${refresh} />`;
 	} else if (route.view === 'file') {
 		page = html`<${FileView}
 			key=${routeFile.id}

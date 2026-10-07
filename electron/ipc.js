@@ -62,7 +62,8 @@ export function registerIpc({ ipcMain, service, router, listener, chat, getWindo
 
 	// Which repositories the app is connected to is a setting, so it is changed
 	// from the window only, like the match folder. Disconnecting names the
-	// repository by its id. With no id it means the only one connected.
+	// repository by its id. With no id nothing is disconnected, and the reply
+	// says so.
 	handle('team:connect', (address) => service.connectTeam(address));
 	handle('team:disconnect', (id) => service.disconnectTeam(id));
 	// The window may open a connected repository's own pages in the browser,

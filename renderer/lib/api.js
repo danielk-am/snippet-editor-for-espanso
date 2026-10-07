@@ -17,20 +17,6 @@ async function request(method, path, { query, body } = {}) {
 	throw Object.assign(new Error(reply.body.error.message), { code: reply.body.error.code });
 }
 
-// The app's team status lists every connected repository. The pages still
-// show one. Until they are redrawn to show several, each hands the status to
-// this, which gives it the one that is connected, in the shape the status had
-// when there could only be one. With none connected, or with more than one,
-// that is "none".
-export function oneRepository(status) {
-	if (status.repositories.length !== 1) {
-		return { id: null, connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: status.problem, problems: [], packages: [], installedOnly: status.installedOnly };
-	}
-	const [only] = status.repositories;
-	// What is wrong with this repository, then what was wrong with the saved list.
-	return { ...only, problem: [only.problem, status.problem].filter(Boolean).join(' '), installedOnly: [...only.installedOnly, ...status.installedOnly] };
-}
-
 // A page that has no repository to name holds null for its id. To the app
 // that is no id at all, so it is left out.
 const noId = (id) => id === undefined || id === null;
@@ -67,6 +53,7 @@ export const api = {
 	// `repository` says which one the proposal is for.
 	propose: ({ repository, ...input }) => request('POST', '/team/proposals', { body: { ...input, repository: idOrNone(repository) } }),
 	connectTeam: (address) => call('team:connect', address),
+	// Always by id. With none, the app disconnects nothing and says so.
 	disconnectTeam: (id) => call('team:disconnect', idOrNone(id)),
 	openTeamLink: (url) => call('team:openLink', url),
 
