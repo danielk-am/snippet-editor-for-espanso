@@ -120,6 +120,8 @@ Connecting and disconnecting a repository are settings. Like the match folder, t
 | --- | --- | --- |
 | `teamRepository` | none | The address of the connected repository |
 
+This setting is now the list `teamRepositories`. See `2026-10-07-several-team-repositories-design.md`.
+
 ## How git is run
 
 - Through `execFile`, with an argument list and `--` before any address or path. No shell is involved, so nothing in an address or a package name can become a command.

@@ -17,11 +17,11 @@ Daniel, 2026-10-07.
 | Should this be designed? | Yes, now. Built after the faster-assistant work, which has since landed on `main`. |
 | Two repositories offer a package with the same name. What happens? | The second is refused while the first is installed. |
 
-## A correction to what I told you when asking
+## How the name-clash decision was reached
 
-I said Espanso has one packages folder and that a longer folder name might confuse Espanso's own package commands. That was wrong. Team packages are not in Espanso's `match/packages/`. They are in the app's own `match/team/<name>/`, which Espanso's package commands never look at.
+Daniel was first asked what should happen when two repositories offer a package of the same name. The question said that Espanso has one packages folder and that a longer folder name might confuse Espanso's own package commands. That was wrong. Team packages are not in Espanso's `match/packages/`. They are in the app's own `match/team/<name>/`, which Espanso's package commands never look at.
 
-So the other choice, a folder per repository, would work with Espanso. Its real cost is different: every team file's id would change, and every package already installed would have to move. "Refuse the second" keeps both as they are, which is why it is still what I recommend. If the corrected picture changes your answer, say so and I will redo the parts it touches.
+So a folder per repository would have worked with Espanso. Its real cost is different: every team file's id would change, and every package already installed would have to move. "Refuse the second" keeps both as they are. The choice to refuse the second was confirmed with these corrected reasons before the design was approved.
 
 | Way | For | Against |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ So the other choice, a folder per repository, would work with Espanso. Its real 
 
 ## Decided with this design
 
-These are mine. Approving the design approves them.
+These were decided with the design and approved with it.
 
 1. **A repository is known by its host, owner and name**, not by the exact address typed. The HTTPS and SSH addresses of one repository are the same repository. Connecting the second form is refused, and it names the form already connected.
 2. **A package belongs to the repository it was installed from.** The marker file has always recorded that. Until now nothing read it: a package was "installed" for whichever repository was connected, by name alone. From here, only its own repository shows it as installed or offers an update.
@@ -183,8 +183,8 @@ Rows of the first team design carry over with their tests. These are for what is
 | `isTeamLink` did change: it refuses a link whose path holds an encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`). | The design said it was unchanged. A review showed that `..%2f..%2fother` passed for a page of a connected repository and could open another's. The app makes no link with any of the three. |
 | A card is for its repository under either form of its address. Disconnected and connected again by its SSH address, a card made for the HTTPS one still applies. | A repository is its host, owner and name, which is decision 1 of this design. The card's first check compared the address text. |
 | Disconnect has to name a repository. With no id, or with anything that is not text, nothing is disconnected and the reply says so: "No repository was named, so nothing was disconnected." An id that is not connected still answers the list as it is. | For a while during the build, no id meant "the only one". An id that goes missing on its way must not take a repository with it, and a Disconnect that did nothing must not look done. |
-| Every test gets its git through one guard, in `test/helpers/teamRemote.js`. It stops any address with no test repository behind it before git is called. A test fails if another test file makes a git of its own. | Twice during the build, git was handed a real address on github.com: once by a test on its first failing run, once by a reviewer's probe. Both failed and nothing was copied. The tests run the app with GitHub addresses, as it really runs, so the guard has to be certain. |
-| Connecting the same address again runs no git at all. | The design says it "does nothing". Before, connecting again fetched. "Check for updates" copies a repository again if its copy has gone. |
+| Every test gets its git through one guard, in `test/helpers/teamRemote.js`. It stops any address with no test repository behind it before git is called. A test fails if a test file or helper makes a git of its own, starts the service, a team or the backend without a `git` option, or runs the `git` program itself. The quit check and the packaged check start the whole app as a program, with no repository in its settings. The guard test names them, with that reason. | Twice during the build, git was handed a real address on github.com: once by a test on its first failing run, once by a reviewer's probe. Both failed and nothing was copied. The tests run the app with GitHub addresses, as it really runs, so the guard has to be certain. |
+| Connecting the same address again runs no clone, fetch or ls-remote. It answers the status, which runs git's local reads of the copy. | The design says it "does nothing". Before, connecting again fetched. "Check for updates" copies a repository again if its copy has gone. |
 | A connect that fails removes whatever was made for it. The setting is written only after the copy succeeds. | A failed connect used to leave an empty folder under `team/`. |
 | A repository that is being disconnected fetches no more. A check that arrives then answers 409 `NOT_CONNECTED`, "That repository is being disconnected." | A check that waited behind the disconnect would find no copy and make one again, and nothing would list it. |
 | The settings drop a repeat only when the text is the same. Two addresses of one repository both stay in the file, and the service skips the second and says so. | The settings cannot tell that two addresses are one repository. The service could not report an entry the settings had already dropped. |
@@ -247,6 +247,8 @@ Each layer was reviewed when it was finished, by a reviewer that had not written
 - An error from one repository, such as "This repository is empty", does not name that repository when it reaches the API or the assistant.
 - When a connected repository's copy has gone from disk, an install or a proposal answers "No team repository is connected." The step that helps is "Check for updates", which copies it again.
 - An address may be up to 300 characters, and the form the app keeps can be longer: the short form gains 23. The settings drop entries over 300, so such a repository would connect and be gone at the next start. Real GitHub names are far shorter.
+- Going back to the released app, which reads `teamRepository` only. Started on a settings file this version wrote with two repositories, it shows none connected and says nothing. The installed packages stay, and it lists them as still installed. An unrelated save there rewrites the file with `teamRepository: null` and no list. Opening this version again then shows none connected, every package under "From repositories that are not connected", and both copies still in `team/`. Connecting again restores everything. The released app cannot be changed now, and this version writes the list only. The README says so under "Team snippets".
+- An AI tool left open across the update keeps its old MCP server process, which reads `team.packages` from the team reply. This version's reply has no such field, so `snippets_list_team_packages` fails with "Internal error", and `snippets_install_team_package` installs the package and then reports the same error. It mends when the AI tool restarts its MCP server. The README says so where it tells a person how to connect an AI tool.
 
 Not checked:
 

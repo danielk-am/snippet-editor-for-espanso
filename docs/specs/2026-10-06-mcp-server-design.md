@@ -77,6 +77,8 @@ Twelve tools, each named for a job, with one prefix so they stay distinct beside
 | `snippets_install_team_package` | Installs or updates a team package | Yes |
 | `snippets_propose_to_team` | Sends one of your files to the team repository as a proposal branch | Yes, outside this computer |
 
+The three team tools now work across several repositories and take `repository`. See `2026-10-07-several-team-repositories-design.md`.
+
 Left out on purpose: deleting a file, removing a team package, connecting a repository, and anything in Settings. Those stay in the window.
 
 Rules every tool follows:
