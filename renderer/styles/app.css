@@ -1364,6 +1364,10 @@ pre,
 }
 
 .link {
+  /* It sits in a line of text, and is still tall enough to press. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 0;
   border: 0;
   background: none;

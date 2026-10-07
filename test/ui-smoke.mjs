@@ -812,6 +812,43 @@ async function run() {
 		await need(`${inCard('acme/kit-10', 'Notes-10', 'Install')}`, 'the tenth repository\'s package to be removed');
 		for (const team of services.teams().slice(1)) await services.disconnectTeam(team.address.id);
 		check(JSON.stringify(saved()) === JSON.stringify([TEAM.second]), `at the end of the team step the settings file holds ${JSON.stringify(saved())}`);
+
+		// --- none connected, with packages still installed ---
+
+		await goTo('Settings');
+		await need(`${connected} === ${JSON.stringify(TEAM.second)}`, 'Settings with the one repository left');
+		await press(inSettings(TEAM.second, 'Disconnect'), 'Disconnect on the last repository');
+		await need(`document.querySelector('.dialog h2')?.textContent === ${JSON.stringify(`Disconnect ${SECOND}?`)}`, 'the question before the last repository is disconnected');
+		await js(`${confirm}.click()`);
+		// The card is as it was before any was connected, and says what is still installed.
+		await need(`${fieldLabel} === 'Repository address' && !document.querySelector('.team-repos')`, 'Settings with no repository connected');
+		const stillInstalled = `[...document.querySelectorAll('.card .field__help')].find((el) => el.querySelector('.link'))`;
+		check((await js(`${stillInstalled}?.textContent.replace(/\\s+/g, ' ').trim()`)) === '2 team packages are still installed. Manage them', `with none connected Settings says of what is installed: ${await js(`${stillInstalled}?.textContent`)}`);
+		check(!(await js(`Boolean(window.__ui.byText('Browse team packages'))`)), 'with none connected Settings still offers to browse team packages');
+		check(saved().length === 0, `with none connected the settings file holds ${JSON.stringify(saved())}`);
+		await picture('7a-settings-none', showTeamCard);
+		// "Manage them" leads to the page that lists them, with their addresses.
+		await js(`${stillInstalled}.querySelector('.link').click()`);
+		await need(`document.querySelector('.empty h2')?.textContent === 'No team repository is connected'`, 'the Team page with no repository connected');
+		const none = JSON.stringify([['From repositories that are not connected (2)', `goodbyes ${TEAM.second}`, `support ${TEAM.first}`]]);
+		check((await js(leftBehind)) === none, `with none connected the Team page lists: ${await js(leftBehind)}`);
+		check(await js(`document.querySelectorAll('.team-repo').length === 0`), 'with none connected the Team page still has a section');
+		await picture('7b-page-none', toTop);
+		// A file of your own is no longer offered to the team.
+		await goTo('dates.yml');
+		await need(`window.__ui.byText('New snippet', '.page-head__actions button')`, 'a file of your own with no repository connected');
+		check(!(await js(`Boolean(window.__ui.byText('Propose to team'))`)), 'with none connected a file is still offered to the team');
+
+		// One is connected again, as the steps that follow expect.
+		await goTo('Settings');
+		await need(`document.querySelector('.setting__team input')`, 'the field for a repository address again');
+		await js(`window.__ui.type('.setting__team input', ${JSON.stringify(TEAM.second)})`);
+		await js(`window.__ui.click('Connect')`);
+		await need(`${connected} === ${JSON.stringify(TEAM.second)}`, 'the repository to be connected again');
+		// What was installed from it is its own again.
+		await goTo('Team packages');
+		await need(badge(SECOND, 'Goodbyes', 'Installed'), 'the package installed from it to be its own again');
+		check((await js(leftBehind)) === JSON.stringify([['From repositories that are not connected (1)', `support ${TEAM.first}`]]), `after connecting again the Team page lists: ${await js(leftBehind)}`);
 		await goTo('Overview');
 	});
 

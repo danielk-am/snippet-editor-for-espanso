@@ -307,7 +307,7 @@ function TeamCard({ state, navigate, refresh }) {
 			${!connected.length &&
 			team.installedOnly.length > 0 &&
 			html`<p class="field__help">
-				${team.installedOnly.length === 1 ? '1 team package is' : `${team.installedOnly.length} team packages are`} still installed.
+				${team.installedOnly.length === 1 ? '1 team package is' : `${team.installedOnly.length} team packages are`} still installed.${' '}
 				<button type="button" class="link" onClick=${() => navigate({ view: 'team' })}>Manage them</button>
 			</p>`}
 		</div>
