@@ -117,7 +117,15 @@ test('an open file that is gone, has YAML errors or cannot be read is left out',
 });
 
 test('what the window says is open is trusted for nothing', async (t) => {
-	const { lookUp, logged } = await setup(t);
+	const asked = [];
+	const { lookUp, logged } = await setup(t, {
+		wrap: (tools) => ({
+			call: (name, args) => {
+				asked.push(name);
+				return tools.call(name, args);
+			},
+		}),
+	});
 	for (const context of [
 		{ fileId: 'local:nothing.yml', fileName: 'nothing.yml' },
 		{ fileId: '../../etc/passwd', fileName: 'passwd' },
@@ -130,9 +138,16 @@ test('what the window says is open is trusted for nothing', async (t) => {
 	]) {
 		assert.deepEqual(await lookUp({ text: 'hm', context }), { found: [], lookups: [] }, JSON.stringify(context));
 	}
+	// What is not even the name of a file is not put to the tools at all.
+	asked.length = 0;
+	for (const context of [{ fileId: 42, fileName: 'base.yml' }, { fileId: '', fileName: '' }, { fileId: ['local:base.yml'] }, 'local:base.yml', [], 7, null]) await lookUp({ text: 'hm', context });
+	assert.deepEqual(asked, []);
 	// A position that is no position: the file is still read, the snippet is not.
 	for (const index of [-1, 1.5, '2', 99, null, Number.NaN]) {
+		asked.length = 0;
 		assert.deepEqual(kinds(await lookUp({ text: 'hm', context: { ...BASE, index } })), ['snippets_get_file'], String(index));
+		// Nor is what is not a position: only the file is asked for.
+		if (index !== 99) assert.deepEqual(asked, ['snippets_get_file'], String(index));
 	}
 	// A file that belongs to a package may be read, as the tools may read it.
 	assert.deepEqual(kinds(await lookUp({ text: 'hm', context: { fileId: 'package:goodbyes:package.yml', fileName: 'package.yml', index: 1 } })), ['snippets_get_snippet', 'snippets_get_file']);
@@ -202,6 +217,11 @@ test('an open snippet too long to hand over is left for the assistant to read, a
 test('what the panel is given is short, whatever the snippet holds', async (t) => {
 	const { lookUp, matchDir } = await setup(t, { most: 200_000 });
 	writeFileSync(join(matchDir, 'wide.yml'), `matches:\n  - triggers: [${Array.from({ length: 9 }, (_, index) => `":zebra${index}${'z'.repeat(200)}"`).join(', ')}]\n    label: "${'Zebra '.repeat(100)}"\n    replace: "${'stripes '.repeat(100)}"\n`);
+	writeFileSync(join(matchDir, `${'n'.repeat(150)}.yml`), 'matches:\n  - trigger: ":okapi"\n    replace: "An okapi"\n');
+	const named = (await lookUp({ text: 'okapi', context: null })).found;
+	assert.equal(named.length, 1);
+	assert.equal(named[0].fileName, `${'n'.repeat(79)}…`);
+	assert.equal(named[0].fileId, `local:${'n'.repeat(150)}.yml`);
 	const { found } = await lookUp({ text: 'zebra', context: null });
 	assert.equal(found.length, 1);
 	assert.equal(found[0].triggers.length, 5);

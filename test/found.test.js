@@ -67,6 +67,15 @@ test('a row shows at most five triggers of at most 80 characters, and a snippet 
 	assert.deepEqual(whereNow(long, { fileId: 'local:wide.yml', index: 0, triggers: row }), { view: 'snippet', fileId: 'local:wide.yml', index: 1 });
 });
 
+test('a snippet with no trigger at all is found by having none', () => {
+	const bare = [{ id: 'local:bare.yml', name: 'bare.yml', matches: [{ trigger: ';a', replace: 'x' }, { replace: 'No trigger here' }] }];
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 1, triggers: [] }), { view: 'snippet', fileId: 'local:bare.yml', index: 1 });
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 0, triggers: [] }), { view: 'snippet', fileId: 'local:bare.yml', index: 1 });
+	// A row whose triggers are not a list is no row: it names no snippet.
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 1 }), { view: 'file', fileId: 'local:bare.yml' });
+	assert.deepEqual(whereNow(bare, { fileId: 'local:bare.yml', index: 1, triggers: '' }), { view: 'file', fileId: 'local:bare.yml' });
+});
+
 test('a row that is not a row opens nothing, and nothing in a file can make the finder throw', () => {
 	for (const bad of [null, undefined, 'local:base.yml', 7, [], {}, { fileId: 7 }, { fileId: 'local:base.yml' }, { fileId: 'local:base.yml', index: 0, triggers: 'x' }]) {
 		const where = whereNow(files(), bad);

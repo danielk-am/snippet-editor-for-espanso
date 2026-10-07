@@ -135,6 +135,10 @@ test('a word also counts in a shorter form', () => {
 	assert.deepEqual(form('stopped'), ['stopped', 'stopp', 'stop']);
 	// Too short once cut, so it stays as it is.
 	assert.deepEqual(form('bus'), ['bus']);
+	assert.deepEqual(form('pays'), ['pays']);
+	// A trigger is looked for as it was written, and in no other form.
+	assert.deepEqual(form(';thanks'), [';thanks']);
+	assert.deepEqual(form(':meeting'), [':meeting']);
 	assert.deepEqual(form('class'), ['class']);
 
 	const files = [{ id: 'local:a.yml', source: 'local', name: 'a.yml', matches: [{ trigger: ':gr', replace: 'Thank you so much' }] }];
@@ -195,6 +199,23 @@ test('a word in a trigger counts most, then a label or search term, then the tex
 	assert.deepEqual(ids(hits), ['local:a.yml#3', 'local:a.yml#4', 'local:a.yml#1', 'local:a.yml#2', 'local:a.yml#0']);
 	assert.deepEqual(hits.map((hit) => hit.weight), [4, 4, 3, 3, 1]);
 	assert.deepEqual(hits.map((hit) => hit.inTrigger), [true, true, false, false, false]);
+});
+
+test('holding more of the words counts for more than where one of them was found', () => {
+	const files = [
+		{
+			id: 'local:a.yml',
+			source: 'local',
+			name: 'a.yml',
+			matches: [
+				{ trigger: ':invoice', replace: 'x' },
+				{ trigger: ':b', replace: 'your invoice is overdue' },
+			],
+		},
+	];
+	const hits = likelyFiles(files, 'invoice overdue');
+	assert.deepEqual(ids(hits), ['local:a.yml#1', 'local:a.yml#0']);
+	assert.deepEqual(hits.map((hit) => [hit.matched, hit.weight]), [[2, 2], [1, 4]]);
 });
 
 test('a trigger named with its sign keeps a snippet, whatever else the message says', () => {

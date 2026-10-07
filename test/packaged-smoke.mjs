@@ -166,6 +166,18 @@ try {
 	check(assistant.ok && JSON.stringify(assistant.ids) === JSON.stringify(['claude', 'codex', 'ollama']), `the packaged app did not report its three backends: ${JSON.stringify(assistant.states)}`);
 	console.log(`Packaged app: backends on this computer: ${assistant.states.join(', ')}`);
 
+	// What the assistant's "Closest matches" are made with is in the package
+	// and loads in its window. No message is sent here: on a computer with a
+	// backend signed in, that would be a real call to a model.
+	const closest = await client.evaluate(`(async () => {
+		const { likelyFiles } = await import('../shared/search.js');
+		const { whereNow } = await import('../shared/found.js');
+		const files = [{ id: 'local:a.yml', name: 'a.yml', source: 'local', matches: [{ trigger: ';hello', replace: 'Hello' }, { triggers: [';ty', ';thanks'], replace: 'Thank you!' }] }];
+		const hits = likelyFiles(files, 'Find my snippet for saying thanks');
+		return { found: hits.map((hit) => hit.index), where: whereNow(files, { fileId: 'local:a.yml', index: 0, triggers: [';ty', ';thanks'] }) };
+	})()`);
+	check(JSON.stringify(closest) === JSON.stringify({ found: [1], where: { view: 'snippet', fileId: 'local:a.yml', index: 1 } }), `the packaged window could not find the closest matches: ${JSON.stringify(closest)}`);
+
 	check(client.problems.length === 0, `console problems: ${client.problems.join(' | ')}`);
 	client.close();
 } catch (error) {

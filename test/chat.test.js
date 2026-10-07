@@ -516,6 +516,18 @@ test('ollama: the closest matches are told first, and go to it ahead of the mess
 	assert.ok(content.startsWith('<looked_up_by_the_app>\n'));
 	assert.ok(content.endsWith('</looked_up_by_the_app>\n\nWhere is my thanks snippet?'));
 	assert.ok(content.includes('"triggers":[";ty",";thanks"]'));
+
+	// In a longer conversation it is the new message that is looked up, not an earlier one.
+	const later = await api.answer({
+		backend: 'ollama',
+		model: 'qwen3:8b',
+		messages: [
+			{ role: 'user', text: 'Where is my hello snippet?' },
+			{ role: 'assistant', text: 'It is ;hello.' },
+			{ role: 'user', text: 'And my thanks snippet?' },
+		],
+	});
+	assert.deepEqual(later[0], { type: 'found', hits: THANKS });
 });
 
 test('a message with nothing to search for, or that nothing matches, tells of no matches', options, async (t) => {
