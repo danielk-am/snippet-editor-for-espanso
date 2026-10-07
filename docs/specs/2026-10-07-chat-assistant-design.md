@@ -204,6 +204,8 @@ Links in an answer show as text and are not clickable. The assistant's Markdown 
 
 The footer always names who answers. The first time you pick a backend that sends text away, the panel says so once.
 
+Which model answers can be chosen for each backend since `2026-10-07-assistant-models-design.md`.
+
 What is sent grew with `2026-10-07-assistant-speed-design.md`: the closest matches and what is open now go with every message. The notice says so and is asked once more.
 
 ## Other people's text
