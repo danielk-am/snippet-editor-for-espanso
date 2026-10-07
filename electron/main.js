@@ -5,6 +5,9 @@ import { quitWhenDisposed } from './quit.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 
 let win = null;
+// Set once the app is ready. Says whether a window may open: not while the
+// app is closing, when asking for one brings the app back once it has gone.
+let leaving = null;
 const send = (channel, ...args) => {
 	if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
 };
@@ -74,6 +77,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.quit();
 } else {
 	app.on('second-instance', () => {
+		if (leaving && !leaving.mayOpen()) return;
 		if (!win) return;
 		if (win.isMinimized()) win.restore();
 		win.focus();
@@ -95,12 +99,13 @@ if (!app.requestSingleInstanceLock()) {
 		Menu.setApplicationMenu(buildMenu());
 		open();
 
-		app.on('activate', () => {
-			if (BrowserWindow.getAllWindows().length === 0) open();
-		});
 		// An answer under way is stopped, with its program and its listener,
 		// before the app goes.
-		quitWhenDisposed({ app, dispose: () => backend.dispose() });
+		leaving = quitWhenDisposed({ app, dispose: () => backend.dispose() });
+		app.on('activate', () => {
+			if (!leaving.mayOpen()) return;
+			if (BrowserWindow.getAllWindows().length === 0) open();
+		});
 	});
 
 	app.on('window-all-closed', () => {

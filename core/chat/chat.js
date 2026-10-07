@@ -305,9 +305,11 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				turn.stopped = true;
 				turn.open = false;
 				turn.stop();
-				await turn.finished;
 			}
-			runner.stopAll();
+			// The app is going. A program is stopped at once, not asked and
+			// waited for: while this waits, the app is neither open nor gone.
+			runner.shutDown();
+			if (turn) await turn.finished;
 		},
 	};
 }

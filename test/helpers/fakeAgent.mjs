@@ -16,6 +16,7 @@
 //   PID                        answer with its own process number
 //   WAIT <milliseconds>        pause
 //   HANG                       stop printing and stay alive
+//   STUBBORN                   from here on, take no notice of a polite stop
 //   FLOOD                      print text without end
 //   EXIT <code> <stderr>       end at once with this code, saying this on standard error
 //   SIGNEDOUT                  end the way the real tool does when signed out
@@ -166,6 +167,7 @@ for (const step of steps) {
 		await use('snippets_add_snippet', { file_id: 'local:base.yml', snippet: { trigger, replace }, version: file.structuredContent.version });
 	} else if (word === 'ARGS') say(JSON.stringify({ args, cwd: process.cwd(), input }));
 	else if (word === 'SHELL') print({ type: 'item.started', item: { id: 'cmd', type: 'command_execution', command: 'cat /etc/hosts', aggregated_output: '', exit_code: null, status: 'in_progress' } });
+	else if (word === 'STUBBORN') process.on('SIGTERM', () => {});
 	else if (word === 'HANG') await new Promise(() => setInterval(() => {}, 1000));
 	else if (word === 'FLOOD') {
 		for (;;) {
