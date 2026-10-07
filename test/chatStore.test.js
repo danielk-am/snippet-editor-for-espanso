@@ -295,6 +295,8 @@ test('a model is remembered for each backend by itself, and the Ollama model fro
 	// Once there is a place for each, the old one is not read again.
 	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'old-one', models: { ollama: 'new-one' } }, conversations: [], current: null }));
 	assert.deepEqual(createChatStore(kept).load().prefs.models, { claude: '', codex: '', ollama: 'new-one' });
+	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'old-one', models: { claude: 'haiku' } }, conversations: [], current: null }));
+	assert.deepEqual(createChatStore(kept).load().prefs.models, { claude: 'haiku', codex: '', ollama: '' });
 });
 
 test('a damaged choice of model becomes no choice', () => {

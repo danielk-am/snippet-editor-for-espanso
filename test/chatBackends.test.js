@@ -283,6 +283,10 @@ test('only a plain name is offered as a model, once, and what is said of it is k
 				model('odd-label', { display_name: 7, description: ['x'] }),
 				model('long-words', { display_name: 'L'.repeat(300), description: 'D'.repeat(900) }),
 				model('lines', { display_name: 'Two\nlines', description: 'One\n\ttwo   three' }),
+				// Not text at all, though each would read as a plain name if it were made into text.
+				{ slug: 7, visibility: 'list' },
+				{ slug: ['in-a-list'], visibility: 'list' },
+				{ slug: true, visibility: 'list' },
 			],
 		})
 	);
