@@ -581,10 +581,25 @@ test('a look that began before a backend was found gone does not vouch for it af
 	const failed = await context.ask('codex', 'SIGNEDOUT');
 	assert.equal(failed.at(-1).code, 'SIGNED_OUT');
 	context.backends.codex = { ...context.backends.codex, ready: false, state: 'signed-out', message: 'Codex is not signed in.' };
-	// That look read the backends before the answer failed, and says "ready".
+	// "Check again", pressed now, is not handed the look that was already under way: it gets a new one.
+	const again = context.chat.status();
+	assert.equal(context.checks.count, 3);
+	// The older look read the backends before the answer failed, and says "ready".
 	assert.equal((await under).find((item) => item.id === 'codex').ready, true);
-	// The next message does not go on its word: it looks again, and is refused.
+	assert.equal((await again).find((item) => item.id === 'codex').ready, false);
+	// The next message goes on the newer one, and is refused.
 	await assert.rejects(context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY again' }] }), (error) => error.code === 'NOT_READY' && error.message === 'Codex is not signed in.');
+	assert.equal(context.checks.count, 3);
+});
+
+test('with no look made since a backend was found gone, the next message makes one, whatever an older look says later', options, async (t) => {
+	const context = await setup(t, { statusDelay: 400 });
+	await context.chat.status();
+	const under = context.chat.status();
+	await context.ask('codex', 'SIGNEDOUT');
+	context.backends.codex = { ...context.backends.codex, ready: false, state: 'signed-out', message: 'Codex is not signed in.' };
+	assert.equal((await under).find((item) => item.id === 'codex').ready, true);
+	await assert.rejects(context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY again' }] }), (error) => error.code === 'NOT_READY');
 	assert.equal(context.checks.count, 3);
 });
 

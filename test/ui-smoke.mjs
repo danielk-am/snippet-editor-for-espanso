@@ -779,8 +779,17 @@ async function run() {
 			fs.writeFileSync(path.join(matchDir, 'zebras.yml'), zebras(longZebra));
 			await waitFor(`[...document.querySelectorAll('.nav-item--file')].some((el) => el.textContent.includes('zebras.yml'))`, 'the new file to be seen');
 			const rows = `[...${lastAnswer}.querySelectorAll('.found__row')]`;
+			// The window is made to hear of the matches before it knows the answer's
+			// name: they are kept, and shown once it does.
+			const sendNow = backend.chat.send;
+			backend.chat.send = async (input) => {
+				const sent = await sendNow(input);
+				await sleep(400);
+				return sent;
+			};
 			await ask('Which zebra snippets do I have?\nSAY These.\nHANG');
 			await waitFor(`document.querySelector('.chat__working') && ${rows}.length === 3`, 'the closest matches while the answer is under way');
+			backend.chat.send = sendNow;
 			check((await js(`${lastAnswer}.children[0].className`)) === 'found', 'the closest matches are not at the top of the answer');
 			// They arrive a moment after the message, and the panel follows them down.
 			const atBottom = `(() => { const log = document.querySelector('.chat__log'); return log.scrollHeight - log.scrollTop - log.clientHeight < 2; })()`;
@@ -816,9 +825,22 @@ async function run() {
 			await waitFor(`[...document.querySelectorAll('.nav-item--file')].find((el) => el.textContent.includes('zebras.yml'))?.querySelector('.nav-count')?.textContent === '8'`, 'the changed file to be seen');
 			await js(`${rows}.find((el) => el.querySelector('.found__triggers').textContent === ':zebra1').click()`);
 			await waitFor(`document.querySelector('.crumbs__current')?.textContent === ':zebra1'`, 'the row to open its snippet where it is now');
-			// The long one is gone from the file: its row opens the file.
+			// With unsaved edits open, a row asks before it leaves them.
+			await waitFor(`document.querySelector('.editor textarea')`, 'the editor for the opened row');
+			await js(`window.__ui.type('.editor textarea', 'Edited before a row was pressed')`);
+			await waitFor(`window.__ui.byText('Unsaved changes', '.badge')`, 'the unsaved badge before a row is pressed');
+			await js(`${rows}.find((el) => el.querySelector('.found__triggers').textContent === ':zebra2').click()`);
+			await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Discard unsaved changes?'`, 'a row to ask before leaving unsaved edits');
+			check((await js(`document.querySelector('.crumbs__current').textContent`)) === ':zebra1', 'a row left unsaved edits without asking');
+			await js(`window.__ui.click('Keep editing')`);
+			await waitFor(`!document.querySelector('.dialog')`, 'the question to close');
+			check((await js(`document.querySelector('.editor textarea').value`)) === 'Edited before a row was pressed', 'keeping the edits lost them');
+			// The long one is gone from the file: its row opens the file, once the edits are let go.
 			await js(`${rows}[0].click()`);
+			await waitFor(`document.querySelector('.dialog h2')?.textContent === 'Discard unsaved changes?'`, 'the question again');
+			await js(`window.__ui.click('Discard changes')`);
 			await waitFor(`document.querySelector('.crumbs__current')?.textContent === 'zebras.yml' && document.querySelector('.snippet-list')`, 'a row whose snippet is gone to open its file');
+			check(!onDisk('zebras.yml').includes('Edited before a row was pressed'), 'discarded edits reached the file');
 			check(!(await js(`document.querySelector('.chat').hidden`)), 'beside the page, the assistant closed when a row was opened');
 
 			// History, and a new conversation.
