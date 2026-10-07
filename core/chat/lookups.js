@@ -1,4 +1,5 @@
 import { foundItem } from '../../mcp/tools.mjs';
+import { rowTriggers } from '../../shared/found.js';
 import { keywordsOf } from '../../shared/search.js';
 
 // What the app looks up before the assistant is asked, so that it need not
@@ -26,7 +27,7 @@ const shown = (item) => ({
 	source: item.source,
 	...(item.package ? { package: cut(item.package, 80) } : {}),
 	index: item.index,
-	triggers: item.triggers.slice(0, 5).map((trigger) => cut(trigger, 80)),
+	triggers: rowTriggers(item.triggers),
 	label: cut(item.label, 80),
 	preview: item.preview,
 });
