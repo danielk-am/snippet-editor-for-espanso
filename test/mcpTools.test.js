@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { createGit } from '../core/git.js';
 import { createApiClient } from '../mcp/client.mjs';
-import { createTools } from '../mcp/tools.mjs';
+import { createTools, foundItem } from '../mcp/tools.mjs';
+import { likelyFiles, searchFiles } from '../shared/search.js';
 import { startApi } from './helpers/apiFixture.js';
 import { MANIFEST, gitEnv, seeded } from './helpers/teamRemote.js';
 
@@ -55,6 +56,19 @@ test('twelve tools are listed, read tools first, each described for a model and 
 });
 
 // --- reading ---------------------------------------------------------------------------
+
+test('a match is shaped one way, whether the search tool or the app found it', async (t) => {
+	const { call } = await setup(t);
+	const files = [
+		{ id: 'local:base.yml', name: 'base.yml', source: 'local', matches: [{ trigger: ';hello', replace: 'Hello there' }, { trigger: ';sig', label: 'Signature', replace: 'x'.repeat(200) }] },
+		{ id: 'package:goodbyes:package.yml', name: 'package.yml', source: 'package', package: 'goodbyes', matches: [{ triggers: [':bye', ':cya'], replace: 'Goodbye!' }] },
+	];
+	assert.deepEqual(searchFiles(files, 'goodbye').map(foundItem), [{ file_id: 'package:goodbyes:package.yml', file: 'package.yml', source: 'package', package: 'goodbyes', index: 0, triggers: [':bye', ':cya'], label: '', preview: 'Goodbye!' }]);
+	assert.deepEqual(likelyFiles(files, 'my signature please').map(foundItem), [{ file_id: 'local:base.yml', file: 'base.yml', source: 'local', index: 1, triggers: [';sig'], label: 'Signature', preview: `${'x'.repeat(117)}...` }]);
+	// What the tool returns is made of the same items.
+	const [item] = (await call('snippets_search', { query: 'goodbye' })).items;
+	assert.deepEqual(Object.keys(item), Object.keys(foundItem(searchFiles(files, 'goodbye')[0])));
+});
 
 test('snippets_search finds snippets across files and packages, with names beside ids', async (t) => {
 	const { call } = await setup(t);

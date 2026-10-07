@@ -119,6 +119,10 @@ export const outOfRange = (file) =>
 
 const brief = (match, index) => ({ index, triggers: triggersOf(match), label: isObject(match) ? textOf(match.label) : '', preview: previewOf(match) });
 
+// A search hit as a tool reports it. The chat's own lookups use it too, so a
+// match reads the same whoever found it.
+export const foundItem = (hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) });
+
 function page(items, { offset = 0, limit = 50 }) {
 	const shown = items.slice(offset, offset + limit);
 	const more = offset + shown.length < items.length;
@@ -204,7 +208,7 @@ export function createTools({ api, propose }) {
 			inputSchema: schema({ query: text('Words to look for. All must appear. A trigger works too. Examples: "refund", ":sig".'), limit: LIMIT, offset: OFFSET }, ['query']),
 			async run({ query, limit = 50, offset = 0 }) {
 				const hits = await ask('GET', '/search', { query: { q: query, limit: 1000 } });
-				const found = hits.map((hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) }));
+				const found = hits.map(foundItem);
 				const data = fit(page(found, { offset, limit }), 'items', { offset, limit });
 				if (!found.length) data.note = 'No snippets match. Try fewer or different words: search looks at triggers, labels, search terms and the text a snippet expands to.';
 				// The app returns 1000 hits at most.
