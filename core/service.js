@@ -59,7 +59,9 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		const folder = createHash('sha256').update(location.matchDir).digest('hex').slice(0, 12);
 		backupDir = path.join(userDataDir, 'backups', folder);
 		store = createStore({ matchDir: location.matchDir, backupDir, maxBackups: settings.maxBackups });
-		teamPackages = createTeamPackages({ matchDir: location.matchDir });
+		// Told what counts as an address, as the repositories are: a package
+		// belongs to the repository its marker names.
+		teamPackages = createTeamPackages({ matchDir: location.matchDir, allowLocal: allowLocalRepositories });
 		team = null;
 		teamProblem = '';
 		// The setting is a list. Until the service holds several, it uses the first.

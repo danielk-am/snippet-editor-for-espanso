@@ -384,3 +384,177 @@ test('closing the app stops any git call still under way', async (t) => {
 	service.dispose();
 	assert.equal(stopped, 1);
 });
+
+// --- a package belongs to the repository it was installed from ------------------------
+
+// Two repositories that offer the same two packages, as the service holds
+// them: each its own `team`, both installing into one match folder.
+function twoTeams({ first = seeded(), second = seeded() } = {}) {
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teams-'));
+	const matchDir = join(root, 'match');
+	const packages = createTeamPackages({ matchDir, allowLocal: true });
+	const real = createGit({ allowLocal: true, env: gitEnv(first.root) });
+	// Every git call, so a test can show that none was made.
+	const calls = [];
+	const git = (args, options) => (calls.push(args), real(args, options));
+	const teamFor = (remote) => createTeam({ dataDir: join(root, 'data'), address: parseRepositoryAddress(remote.url, { allowLocal: true }), git, installed: () => packages });
+	const markerFile = (name) => join(matchDir, 'team', name, '.snippet-editor.json');
+	return { root, matchDir, packages, calls, markerFile, remotes: { first, second }, first: teamFor(first), second: teamFor(second), readMarker: (name) => JSON.parse(readFileSync(markerFile(name), 'utf8')) };
+}
+
+const shown = (status, name) => (({ installed, updateAvailable, installedFrom }) => [installed, updateAvailable, installedFrom])(named(status.packages)[name]);
+const taken = (name, from) => `A package named ${name} is already installed from ${from}. Remove it first, then install this one.`;
+
+test('a package shows as installed only for the repository it came from; the other says where it is from', async () => {
+	const { first, second, remotes } = twoTeams();
+	await first.connect();
+	await second.connect();
+	assert.deepEqual([shown(await first.status(), 'goodbyes'), shown(await second.status(), 'goodbyes')], [[false, false, ''], [false, false, '']]);
+
+	await first.install('goodbyes');
+	assert.deepEqual(shown(await first.status(), 'goodbyes'), [true, false, '']);
+	// The two repositories hold the very same package, and still it is not the second's.
+	assert.deepEqual(shown(await second.status(), 'goodbyes'), [false, false, remotes.first.url]);
+	assert.deepEqual([shown(await first.status(), 'support'), shown(await second.status(), 'support')], [[false, false, ''], [false, false, '']]);
+});
+
+test('a newer package of the same name in another repository is not an update for this one', async () => {
+	const { first, second, remotes, matchDir } = twoTeams();
+	await first.connect();
+	await second.connect();
+	await first.install('goodbyes');
+	remotes.second.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'A newer goodbye, from the other team']) });
+	assert.deepEqual(shown(await second.refresh(), 'goodbyes'), [false, false, remotes.first.url]);
+	assert.deepEqual(shown(await first.refresh(), 'goodbyes'), [true, false, '']);
+	// Its own repository's change is its update.
+	remotes.first.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Goodbye, and thank you']) });
+	assert.deepEqual(shown(await first.refresh(), 'goodbyes'), [true, true, '']);
+	assert.deepEqual(shown(await first.install('goodbyes'), 'goodbyes'), [true, false, '']);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'Goodbye, and thank you']));
+});
+
+test('installing a name another repository holds is refused before any file is read', async () => {
+	const { first, second, remotes, matchDir, calls, readMarker } = twoTeams();
+	await first.connect();
+	await second.connect();
+	await first.install('goodbyes');
+	const before = readdirSync(join(matchDir, 'team', 'goodbyes')).sort().map((entry) => [entry, readFileSync(join(matchDir, 'team', 'goodbyes', entry), 'utf8')]);
+
+	calls.length = 0;
+	await fails(second.install('goodbyes'), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', taken('goodbyes', remotes.first.url)]));
+	// Not even the listing was asked for.
+	assert.deepEqual(calls, []);
+	assert.deepEqual(readdirSync(join(matchDir, 'team', 'goodbyes')).sort().map((entry) => [entry, readFileSync(join(matchDir, 'team', 'goodbyes', entry), 'utf8')]), before);
+	assert.equal(readMarker('goodbyes').repository, remotes.first.url);
+
+	// Accepting commands does not get round it, and a free name still installs.
+	await fails(second.install('goodbyes', { acceptCommands: true }), (error) => assert.equal(error.code, 'EXISTS'));
+	assert.deepEqual(shown(await second.install('support'), 'support'), [true, false, '']);
+	assert.equal(readMarker('support').repository, remotes.second.url);
+
+	// Removed, the name is the second's to take.
+	await (await import('node:fs/promises')).rm(join(matchDir, 'team', 'goodbyes'), { recursive: true });
+	assert.deepEqual(shown(await second.install('goodbyes'), 'goodbyes'), [true, false, '']);
+	assert.deepEqual(shown(await first.status(), 'goodbyes'), [false, false, remotes.second.url]);
+});
+
+test('each repository lists as left behind only the packages that were its own', async () => {
+	const { first, second, remotes } = twoTeams();
+	await first.connect();
+	await second.connect();
+	await first.install('goodbyes');
+	await second.install('support');
+	const gone = (name, extra = name === 'support' ? { 'packages/support/escalations.yml': null } : {}) => ({ [`packages/${name}/_manifest.yml`]: null, [`packages/${name}/${name === 'support' ? 'replies' : 'package'}.yml`]: null, ...extra });
+
+	// The first repository drops both. Only goodbyes was its own.
+	remotes.first.commit({ ...gone('goodbyes'), ...gone('support'), 'packages/other/_manifest.yml': MANIFEST('other'), 'packages/other/package.yml': MATCHES([':o', 'Other']) });
+	const mine = await first.refresh();
+	assert.deepEqual([mine.packages.map((pkg) => pkg.name), mine.installedOnly], [['other'], [{ name: 'goodbyes' }]]);
+	// The second still offers both, so it has nothing left behind: goodbyes is not its own.
+	assert.deepEqual((await second.status()).installedOnly, []);
+
+	remotes.second.commit(gone('support'));
+	const theirs = await second.refresh();
+	assert.deepEqual([theirs.packages.map((pkg) => pkg.name), theirs.installedOnly], [['goodbyes'], [{ name: 'support' }]]);
+	assert.deepEqual(shown(theirs, 'goodbyes'), [false, false, remotes.first.url]);
+});
+
+test('a marker that names no repository shows as needing an update wherever the name is offered, and either repository repairs it', async () => {
+	for (const damage of [() => '{ not json', (marker) => JSON.stringify({ ...marker, repository: '' }), (marker) => JSON.stringify({ ...marker, repository: 'somewhere on the internet' })]) {
+		const { first, second, remotes, markerFile, readMarker } = twoTeams();
+		await first.connect();
+		await second.connect();
+		await first.install('goodbyes');
+		writeFileSync(markerFile('goodbyes'), damage(readMarker('goodbyes')));
+
+		assert.deepEqual([shown(await first.status(), 'goodbyes'), shown(await second.status(), 'goodbyes')], [[true, true, ''], [true, true, '']]);
+		// It is neither repository's to list as left behind.
+		assert.deepEqual([(await first.status()).installedOnly, (await second.status()).installedOnly], [[], []]);
+
+		assert.deepEqual(shown(await second.install('goodbyes'), 'goodbyes'), [true, false, '']);
+		assert.deepEqual([readMarker('goodbyes').repository, readMarker('goodbyes').state], [remotes.second.url, 'installed']);
+		assert.deepEqual(shown(await first.status(), 'goodbyes'), [false, false, remotes.second.url]);
+	}
+});
+
+test('two repositories installing one name at the same moment: one is installed and the other refused', async () => {
+	const { first, second, remotes, matchDir, readMarker } = twoTeams();
+	await first.connect();
+	await second.connect();
+	remotes.second.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'From the second']), 'packages/goodbyes/second.yml': MATCHES([':s', 'second']) });
+	await second.refresh();
+
+	const results = await Promise.allSettled([first.install('goodbyes'), second.install('goodbyes')]);
+	assert.deepEqual(results.map((result) => result.status).sort(), ['fulfilled', 'rejected']);
+	const winner = results[0].status === 'fulfilled' ? 'first' : 'second';
+	const refused = results.find((result) => result.status === 'rejected').reason;
+	assert.deepEqual([refused.code, refused.message], ['EXISTS', taken('goodbyes', remotes[winner].url)]);
+
+	// The folder is the winner's, whole, with nothing of the other's in it.
+	const marker = readMarker('goodbyes');
+	assert.deepEqual([marker.repository, marker.state], [remotes[winner].url, 'installed']);
+	assert.deepEqual(readdirSync(join(matchDir, 'team', 'goodbyes')).sort(), winner === 'first' ? ['.snippet-editor.json', '_manifest.yml', 'package.yml'] : ['.snippet-editor.json', '_manifest.yml', 'package.yml', 'second.yml']);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), winner === 'first' ? MATCHES([':bye', 'Goodbye for now'], [':cheers', 'Cheers,']) : MATCHES([':bye', 'From the second']));
+	const [mine, theirs] = winner === 'first' ? [first, second] : [second, first];
+	assert.deepEqual([shown(await mine.status(), 'goodbyes'), shown(await theirs.status(), 'goodbyes')], [[true, false, ''], [false, false, remotes[winner].url]]);
+});
+
+test('a package installed under the SSH address is still its own when the repository is connected over HTTPS', async () => {
+	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teams-'));
+	const remote = seeded();
+	const address = parseRepositoryAddress('https://github.com/acme/team-snippets');
+	// The app as it runs, with no folders allowed as addresses. Git alone is
+	// pointed at the test repository when it is asked for the GitHub address.
+	const real = createGit({ allowLocal: true, env: gitEnv(remote.root) });
+	const git = (args, options) => real(args.map((arg) => (arg === address.url ? remote.url : arg)), options);
+	const packages = createTeamPackages({ matchDir: join(root, 'match') });
+	const team = createTeam({ dataDir: join(root, 'data'), address, git, installed: () => packages });
+	const markerFile = join(root, 'match', 'team', 'goodbyes', '.snippet-editor.json');
+	const marker = () => JSON.parse(readFileSync(markerFile, 'utf8'));
+	await team.connect();
+
+	assert.deepEqual(shown(await team.install('goodbyes'), 'goodbyes'), [true, false, '']);
+	assert.equal(marker().repository, 'https://github.com/acme/team-snippets.git');
+
+	for (const repository of ['git@github.com:acme/team-snippets.git', 'ssh://git@github.com/acme/team-snippets.git', 'git@GitHub.com:Acme/Team-Snippets.git']) {
+		writeFileSync(markerFile, JSON.stringify({ ...marker(), repository }));
+		assert.deepEqual(shown(await team.status(), 'goodbyes'), [true, false, ''], repository);
+	}
+	// Its update is still offered, and installing it is not refused.
+	remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Goodbye, and thank you']) });
+	assert.deepEqual(shown(await team.refresh(), 'goodbyes'), [true, true, '']);
+	assert.deepEqual(shown(await team.install('goodbyes'), 'goodbyes'), [true, false, '']);
+	assert.equal(marker().repository, 'https://github.com/acme/team-snippets.git');
+
+	// Left behind, it is listed under this repository whichever form its marker has.
+	writeFileSync(markerFile, JSON.stringify({ ...marker(), repository: 'git@github.com:acme/team-snippets.git' }));
+	remote.commit({ 'packages/goodbyes/_manifest.yml': null, 'packages/goodbyes/package.yml': null });
+	assert.deepEqual((await team.refresh()).installedOnly, [{ name: 'goodbyes' }]);
+
+	// The same name under another owner is someone else's.
+	writeFileSync(markerFile, JSON.stringify({ ...marker(), repository: 'git@github.com:other/team-snippets.git' }));
+	assert.deepEqual((await team.status()).installedOnly, []);
+	remote.commit({ 'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes'), 'packages/goodbyes/package.yml': MATCHES([':bye', 'Back again']) });
+	assert.deepEqual(shown(await team.refresh(), 'goodbyes'), [false, false, 'git@github.com:other/team-snippets.git']);
+	await fails(team.install('goodbyes'), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', taken('goodbyes', 'other/team-snippets')]));
+});

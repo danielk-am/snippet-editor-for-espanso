@@ -182,3 +182,162 @@ test('an empty folder left by an install that never started is not in the way', 
 	writeFileSync(join(dir('support'), 'notes.txt'), 'mine');
 	await rejectsWith(packages.install({ name: 'support', files: GOODBYES, ...SOURCE }), 'EXISTS');
 });
+
+// --- a package belongs to the repository in its marker -----------------------------
+
+const OTHER = { repository: 'https://github.com/other/team.git', commit: 'e'.repeat(40), tree: 'f'.repeat(40) };
+const THEIRS = [file('package.yml', 'matches:\n  - trigger: ":theirs"\n    replace: "theirs"\n'), file('new.yml', 'matches: []\n')];
+const INSTALLED_AT = '2026-10-06T10:15:00.000Z';
+const TAKEN = 'A package named goodbyes is already installed from acme/team. Remove it first, then install this one.';
+
+// Every entry of a folder with what it holds, to show that nothing moved.
+const snapshot = (folder) => readdirSync(folder).sort().map((entry) => [entry, readFileSync(join(folder, entry), 'utf8')]);
+
+test('a package installed from one repository is not overwritten from another, and its folder is left exactly as it was', async () => {
+	const { packages, dir } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const before = snapshot(dir('goodbyes'));
+	const error = await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER }), 'EXISTS');
+	assert.equal(error.message, TAKEN);
+	assert.deepEqual(snapshot(dir('goodbyes')), before);
+	assert.deepEqual((await packages.installed()).get('goodbyes'), { ...SOURCE, package: 'goodbyes', state: 'installed', installedAt: INSTALLED_AT });
+});
+
+test('an install that was cut short still belongs to the repository that started it', async () => {
+	const { packages, dir } = setup();
+	mkdirSync(dir('goodbyes'), { recursive: true });
+	writeFileSync(join(dir('goodbyes'), MARKER), JSON.stringify({ ...SOURCE, package: 'goodbyes', state: 'installing', installedAt: 'x' }));
+	writeFileSync(join(dir('goodbyes'), '_manifest.yml'), 'name: goodbyes\n');
+	const before = snapshot(dir('goodbyes'));
+	const error = await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER }), 'EXISTS');
+	assert.equal(error.message, TAKEN);
+	assert.deepEqual(snapshot(dir('goodbyes')), before);
+	// Its own repository finishes it.
+	assert.equal((await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE })).state, 'installed');
+});
+
+test('once a package is removed, its name is free for another repository', async () => {
+	const { packages, dir } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER }), 'EXISTS');
+	await packages.remove('goodbyes');
+	const marker = await packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER });
+	assert.deepEqual([marker.repository, marker.state], [OTHER.repository, 'installed']);
+	assert.deepEqual(readdirSync(dir('goodbyes')).sort(), [MARKER, 'new.yml', 'package.yml']);
+	// And now the first repository is the one refused, by the other's name.
+	const error = await rejectsWith(packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE }), 'EXISTS');
+	assert.equal(error.message, 'A package named goodbyes is already installed from other/team. Remove it first, then install this one.');
+});
+
+test('the same repository under another form of its address updates its own package', async () => {
+	const { packages, read } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	for (const repository of ['git@github.com:acme/team.git', 'ssh://git@github.com/acme/team.git', 'acme/team', 'https://GitHub.com/Acme/Team', SOURCE.repository]) {
+		const marker = await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE, repository });
+		assert.deepEqual([marker.repository, marker.state], [repository, 'installed'], repository);
+		assert.equal(JSON.parse(read('goodbyes', MARKER)).repository, repository);
+	}
+	// A repository of the same name under another owner, or on another host, is another repository.
+	for (const repository of ['https://github.com/acme2/team.git', 'https://github.example.com/acme/team.git', 'git@github.com:acme/team-two.git']) {
+		assert.equal((await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER, repository }), 'EXISTS')).message, TAKEN, repository);
+	}
+});
+
+test('a marker that names no repository is repaired from any repository', async () => {
+	const damaged = [
+		'{ not json',
+		'',
+		'[]',
+		'{}',
+		JSON.stringify({ ...SOURCE, repository: '', package: 'goodbyes', state: 'installed', installedAt: 'x' }),
+		JSON.stringify({ ...SOURCE, repository: 42, package: 'goodbyes', state: 'installed', installedAt: 'x' }),
+		JSON.stringify({ ...SOURCE, repository: 'somewhere on the internet', package: 'goodbyes', state: 'installed', installedAt: 'x' }),
+		JSON.stringify({ ...SOURCE, repository: 'ext::sh -c "touch /tmp/owned"', package: 'goodbyes', state: 'installed', installedAt: 'x' }),
+		// A folder on this computer is no repository to the app as it runs.
+		JSON.stringify({ ...SOURCE, repository: '/tmp/remotes/team.git', package: 'goodbyes', state: 'installed', installedAt: 'x' }),
+	];
+	for (const text of damaged) {
+		const { packages, dir } = setup();
+		mkdirSync(dir('goodbyes'), { recursive: true });
+		writeFileSync(join(dir('goodbyes'), MARKER), text);
+		writeFileSync(join(dir('goodbyes'), 'old.yml'), 'matches: []\n');
+		const marker = await packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER });
+		assert.deepEqual(marker, { ...OTHER, package: 'goodbyes', state: 'installed', installedAt: INSTALLED_AT }, text);
+		assert.deepEqual(readdirSync(dir('goodbyes')).sort(), [MARKER, 'new.yml', 'package.yml'], text);
+		// Repaired, it belongs to the repository that repaired it.
+		await rejectsWith(packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE }), 'EXISTS');
+	}
+});
+
+test('an install that names no repository cannot take over a package that has one', async () => {
+	const { packages, dir } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const before = snapshot(dir('goodbyes'));
+	for (const repository of ['', undefined, 42, 'somewhere on the internet', '/tmp/remotes/team.git']) {
+		const error = await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER, repository }), 'EXISTS');
+		assert.equal(error.message, TAKEN, String(repository));
+	}
+	assert.deepEqual(snapshot(dir('goodbyes')), before);
+});
+
+test('two installs of one name from two repositories at the same moment: one is installed and the other refused', async () => {
+	const { packages, dir } = setup();
+	const [first, second] = await Promise.allSettled([packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE }), packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER })]);
+	assert.deepEqual([first.status, second.status, second.reason?.code, second.reason?.message], ['fulfilled', 'rejected', 'EXISTS', TAKEN]);
+	assert.deepEqual(readdirSync(dir('goodbyes')).sort(), [MARKER, '_manifest.yml', 'extra.yml', 'package.yml']);
+	assert.deepEqual((await packages.installed()).get('goodbyes'), { ...SOURCE, package: 'goodbyes', state: 'installed', installedAt: INSTALLED_AT });
+
+	// The other way round, the other repository wins: the first to start is the one installed.
+	const again = setup();
+	const [theirs, ours] = await Promise.allSettled([again.packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER }), again.packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE })]);
+	assert.deepEqual([theirs.status, ours.status, ours.reason?.code], ['fulfilled', 'rejected', 'EXISTS']);
+	assert.deepEqual(readdirSync(again.dir('goodbyes')).sort(), [MARKER, 'new.yml', 'package.yml']);
+	assert.equal((await again.packages.installed()).get('goodbyes').repository, OTHER.repository);
+});
+
+test('the name can be asked for before anything is read: free, its own, or held by another', async () => {
+	const { packages, dir } = setup();
+	// Nothing installed, and an empty folder, are free for anyone.
+	assert.equal(await packages.checkFree('goodbyes', OTHER.repository), undefined);
+	mkdirSync(dir('support'), { recursive: true });
+	assert.equal(await packages.checkFree('support', OTHER.repository), undefined);
+
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const before = snapshot(dir('goodbyes'));
+	assert.equal(await packages.checkFree('goodbyes', SOURCE.repository), undefined);
+	assert.equal(await packages.checkFree('goodbyes', 'git@github.com:acme/team.git'), undefined);
+	assert.equal((await rejectsWith(packages.checkFree('goodbyes', OTHER.repository), 'EXISTS')).message, TAKEN);
+	assert.equal((await rejectsWith(packages.checkFree('goodbyes', ''), 'EXISTS')).message, TAKEN);
+	assert.deepEqual(snapshot(dir('goodbyes')), before);
+
+	// A damaged marker is anyone's to repair.
+	writeFileSync(join(dir('goodbyes'), MARKER), '{ not json');
+	assert.equal(await packages.checkFree('goodbyes', OTHER.repository), undefined);
+
+	// A folder someone else made is not a package of any repository. Installing is what refuses it.
+	mkdirSync(dir('notes'), { recursive: true });
+	writeFileSync(join(dir('notes'), 'mine.yml'), 'matches: []\n');
+	assert.equal(await packages.checkFree('notes', OTHER.repository), undefined);
+	await rejectsWith(packages.install({ name: 'notes', files: THEIRS, ...OTHER }), 'EXISTS');
+	assert.deepEqual(readdirSync(dir('notes')), ['mine.yml']);
+
+	for (const name of ['../escape', 'Bad_Name', '', 42]) await rejectsWith(packages.checkFree(name, SOURCE.repository), 'INVALID');
+});
+
+test('which repository a marker names is told by its key, whatever form the address has', () => {
+	const { packages } = setup();
+	assert.equal(packages.keyOf('https://github.com/acme/team.git'), 'github.com/acme/team');
+	assert.equal(packages.keyOf('git@GitHub.com:Acme/Team.git'), 'github.com/acme/team');
+	for (const text of ['', 'somewhere on the internet', '/tmp/remotes/team.git', 42, null, undefined]) assert.equal(packages.keyOf(text), '', String(text));
+});
+
+test('in tests, two folders on this computer are two repositories', async () => {
+	const matchDir = join(mkdtempSync(join(tmpdir(), 'snippet-editor-teampkg-')), 'match');
+	const packages = createTeamPackages({ matchDir, now: AT, allowLocal: true });
+	assert.equal(packages.keyOf('/tmp/remotes/one/remote.git'), 'local//tmp/remotes/one/remote.git');
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE, repository: '/tmp/remotes/one/remote.git' });
+	const error = await rejectsWith(packages.install({ name: 'goodbyes', files: THEIRS, ...OTHER, repository: '/tmp/remotes/two/remote.git' }), 'EXISTS');
+	// A folder has no owner, so it is named by its address.
+	assert.equal(error.message, 'A package named goodbyes is already installed from /tmp/remotes/one/remote.git. Remove it first, then install this one.');
+	assert.equal((await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE, repository: '/tmp/remotes/one/remote.git/' })).state, 'installed');
+});

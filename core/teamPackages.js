@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isSafeFileName } from './store.js';
+import { parseRepositoryAddress, repositoryKey } from './teamAddress.js';
 import { MANIFEST, PACKAGE_NAME } from './teamRepo.js';
 import { isPlainObject, toText } from '../shared/text.js';
 
@@ -10,6 +11,11 @@ import { isPlainObject, toText } from '../shared/text.js';
 // A folder is the app's only if it carries the marker file. The marker is
 // written before anything else, so a folder is the app's to repair from the
 // first moment, and a folder someone else made is never touched.
+//
+// The marker also names the repository the package came from, and the package
+// belongs to that one. With several repositories connected, two can offer a
+// package of one name. There is one folder for a name, so only the repository
+// that holds it may replace it, until it is removed.
 
 export const MARKER = '.snippet-editor.json';
 
@@ -22,9 +28,29 @@ const INCOMING = '_incoming.tmp';
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isPackageFile = (name) => name === MANIFEST || isSafeFileName(name);
 
-export function createTeamPackages({ matchDir, now = () => new Date() }) {
+// `allowLocal` exists for tests, whose repositories are folders on this
+// computer. The app itself never passes it.
+export function createTeamPackages({ matchDir, now = () => new Date(), allowLocal = false }) {
 	const root = path.join(matchDir, 'team');
 	const folder = (name) => path.join(root, name);
+
+	// Which repository an address means, whatever form it was written in. A
+	// marker that cannot be read, or whose address the app would refuse, names
+	// none: its key is ''.
+	const keyOf = (url) => repositoryKey(url, { allowLocal });
+	// How a message names a repository: owner/repo. A folder has no owner.
+	const called = (url) => {
+		const { owner, repo } = parseRepositoryAddress(url, { allowLocal });
+		return owner ? `${owner}/${repo}` : url;
+	};
+	// A folder whose marker names no repository is damaged, and any repository
+	// may repair it. One that names a repository is that repository's alone.
+	const refuseIfHeld = (name, marker, repository) => {
+		const holder = marker ? keyOf(marker.repository) : '';
+		if (holder && holder !== keyOf(repository)) {
+			throw fail('EXISTS', `A package named ${name} is already installed from ${called(marker.repository)}. Remove it first, then install this one.`);
+		}
+	};
 
 	let queue = Promise.resolve();
 	const inTurn = (work) => {
@@ -87,6 +113,9 @@ export function createTeamPackages({ matchDir, now = () => new Date() }) {
 
 		const existing = await markerOf(name);
 		if (existing === false) throw fail('EXISTS', `A folder named ${name} is already in match/team and was not put there by this app.`);
+		// Checked here, in turn, so that of two repositories installing one name
+		// at the same moment the second meets the first's marker.
+		refuseIfHeld(name, existing, repository);
 		await fs.mkdir(folder(name), { recursive: true });
 
 		const marker = { repository: toText(repository), package: name, commit: toText(commit), tree: toText(tree), state: 'installing', installedAt: now().toISOString() };
@@ -127,10 +156,19 @@ export function createTeamPackages({ matchDir, now = () => new Date() }) {
 		return found;
 	}
 
+	// The question install asks, for a caller that wants the answer before it
+	// reads a package's files. Nothing is written.
+	async function checkFree(name, repository) {
+		checkName(name);
+		refuseIfHeld(name, await markerOf(name), repository);
+	}
+
 	return {
 		root,
+		keyOf,
 		installed: () => inTurn(installed),
 		install: (input = {}) => inTurn(() => install(input)),
+		checkFree: (name, repository) => inTurn(() => checkFree(name, repository)),
 		remove: (name) => inTurn(() => remove(name)),
 	};
 }

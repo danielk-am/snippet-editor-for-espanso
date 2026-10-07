@@ -19,7 +19,11 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 	// the connected one: the answer says what went wrong and lists nothing, so
 	// the window can show it and offer to disconnect.
 	async function status() {
-		const markers = await installed().installed();
+		const copies = installed();
+		const markers = await copies.installed();
+		// A package belongs to the repository its marker names. '' means the
+		// marker names none: it is damaged.
+		const holderOf = (marker) => copies.keyOf(marker.repository);
 		let state = { branch: null, commit: null, fetchedAt: null };
 		let listed = { packages: [], problems: [] };
 		let trouble = problem;
@@ -39,11 +43,23 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 			problems: listed.problems,
 			packages: listed.packages.map((pkg) => {
 				const marker = markers.get(pkg.name);
-				// An install that was cut short counts as out of date: installing
-				// again is what finishes it.
-				return { ...pkg, installed: Boolean(marker), updateAvailable: Boolean(marker) && (marker.state !== 'installed' || marker.tree !== pkg.tree) };
+				const holder = marker ? holderOf(marker) : '';
+				// A damaged marker counts as this repository's, and as every other's
+				// that offers the name: whichever installs it again repairs it.
+				const own = Boolean(marker) && (holder === '' || holder === address.key);
+				return {
+					...pkg,
+					installed: own,
+					// An install that was cut short counts as out of date: installing
+					// again is what finishes it.
+					updateAvailable: own && (holder === '' || marker.state !== 'installed' || marker.tree !== pkg.tree),
+					// The name is taken: another repository's package is installed under it.
+					installedFrom: marker && !own ? marker.repository : '',
+				};
 			}),
-			installedOnly: [...markers.keys()].filter((name) => !offered.has(name)).map((name) => ({ name })),
+			// Its own packages that it no longer offers. Another repository's are
+			// that repository's to list.
+			installedOnly: [...markers].filter(([name, marker]) => !offered.has(name) && holderOf(marker) === address.key).map(([name]) => ({ name })),
 		};
 	}
 
@@ -68,6 +84,9 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 
 		async install(name, { acceptCommands } = {}) {
 			if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) throw fail('INVALID', 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
+			// A name another repository holds is refused here, before any file is
+			// read. The installed copies ask again as they write.
+			await installed().checkFree(name, address.url);
 			const { commit, package: pkg, files } = await repo.packageFiles(name);
 			if (pkg.matchCount === null) throw fail('INVALID', 'This package was not read, so it cannot be installed from here.');
 			if (pkg.runsCommands && acceptCommands !== true) {
