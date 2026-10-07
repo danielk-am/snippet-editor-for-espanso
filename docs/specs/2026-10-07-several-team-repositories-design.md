@@ -1,6 +1,6 @@
 # Several team repositories: design
 
-Status: draft for Daniel's approval. Written 2026-10-07. Nothing is built.
+Status: approved by Daniel on 2026-10-07.
 
 This extends `2026-10-06-team-snippets-design.md`. Everything there still holds unless this page says otherwise.
 
@@ -166,6 +166,94 @@ Rows of the first team design carry over with their tests. These are for what is
 - The real Espanso check is unchanged, since `match/team/<name>/` is unchanged. It is run to show that.
 - The packaged check and the quit check must pass unchanged.
 - Tests are written first and watched to fail.
+
+## Changed while building
+
+| Change | Why |
+| --- | --- |
+| An install or an update that names no repository, for a name two repositories offer, means the one that already holds the name. The failure row "No repository named, and two offer the name" applies only while the name is free. | It is the only repository the request could succeed for: the name rule refuses every other. A damaged marker is held by none, so it is still asked which. |
+| With any repository connected, `POST /team/refresh` always answers 200. A repository that could not be fetched says why in its own `problem`. The 502 `GIT_FAILED` moved to `POST /team/repositories/{id}/refresh`. With none connected it is 409, as before. | With several, one failure is not the failure of the request. A 502 only when exactly one is connected would make the status code depend on how many are connected. The pages check one repository at a time, so a failed check is still told. |
+| `GET /team` also carries `problem`: the note about saved addresses that were skipped at start. | The design promised "a line naming the one that was skipped" and gave it no place in the reply. |
+| A saved address the app refuses is named by its place in the list, never by its text: "Saved team repository 2 has an address the app does not accept, so it was skipped. Connect it again in Settings." A repeat names the address it repeats. | Carrying a password is one reason an address is refused, and this note travels to the API, the MCP tools and the assistant. The address a repeat names is one the app accepts. |
+| A damaged marker shows as installed, with an update available, in every repository that offers its name. It is in the top-level `installedOnly` only when no connected repository offers the name. | The design says "as today" and "Update available". The plan's stricter sentence would have shown it as not installed. Listing it in both places would list it twice. |
+| The MCP list's `installed_only` entries are `{ name, repository, installed_from }`. `repository` is an id, or null when that repository is not connected. `installed_from` is the address. | `repository` is an id everywhere else in that reply, and a repository that is not connected has none. |
+| The MCP list names every connected repository in `repositories`, also when `repository` narrows the packages to one. The install tool's reply says which repository it installed from. | The list is where ids are read. |
+| With several connected, the Propose dialog chooses no repository for you. The package list and Send are off until one is chosen. | A file sent to the wrong team cannot be taken back. Where more than one could be meant, it is asked. |
+| "The team repository has no package named X." became "owner/repo has no package named X.", with one connected too. With several connected and none named, a name nobody offers answers 404 "No connected repository has a package named X." | With several, "the team repository" says nothing. One wording is easier to keep right than two. |
+| `isTeamLink` did change: it refuses a link whose path holds an encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`). | The design said it was unchanged. A review showed that `..%2f..%2fother` passed for a page of a connected repository and could open another's. The app makes no link with any of the three. |
+| A card is for its repository under either form of its address. Disconnected and connected again by its SSH address, a card made for the HTTPS one still applies. | A repository is its host, owner and name, which is decision 1 of this design. The card's first check compared the address text. |
+| Disconnect has to name a repository. With no id, or with anything that is not text, nothing is disconnected and the reply says so: "No repository was named, so nothing was disconnected." An id that is not connected still answers the list as it is. | For a while during the build, no id meant "the only one". An id that goes missing on its way must not take a repository with it, and a Disconnect that did nothing must not look done. |
+| Every test gets its git through one guard, in `test/helpers/teamRemote.js`. It stops any address with no test repository behind it before git is called. A test fails if another test file makes a git of its own. | Twice during the build, git was handed a real address on github.com: once by a test on its first failing run, once by a reviewer's probe. Both failed and nothing was copied. The tests run the app with GitHub addresses, as it really runs, so the guard has to be certain. |
+| Connecting the same address again runs no git at all. | The design says it "does nothing". Before, connecting again fetched. "Check for updates" copies a repository again if its copy has gone. |
+| A connect that fails removes whatever was made for it. The setting is written only after the copy succeeds. | A failed connect used to leave an empty folder under `team/`. |
+| A repository that is being disconnected fetches no more. A check that arrives then answers 409 `NOT_CONNECTED`, "That repository is being disconnected." | A check that waited behind the disconnect would find no copy and make one again, and nothing would list it. |
+| The settings drop a repeat only when the text is the same. Two addresses of one repository both stay in the file, and the service skips the second and says so. | The settings cannot tell that two addresses are one repository. The service could not report an entry the settings had already dropped. |
+| A repository's key leaves the port out. | An SSH port and an HTTPS port of one repository differ. |
+| `repository` in a request must be text, and one that is named is always looked up. An id that is not connected is 404, also with none connected at all. | `null` or a number is the caller's mistake and is told so, with 400. A repository that is named and not there gets one answer, whatever else is connected. |
+| The `AMBIGUOUS` message gives each repository's id and says what to send: "Two repositories offer goodbyes: acme/first (980ba86f6835) and acme/second (cda6f9e4bdce). Say which: set `repository` to one of the ids in brackets." | The design's wording named the repositories and not what to send. The same words reach an API caller and a model. |
+| One function names a repository for a person, in `shared/repositoryLabel.js`. The limit of ten is in `shared/teamLimits.js`. | The window cannot load `core/`. A second copy of the name or of the number could drift. |
+| The install card shows `Repository: owner/repo`. The send card shows the address in full. | The send card is where a file leaves the computer, and the full address says which host. |
+| No install card is made for a name another repository holds. The refusal says so in the app's words. | A card that could only fail would have the assistant say "it is waiting for you". |
+| In Settings, "Browse team packages" is one button in the card's heading. The Team page has no button that checks every repository at once. | In each repository's row it would be the same button several times. The design asks for a check per section. |
+| Both pages read the status again whenever the app's picture of the folder changes, not only after their own actions. | That is what makes a section arrive or go while the page is open. |
+| With none connected, the list of what is still installed is headed "From repositories that are not connected". It was "Still installed". | It is the same list whether or not anything else is connected. |
+| The window check runs the app as it really runs, with GitHub addresses, and points git alone at folders. It also connects ten repositories, puts one out of reach, and leaves a page while a connect and a disconnect are under way. | The headings, the links and the pull request page are then the real ones. The Window rows above asked for the rest. |
+
+Also mended, though not part of this piece: tests that asserted on the clock and failed on a busy machine. The runner's two limits are now measured from how long a node takes to start, the quit tests wait for turns of the event loop, the lookups are shown to run side by side without a clock, and the markdown reader's speed is measured as processor time. The window check's reload step waits for the app to say the answer has ended before it sends the next message.
+
+## After review
+
+Each layer was reviewed when it was finished, by a reviewer that had not written it. This is what each review found and what was done. Each fix came with a test that fails without it, in the unit tests or in the window check. The review of the whole branch comes after this page was written, and is not in it.
+
+**Settings, addresses, packages and the service.** Nothing serious.
+
+| Found | Done |
+| --- | --- |
+| The status passed on whatever text a marker file gave as its repository. A marker of 3 MB made a reply of 6 MB. | A marker's repository is read as an address where the marker is read. `installedFrom`, the top-level `installedOnly` and the refusal get an address the app accepts, or nothing. |
+| No test showed that a sign-in written into a marker is never shown. | A test checks the status, `GET /team` and `GET /state` in four states. |
+| No test showed that the repositories are fetched side by side at start. | A test holds the first back and expects the second to be fetched meanwhile. |
+
+**Routes, channels, MCP tools and cards.** One finding that mattered, the first.
+
+| Found | Done |
+| --- | --- |
+| `test/team.test.js` had no guard against an address reaching the real git. Had one refusal in the service regressed, two tests would have handed git real github.com addresses. | The one shared guard, described above. |
+| A card's check that its repository is still connected compared the address text. | It compares the repository: host, owner and name. |
+| "The team repository has no package named X" did not say which repository. | It names it. |
+| `isTeamLink` let a link with an encoded slash or dot pass for a page of the repository. | Refused, as described above. |
+| One test gave the start-up fetches five seconds and could look between two writes. | It waits for the fetch to have ended, for up to thirty seconds, and still fails if the fetches run one after another. |
+
+**The window.** Six things were mended. Three more are left, and are under "Left as they are".
+
+| Found | Done |
+| --- | --- |
+| A Disconnect whose id was `''`, `0`, `{}` or the like disconnected nothing and answered the list as if all were well. | Anything that is not text with something in it is refused with "No repository was named, so nothing was disconnected." |
+| A name held by a repository that is not connected, and offered by two that are: a request that named none was asked which, and was then refused whichever it named. | The refusal comes at once, whichever repository is named or none, and says the holder is not connected: "A package named X is already installed from owner/repo, which is not connected. Remove it first, then install this one." The route, the MCP tool and the install card all say it. The same is done when the holder is connected and no longer offers the name. |
+| With several connected, the Propose dialog put Repository first and opened with the keyboard in Summary. | It opens on Repository. With one connected it opens in Summary, as before. |
+| After Disconnect was confirmed, the keyboard was left on the page behind: the button that was pressed goes with its entry. | It goes to the address field. If the disconnect failed, it goes back to that entry's Disconnect button. |
+| A check for updates that failed in Settings showed a red line and did not read the status again. The repository's own "could not be reached" line came only at the next change, and then the same words were on screen twice. | The status is read again after a failure, as on the Team page, and the reason is said once, on the repository's own line. |
+| Two repositories on different hosts with the same owner and name both read `acme/team`: in the Propose choice, the section headings, "Disconnect acme/team?" and "Installed from acme/team". | A repository on a host other than github.com is named with the host in front: `ghe.corp.example/acme/team`. On github.com it stays `owner/repo`. |
+
+## Left as they are
+
+- After a connect or a disconnect the settings file holds only the connected repositories. An entry written by hand that was refused or repeated is gone from the file then, and the note about it clears.
+- An eleventh entry written by hand is dropped without a word. The place a skipped entry is given counts entries after the settings have dropped repeats and entries that are not text, which can differ from its place in the file.
+- A status asked for while a repository is being removed can show a passing "not a git repository" problem for it.
+- `team.refresh` is used only by tests now.
+- A slow fetch of one repository can hold up connecting or disconnecting another for up to its time limit. Connecting and disconnecting run one at a time, as this design says.
+- `repository: ""` is 404 over the API, and "must not be empty" in the tool's schema.
+- The Settings card shows nothing while its first status loads, and hides itself if that fails.
+- The Team page's load error has no retry, and a load failure after a first success is not shown.
+- An error from one repository, such as "This repository is empty", does not name that repository when it reaches the API or the assistant.
+- When a connected repository's copy has gone from disk, an install or a proposal answers "No team repository is connected." The step that helps is "Check for updates", which copies it again.
+- An address may be up to 300 characters, and the form the app keeps can be longer: the short form gains 23. The settings drop entries over 300, so such a repository would connect and be gone at the next start. Real GitHub names are far shorter.
+
+Not checked:
+
+- The usability check with a real model (`test/mcp-eval`). Its second repository and its questions 8 and 9 were written for this piece, and it has not been run since.
+- Leaving a page while a repository is being checked for updates. The window check leaves the page while one is connecting and while one is disconnecting, which take the same path through the page.
+- The line about a saved list that was edited by hand, as the two pages draw it. It needs a settings file changed before the app starts. Unit tests cover the note itself.
+- Where the keyboard goes after a disconnect that failed. The window check covers the one that succeeds.
 
 ## Not in this piece
 

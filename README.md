@@ -65,7 +65,7 @@ The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sid
 - **Packages are read-only.** Copy a package snippet into one of your own files to change it.
 - **Light, dark or system theme.**
 - **API for other tools.** Scripts on the same computer can read and change snippets over HTTP. It is off until you switch it on. See "API for other tools" below.
-- **Team snippets.** Connect a GitHub repository of shared packages, install the ones you want, and propose your own files back as a pull request. See "Team snippets" below.
+- **Team snippets.** Connect up to ten GitHub repositories of shared packages, install the packages you want, and propose your own files back as a pull request. See "Team snippets" below.
 - **AI tools.** An MCP server comes with the app, so an AI tool such as Claude or Codex can search and read your snippets, and change them once you allow it. See "AI tools (MCP)" below.
 - **Assistant.** A chat panel beside your snippets. It finds, explains and drafts, and every change it suggests is a card you apply yourself. See "Assistant" below.
 
@@ -81,7 +81,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:27187/api/v1/state
 
 | Method | Path under `/api/v1` | Does |
 | --- | --- | --- |
-| GET | `/state` | Match folder, files with their snippets, packages |
+| GET | `/state` | Match folder, files with their snippets, packages, installed team packages (`team`), and `teamConnected`, which is true when at least one team repository is connected |
 | GET | `/files/{id}` | One file, with its raw text and version |
 | POST | `/files` | Create a file: `name`, optional `description` and `prefix` |
 | PUT | `/files/{id}/details` | Change `description` and `prefix` |
@@ -110,9 +110,11 @@ How it is guarded:
 
 ## Team snippets
 
-A team can keep its shared snippets in one GitHub repository. Connect it in Settings with its address, such as `acme/team-snippets` or `git@github.com:acme/team-snippets.git`. The app uses the `git` on your computer and the sign-in git already has. It saves no password or token.
+A team can keep its shared snippets in a GitHub repository. You can connect up to ten at once, for example one for your own team and one for the whole company. Connect each in Settings with its address, such as `acme/team-snippets` or `git@github.com:acme/team-snippets.git`. The app uses the `git` on your computer and the sign-in git already has. It saves no password or token.
 
-The repository holds one folder per package:
+A repository is known by its host, owner and name, not by the exact address you typed. So the HTTPS and SSH addresses of one repository count as one. Connecting the second form is refused, and the message names the form that is connected: "This repository is already connected, as https://github.com/acme/team-snippets.git." The app calls a repository by its owner and name, as in `acme/team-snippets`. One on a host of its own, such as a company's GitHub Enterprise, has the host in front: `ghe.corp.example/acme/team-snippets`.
+
+Each repository holds one folder per package:
 
 ```
 packages/
@@ -121,24 +123,45 @@ packages/
     package.yml       one or more match files
 ```
 
-- **Install.** The Team packages page lists every package. Installing one copies it to `match/team/<name>/`, where Espanso loads it. Installed team files are read-only in the app. You can copy a snippet into one of your own files to change it.
-- **Update.** The app checks the repository when it starts and when you press "Check for updates", and marks the packages that changed. Nothing is updated until you press Update.
+- **Install.** The Team packages page has a section for each repository, with its packages. Installing one copies it to `match/team/<name>/`, where Espanso loads it. Installed team files are read-only in the app. You can copy a snippet into one of your own files to change it.
+- **A package belongs to the repository it was installed from.** Only that repository shows it as installed, and only that repository offers an update for it.
+- **One name is installed once.** Two repositories can offer a package of the same name. While one is installed, the other cannot be: its card says "Installed from acme/support-snippets" and its Install button is off. Asked through the API or an AI tool, the app answers "A package named goodbyes is already installed from acme/support-snippets. Remove it first, then install this one." If the repository that holds the name is not connected, the message says so.
+- **Update.** The app checks every repository when it starts, and one repository when you press its "Check for updates". It marks the packages that changed. Nothing is updated until you press Update. A repository that cannot be reached says so in its own section, and the others list as usual.
 - **Runs commands.** An Espanso snippet can run a shell command or a script when you use it. A package that holds one is marked "Runs commands", and installing or updating it asks first. A package with a file the app cannot read is marked the same way, because it could not be checked.
-- **Propose.** "Propose to team", on one of your own files, pushes that file to a new branch named `snippet-editor/<package>-<date>-<time>`. The app then offers GitHub's page for opening a pull request from that branch. It never pushes to the main branch.
+- **Propose.** "Propose to team", on one of your own files, pushes that file to a new branch named `snippet-editor/<package>-<date>-<time>`. With more than one repository connected, the dialog asks which one first. None is chosen for you, because everyone who can read that repository will be able to read the file. The app then offers GitHub's page for opening a pull request from that branch. It never pushes to the main branch.
+- **Disconnect.** Disconnecting a repository removes the app's copy of it and leaves the others alone. Packages you installed from it stay installed until you remove them.
+- **Left behind.** An installed package can outlive where it came from. One that its repository no longer offers is listed under "Installed, but no longer in the repository". One whose repository is not connected is listed under "From repositories that are not connected", with its address. It is not handed to another repository that offers the same name: remove it first, then install the other. Both kinds can be removed on the Team packages page.
 
-What the app does with git: it keeps a bare copy of the repository in its data folder and reads packages straight from the commit, so a symbolic link or a submodule in the repository is skipped, not followed. A proposal is built inside git too. No file from the repository is ever checked out on your computer. Git is run without a shell, with a time limit, and can never stop to ask for a password. If git would have asked, the app says so and you check your access in a terminal.
+What the app does with git: it keeps a bare copy of each repository in its data folder and reads packages straight from the commit, so a symbolic link or a submodule in a repository is skipped, not followed. A proposal is built inside git too. No file from a repository is ever checked out on your computer. Git is run without a shell, with a time limit, and can never stop to ask for a password. If git would have asked, the app says so and you check your access in a terminal.
 
-Over the API, team snippets are under `/api/v1/team`:
+Over the API, team snippets are under `/api/v1/team`. `{id}` is a repository's `id` from `GET /team`.
 
-| Method | Path | Does |
-| --- | --- | --- |
-| GET | `/team` | The repository, its packages, and which are installed or have updates |
-| POST | `/team/refresh` | Fetch, then the same reply |
-| PUT | `/team/packages/{name}/installed` | Install or update; `acceptCommands: true` for a package that runs commands |
-| DELETE | `/team/packages/{name}/installed` | Remove the installed copy |
-| POST | `/team/proposals` | Push a proposal branch: `fileId`, `package`, `summary`, and `title` and `description` for a new package |
+| Method | Path | Does | Body | Answers |
+| --- | --- | --- | --- | --- |
+| GET | `/team` | Says what is connected and what each repository offers | none | 200 with the team status |
+| POST | `/team/refresh` | Fetches every repository | none | 200 with the team status. A repository that could not be fetched says why in its own `problem`. 409 `NOT_CONNECTED` when none is connected. |
+| POST | `/team/repositories/{id}/refresh` | Fetches one repository | none | 200 with the team status. 404 `NOT_FOUND` when that id is not connected. 502 `GIT_FAILED` when it cannot be fetched. 409 `NOT_CONNECTED` while it is being disconnected. |
+| PUT | `/team/packages/{name}/installed` | Installs a package, or updates it | `repository`, an id, when more than one could be meant. `acceptCommands: true` for a package that runs commands. | 200 with the team status |
+| DELETE | `/team/packages/{name}/installed` | Removes the installed copy. A name is installed once, so no repository is named. | none | 200 with the team status. 404 `NOT_FOUND` when it is not installed. |
+| POST | `/team/proposals` | Pushes a proposal branch | `repository`, an id, when more than one is connected. `fileId`, `package`, `summary`, and `title` and `description` for a new package. | 201 with `{ branch, commit, created, compareUrl }`. `created` is true when the package is new. |
 
-Connecting and disconnecting a repository are done in the window only. Installed team files are read through the ordinary routes, with ids such as `team:goodbyes:package.yml`.
+The team status is `{ connected, repositories, installedOnly, problem }`.
+
+- `connected` is true when at least one repository is connected.
+- `repositories` lists each one, in the order connected: `id`, `repository` (its address), `webUrl`, `branch`, `commit`, `fetchedAt`, `problem` (why it could not be reached, or empty), `problems` (what in it is not shown), `packages`, and its own `installedOnly`: the packages installed from it that it no longer offers, each as `{ name }`.
+- A package has `name`, `title`, `description`, `version`, `author`, `manifestError`, `files`, `matchCount`, `runsCommands`, `tree`, `problems` and `webUrl`, then `installed`, `updateAvailable` and `installedFrom`. `installed` and `updateAvailable` are true only in the repository the package was installed from. `installedFrom` is the address of another repository that holds the name, or empty.
+- The top-level `installedOnly` lists installed packages whose repository is not connected, each as `{ name, repository }`.
+- `problem` is empty unless an address in the saved list was skipped at start. An address the app refuses is named by its place in the list, never by its text, because a refused address can hold a password.
+
+Which repository a request means: `repository` is the `id` of a connected repository, and it can be left out where only one could be meant. With one repository connected, that is always so. With several, an install that names none works when exactly one of them offers the name, or when one of them already holds it, which makes the request an update. A proposal that names none works only with one connected. When more than one could be meant, the answer is 409 `AMBIGUOUS`, and the message lists them with their ids:
+
+```
+Two repositories offer goodbyes: acme/first (980ba86f6835) and acme/second (cda6f9e4bdce). Say which: set `repository` to one of the ids in brackets.
+```
+
+An id that is not connected is 404 `NOT_FOUND`. A name that another repository holds is 409 `EXISTS`, with the message quoted above.
+
+Connecting and disconnecting a repository are done in the window only. Installed team files are read through the ordinary routes, with ids such as `team:goodbyes:package.yml`. Those ids are the same however many repositories are connected.
 
 Team packages go in `match/team/`, not in Espanso's own `match/packages/`. Checked with Espanso 2.4.1: it loads `match/team/` like any other match files, and a folder in `match/packages/` without Espanso's own source file makes `espanso package list` fail for every package.
 
@@ -162,23 +185,24 @@ Reading and searching work from the start. The tools that change something are r
 | `snippets_list_files` | Lists files with their source, counts and problems | No |
 | `snippets_get_file` | One file in brief, in full, or as raw YAML, with its version | No |
 | `snippets_get_snippet` | One snippet in full, with its file's version | No |
-| `snippets_list_team_packages` | The team repository and what it offers | No |
+| `snippets_list_team_packages` | The connected team repositories, each with its `id`, and the packages each offers. `repository` narrows it to one. | No |
 | `snippets_add_snippet`, `snippets_update_snippet`, `snippets_delete_snippet` | Add, change or remove one snippet | Yes |
 | `snippets_create_file` | Create a match file | Yes |
 | `snippets_replace_file_yaml` | Replace a file's raw YAML | Yes |
-| `snippets_install_team_package` | Install or update a team package | Yes |
-| `snippets_propose_to_team` | Send one of your files to the team repository as a proposal branch | Yes |
+| `snippets_install_team_package` | Install or update a team package. Takes `repository` when more than one connected repository offers the name. | Yes |
+| `snippets_propose_to_team` | Send one of your files to a team repository as a proposal branch. Takes `repository` when more than one is connected. | Yes |
 
 - Every change needs the version of the file the AI tool last read. If the file changed since, the change is refused and the tool is told to read it again. So an AI tool cannot overwrite something it has not seen.
 - A snippet can run a command on your computer when it is used. An AI tool can write one only by saying, in the call itself, that you agreed. Your AI tool shows you that call to approve, so read it.
 - A reply is at most 25,000 characters. Long lists come in pages, and long YAML comes in parts. The version a change needs comes only with the last part, so a file cannot be replaced by a piece of itself.
 - The server talks to the app on this computer directly. It ignores any proxy set in the environment, and it asks the app to prove itself before sending the token.
-- Deleting a file, removing a team package, connecting a repository and everything in Settings stay in the window.
+- With several team repositories connected, a team tool that could mean more than one of them is refused. The refusal lists them with their ids and tells the AI tool to ask you if you have not said which. In the list, every package carries the `repository` it is offered by. `installed_only` lists what is installed but not on offer where it came from: its `repository` is an id, or null when that repository is not connected, and `installed_from` is the address.
+- Deleting a file, removing a team package, connecting or disconnecting a repository and everything in Settings stay in the window.
 - The switch governs this MCP server. Another program on your computer that holds the API token can still change snippets through the API.
 
 The server speaks both forms of MCP in use today: the older one that opens with a handshake (versions `2024-11-05` to `2025-11-25`) and the one from `2026-07-28` that sends its version with every request. It is written by hand, in three files under `mcp/`, with no dependency.
 
-How well an AI tool can use the tools was checked: ten questions with one right answer each, given to a fresh agent with nothing but these tools. It answered 10 of 10. The questions and the result are in `test/mcp-eval/`.
+How well an AI tool can use the tools was checked on 2026-10-06, when the app connected one team repository: ten questions with one right answer each, given to a fresh agent with nothing but these tools. It answered 10 of 10. Since then the three team tools gained `repository`, and two of the ten questions were rewritten to need it. The check has not been run again, so that result says nothing about the team tools as they are now. The questions and the result are in `test/mcp-eval/`.
 
 ## Assistant
 
@@ -277,10 +301,10 @@ Backups and `settings.json` live in the app's own data folder (`~/Library/Applic
 | Path | What it holds |
 | --- | --- |
 | `electron/` | Main process: window, menu, IPC handlers, and the sandboxed preload bridge. |
-| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repository, path resolution, settings. |
+| `core/` | Node-only logic with no Electron in it: YAML round-tripping, the file store, the API router and its HTTP listener, the git runner and the team repositories, path resolution, settings. |
 | `core/chat/` | The assistant behind the window: finding the backends, the lookups made before one is asked, starting Claude Code and Codex and reading their output, the Ollama loop, proposals, and the listener an answer calls back on. |
 | `mcp/` | The MCP server: the protocol, the twelve tools and the client for the app's API. It imports nothing from the rest of the app. The assistant uses the same tools, in a mode where a change is handed over as a proposal. |
-| `shared/` | Pure modules used by both sides: the snippet and variable models, the two searches (every word, and closest to a sentence), finding a listed match again, the IPC channel list. |
+| `shared/` | Pure modules used by both sides: the snippet and variable models, the two searches (every word, and closest to a sentence), finding a listed match again, how a team repository is named (`repositoryLabel.js`), how many can be connected (`teamLimits.js`), the IPC channel list. |
 | `renderer/` | The window: plain ES modules, Preact and htm from one vendored file, and two stylesheets. |
 | `test/` | Unit tests, fixtures, the end-to-end smoke test and the packaged-app test. |
 | `build/`, `electron-builder.yml` | The app icon and the packaging settings. |
@@ -338,7 +362,7 @@ The MCP server was built afterwards too, as a new piece: nothing of the original
 
 The assistant was built afterwards as well, and is also new. The records say the original had an assistant panel, and nothing about how it worked.
 
-Team snippets were rebuilt afterwards, from the record of the original's data model: one repository, a folder per package with a `_manifest.yml`, read-only copies, and changes proposed by pull request. How the original stored its installed copies is not in those records, so that part is new here.
+Team snippets were rebuilt afterwards, from the record of the original's data model: one repository, a folder per package with a `_manifest.yml`, read-only copies, and changes proposed by pull request. How the original stored its installed copies is not in those records, so that part is new here. Connecting several repositories at once is new here too: the record describes one.
 
 One behaviour is a best guess. The original applied a file's trigger prefix to its snippets, and the records do not say exactly when. Here the prefix is offered as the start of each new trigger and existing triggers are never rewritten.
 

@@ -62,6 +62,7 @@ No new dependency. The app needs `git` installed. Without it, the rest of the ap
 - **Address.** Accepted forms: `https://host/owner/repo`, with or without `.git`; `git@host:owner/repo.git`; `ssh://git@host/owner/repo.git`; and the short form `owner/repo`, which means `https://github.com/owner/repo.git`. Anything else is refused. So is an address that carries a user name and password, because saving it would put a secret in the settings file.
 - **Hosts.** GitHub and GitHub Enterprise. The pull request link is built in GitHub's format.
 - **One repository at a time.** Connecting another replaces the first. Disconnecting removes the app's copy of the repository. Either way, installed packages stay until you remove them.
+  Since 2026-10-07 up to ten are connected at once, and connecting another keeps the first: see `2026-10-07-several-team-repositories-design.md`.
 - **The copy.** A bare clone in the app's data folder, under `team/<12 characters from the address>/repo.git`. Nothing is checked out, when reading and when proposing. Packages are read with `git ls-tree` and `git cat-file`, straight from the commit, so a symbolic link or a submodule in the repository is never followed. It is skipped and reported.
 - **Staying current.** The app fetches when it starts, in the background, and when you press "Check for updates". It never changes an installed package on its own.
 - **Limits.** 200 packages, 50 files in a package, 2 MB a file (the size the app opens). Beyond a limit, the package says what was left out.
@@ -215,6 +216,7 @@ Left as they are:
 - Pushing to the main branch, by any route.
 - Creating the pull request for you, with `gh` or GitHub's API.
 - More than one team repository.
+  That came next: see `2026-10-07-several-team-repositories-design.md`.
 - Editing team files in place, removing or renaming a file in a package.
 - Updating installed packages without being asked.
 - Hosts that are not GitHub.
