@@ -658,7 +658,7 @@ test('with several repositories, the list says which offers each package, and pa
 });
 
 test('with several repositories, installing says which when more than one offers the name', async (t) => {
-	const { call, first, second, one, two, matchDir } = await twoRepositories(t);
+	const { call, first, second, one, two, matchDir, service } = await twoRepositories(t);
 	// A repository that is named is the only one asked.
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'shipping', repository: one }), {
 		error: 'The team repository has no package named shipping. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.',
@@ -682,6 +682,13 @@ test('with several repositories, installing says which when more than one offers
 		error: `A package named goodbyes is already installed from ${second.url}. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`,
 	});
 	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you later']));
+
+	// An update needs no `repository`, though both still offer the name: the
+	// second holds it, and is the only one the call could succeed for.
+	second.commit({ 'packages/goodbyes/package.yml': MATCHES([':later', 'See you much later']) });
+	await service.refreshTeam(two);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), { name: 'goodbyes', repository: two, installed: true, update_available: false });
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you much later']));
 
 	// What a single repository says is said as before.
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: 'nothing' }), NOT_CONNECTED);
@@ -827,6 +834,9 @@ test('no description speaks of one team repository, and each team tool says what
 			assert.match(byName[name].inputSchema.properties.repository.description, /more than one/, name);
 			assert.match(byName[name].inputSchema.properties.repository.description, /the call fails and the error lists them/, name);
 		}
+		// An update is the holder's own, so it needs no `repository`.
+		assert.match(byName.snippets_install_team_package.inputSchema.properties.repository.description, /is not installed yet: without it the call fails.*an update always comes from the repository the package was installed from/s);
+		assert.match(byName.snippets_install_team_package.description, /An update needs none: it comes from the repository the package was installed from\./);
 		assert.match(byName.snippets_list_team_packages.description, /`repositories`.*`id`/s);
 		assert.match(byName.snippets_list_team_packages.description, /`installed_from`/);
 		assert.match(byName.snippets_list_team_packages.description, /`installed_only`/);

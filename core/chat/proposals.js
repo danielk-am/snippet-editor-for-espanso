@@ -264,9 +264,12 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				if (repository !== undefined) source = repositoryWithId(repositories, repository);
 				else {
 					const offering = repositories.filter((item) => item.packages.some((pkg) => pkg.name === name));
-					if (offering.length > 1) throw which(offering, `offer ${name}`);
+					// Several offer it. If one of them holds the name already, the card
+					// is for that one, as the app's route would have it: an update.
+					const holding = offering.filter((item) => item.packages.some((pkg) => pkg.name === name && pkg.installed));
+					if (offering.length > 1 && holding.length !== 1) throw which(offering, `offer ${name}`);
 					// The only one connected answers for a name it does not have.
-					source = offering[0] ?? (repositories.length === 1 ? repositories[0] : null);
+					source = offering.length > 1 ? holding[0] : (offering[0] ?? (repositories.length === 1 ? repositories[0] : null));
 					if (!source) throw teamRefusal('NOT_FOUND', `No connected repository has a package named ${name}.`);
 				}
 				const pkg = source.packages.find((item) => item.name === name);

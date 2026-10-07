@@ -45,7 +45,7 @@ const ACCEPT = { type: 'boolean', description: 'Pass true only after the person 
 const REPOSITORY = {
 	list: text('The id of one connected repository, to list only its packages. Ids are the `id` values in `repositories`, in the reply of snippets_list_team_packages called without this input. Leave it out to list every repository. Example: "980ba86f6835".'),
 	install: text(
-		'The id of the repository to install from: the `repository` value on that package in snippets_list_team_packages. Needed when more than one connected repository offers a package of this name: without it the call fails and the error lists them with their ids. Otherwise leave it out. Example: "980ba86f6835".'
+		'The id of the repository to install from: the `repository` value on that package in snippets_list_team_packages. Needed when more than one connected repository offers a package of this name and it is not installed yet: without it the call fails and the error lists them with their ids. Otherwise leave it out: an update always comes from the repository the package was installed from. Example: "980ba86f6835".'
 	),
 	propose: text(
 		'The id of the repository to send it to: an `id` from `repositories` in snippets_list_team_packages. Needed when more than one repository is connected: without it the call fails and the error lists them with their ids. With one connected, leave it out. Example: "980ba86f6835".'
@@ -491,7 +491,7 @@ export function createTools({ api, propose }) {
 			write: true,
 			destructive: true,
 			description:
-				'Install a package from a connected team repository, or update an installed one to what its repository has now. Its snippets then work in Espanso and show as read-only files with source "team". When more than one connected repository offers a package of this name, say which with `repository`. A name is installed from one repository at a time: if a package of this name is already installed from another repository, the call is refused and says from which, and the person has to remove that package in the app first. A package that runs commands is refused until the person agrees and you pass accept_commands. See what is on offer, and the id of each repository, with snippets_list_team_packages.',
+				'Install a package from a connected team repository, or update an installed one to what its repository has now. Its snippets then work in Espanso and show as read-only files with source "team". To install a package that more than one connected repository offers, say which with `repository`. An update needs none: it comes from the repository the package was installed from. A name is installed from one repository at a time: if a package of this name is already installed from another repository, the call is refused and says from which, and the person has to remove that package in the app first. A package that runs commands is refused until the person agrees and you pass accept_commands. See what is on offer, and the id of each repository, with snippets_list_team_packages.',
 			inputSchema: schema(
 				{
 					name: text('The package name, from snippets_list_team_packages. Example: "goodbyes".'),

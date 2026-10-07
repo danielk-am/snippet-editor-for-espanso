@@ -765,19 +765,80 @@ test('a name that two repositories offer is installed only once the request says
 
 	// The name is now the other's. The first is refused by the install rule, in its own words.
 	assert.deepEqual(await call('PUT', path, { body: { repository: idOf(remote) } }), { status: 409, body: { error: { code: 'EXISTS', message: taken('goodbyes', other.url) } } });
-	// Two still offer it, so an update has to say which as well.
-	assert.deepEqual(code(await call('PUT', path, { body: {} })), [409, 'AMBIGUOUS']);
 	assert.equal((await call('PUT', path, { body: { repository: idOf(other) } })).status, 200);
 	// A name only one of them offers needs no choosing.
 	assert.equal((await call('PUT', '/team/packages/support/installed', { body: {} })).status, 200);
 
-	// A third that offers it is listed with the other two.
+	// Free again, and a third that offers it is listed with the other two.
+	assert.equal((await call('DELETE', path)).status, 200);
 	const third = another({ goodbyes: MATCHES([':bye', 'A third goodbye']) });
 	await service.connectTeam(third.url);
 	assert.equal((await call('PUT', path, { body: {} })).body.error.message, `Three repositories offer goodbyes: ${listed(remote)}, ${listed(other)} and ${listed(third)}. ${WHICH}`);
 	// Disconnected, the first is no longer one of them.
 	await service.disconnectTeam(idOf(remote));
 	assert.equal((await call('PUT', path, { body: {} })).body.error.message, `Two repositories offer goodbyes: ${listed(other)} and ${listed(third)}. ${WHICH}`);
+});
+
+test('a name that two repositories offer and one of them holds means the holder, when the request names none', async (t) => {
+	const { service, call, remote, matchDir, calls } = await setup(t);
+	const other = another({ goodbyes: MATCHES([':bye', 'The other goodbye']) });
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	const path = '/team/packages/goodbyes/installed';
+	const marker = join(matchDir, 'team', 'goodbyes', '.snippet-editor.json');
+	const installedText = () => readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8');
+	const ambiguous = (...remotes) => ({
+		status: 409,
+		body: { error: { code: 'AMBIGUOUS', message: `${remotes.length === 2 ? 'Two' : 'Three'} repositories offer goodbyes: ${remotes.slice(0, -1).map(listed).join(', ')} and ${listed(remotes.at(-1))}. ${WHICH}` } },
+	});
+
+	// Free: which one has to be said.
+	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, other));
+	assert.equal((await call('PUT', path, { body: { repository: idOf(other) } })).status, 200);
+
+	// Held by the second, which has something newer. An update that names no
+	// repository can only be for the holder: the clash rule refuses the first.
+	other.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'A newer goodbye']) });
+	remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Newer in the first too']) });
+	await service.refreshTeam();
+	calls.length = 0;
+	const updated = await call('PUT', path, { body: {} });
+	assert.equal(updated.status, 200);
+	assert.deepEqual(updated.body, (await call('GET', '/team')).body);
+	assert.deepEqual([shown(of(updated.body, other), 'goodbyes'), shown(of(updated.body, remote), 'goodbyes')], [[true, false, ''], [false, false, other.url]]);
+	assert.deepEqual([installedText(), JSON.parse(readFileSync(marker, 'utf8')).repository], [MATCHES([':bye', 'A newer goodbye']), other.url]);
+	// Nothing was fetched to find the holder: it is read from the copies and the markers.
+	assert.deepEqual(calls.filter((args) => ['clone', 'fetch', 'ls-remote', 'push'].includes(args[0])), []);
+	// With no body at all, and with only the agreement to commands in it.
+	assert.equal((await call('PUT', path)).status, 200);
+	assert.equal((await call('PUT', path, { body: { acceptCommands: true } })).status, 200);
+	// Named, the other is still refused in the install rule's own words.
+	assert.deepEqual(await call('PUT', path, { body: { repository: idOf(remote) } }), { status: 409, body: { error: { code: 'EXISTS', message: taken('goodbyes', other.url) } } });
+
+	// A third that offers the name changes nothing: one holds it.
+	const third = another({ goodbyes: MATCHES([':bye', 'A third goodbye']) });
+	await service.connectTeam(third.url);
+	assert.equal((await call('PUT', path, { body: {} })).status, 200);
+	assert.equal(installedText(), MATCHES([':bye', 'A newer goodbye']));
+
+	// A marker that names no repository is nobody's. Every repository that
+	// offers the name shows it as installed, so none of them is the holder.
+	writeFileSync(marker, '{ not json');
+	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, other, third));
+	assert.equal((await call('PUT', path, { body: { repository: idOf(other) } })).status, 200);
+
+	// The holder stops offering it. The name is still its own, so no other
+	// could install it, and the request is not handed to one of them.
+	other.commit({ 'packages/goodbyes/_manifest.yml': null, 'packages/goodbyes/package.yml': null });
+	await service.refreshTeam(idOf(other));
+	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
+	assert.equal(installedText(), MATCHES([':bye', 'A newer goodbye']));
+	// The holder is disconnected: the same.
+	await service.disconnectTeam(idOf(other));
+	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
+	// Removed, the name is free, and still which one has to be said.
+	assert.equal((await call('DELETE', path)).status, 200);
+	assert.deepEqual(await call('PUT', path, { body: {} }), ambiguous(remote, third));
 });
 
 test('with several connected, a proposal says which repository it is for, and goes to that one only', async (t) => {

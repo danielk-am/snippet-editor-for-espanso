@@ -588,7 +588,7 @@ test('with several repositories, a send card is made once the call says which, a
 });
 
 test('with several repositories, an install card is made for the one that offers the name, or the one the call names', async (t) => {
-	const { propose, proposals, first, second, one, two, matchDir, route, cards } = await teams(t);
+	const { propose, proposals, first, second, one, two, matchDir, route, cards, service } = await teams(t);
 	// Offered by one of them: that one, without being asked.
 	const shipping = await propose('snippets_install_team_package', { name: 'shipping' });
 	assert.deepEqual([shipping.title, shipping.lines], ['Install the team package shipping', [`Repository: ${second.url}`, 'Shipping', 'The shipping package', '1 snippet']]);
@@ -617,12 +617,21 @@ test('with several repositories, an install card is made for the one that offers
 		(await propose('snippets_install_team_package', { name: 'goodbyes', repository: one })).error,
 		`${TAKEN('goodbyes', second.url)} These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`
 	);
-	// From its own repository it is an update, and still has to say which: both offer the name.
+	// From its own repository it is an update.
 	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes', repository: two })).title, 'Update the team package goodbyes');
-	assert.match((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, /^Two repositories offer goodbyes/);
+	// With no repository named it is the holder's too, though both offer the
+	// name: no other repository could install it. The card says whose it is.
+	second.commit({ 'packages/goodbyes/package.yml': MATCHES([':later', 'See you much later']) });
+	await service.refreshTeam(two);
+	const update = await propose('snippets_install_team_package', { name: 'goodbyes' });
+	assert.deepEqual([update.title, update.lines], ['Update the team package goodbyes', [`Repository: ${second.url}`, 'Other goodbyes', 'The goodbyes package', '1 snippet']]);
+	assert.equal((await proposals.apply(update.id)).status, 'applied');
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you much later']));
 
-	// Once the person has removed it, the card that was held back applies.
+	// Once the person has removed it, the name is free: which one has to be
+	// said again, and the card that was held back applies.
 	await route('DELETE', '/team/packages/goodbyes/installed');
+	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, `Two repositories offer goodbyes: ${listedAs(first)} and ${listedAs(second)}. ${WHICH}`);
 	assert.equal((await proposals.apply(mine.id)).status, 'applied');
 	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'Goodbye for now'], [':cheers', 'Cheers,']));
 });

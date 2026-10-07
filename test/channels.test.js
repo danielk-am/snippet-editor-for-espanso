@@ -199,10 +199,16 @@ test('the window\'s calls reach the routes and the channels, and say which repos
 	await fails(api.installTeamPackage('tools', { repository: two }), (error) => assert.match(error.message, /runs commands/));
 	// A page with no repository to name sends none: null is not an id.
 	await fails(api.installTeamPackage('tools', { repository: null }), (error) => assert.match(error.message, /runs commands/));
-	await fails(api.installTeamPackage('goodbyes', { repository: null }), (error) => assert.equal(error.code, 'AMBIGUOUS'));
+	// A name that is held means its holder, though both offer it.
+	second.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Newer than newest']) });
+	await api.refreshTeam(two);
+	assert.deepEqual((({ installed, updateAvailable }) => [installed, updateAvailable])(named(of(await api.installTeamPackage('goodbyes', { repository: null }), two).packages).goodbyes), [true, false]);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'Newer than newest']));
 	assert.equal(named(of(await api.installTeamPackage('tools', { repository: two, acceptCommands: true }), two).packages).tools.installed, true);
 	const removed = await api.removeTeamPackage('goodbyes');
 	assert.deepEqual([named(of(removed, two).packages).goodbyes.installed, named(of(removed, one).packages).goodbyes.installedFrom], [false, '']);
+	// Free again, it could be either.
+	await fails(api.installTeamPackage('goodbyes', { repository: null }), (error) => assert.equal(error.code, 'AMBIGUOUS'));
 
 	// Proposing: to the repository named, and its page opens.
 	const proposal = { fileId: 'local:dates.yml', package: 'goodbyes', summary: 'Share the date snippets' };

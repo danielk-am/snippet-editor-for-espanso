@@ -142,10 +142,16 @@ async function repositoryOffering(service, name) {
 	if (!PACKAGE_NAME.test(name)) throw invalid('A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
 	// What each offers is read from the app's copy of it. Nothing is fetched.
 	const statuses = await Promise.all(teams.map((team) => team.status()));
-	const offering = teams.filter((team, index) => statuses[index].packages.some((pkg) => pkg.name === name));
+	const offered = (index) => statuses[index].packages.find((pkg) => pkg.name === name);
+	const offering = teams.filter((team, index) => offered(index));
 	if (!offering.length) throw fail('NOT_FOUND', `No connected repository has a package named ${name}.`);
-	if (offering.length > 1) throw ambiguous(offering, `offer ${name}`);
-	return offering[0];
+	if (offering.length === 1) return offering[0];
+	// Several offer it. If one of them holds the name already, the request can
+	// only be for that one: an update. Every other is refused while the name is
+	// held. A damaged marker shows as installed in each, and then none holds it.
+	const holding = teams.filter((team, index) => offered(index)?.installed);
+	if (holding.length === 1) return holding[0];
+	throw ambiguous(offering, `offer ${name}`);
 }
 
 // --- routes -----------------------------------------------------------------
