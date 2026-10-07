@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createRouter } from '../core/apiRouter.js';
 import { LIMITS, createApiServer } from '../core/apiServer.js';
 import { createService } from '../core/service.js';
+import { localGit } from './helpers/teamRemote.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/match', import.meta.url));
 const TOKEN = 'a'.repeat(64);
@@ -199,7 +200,7 @@ test('a full write over HTTP reaches the file, through the real router', async (
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-server-'));
 	const matchDir = join(root, 'match');
 	cpSync(FIXTURES, matchDir, { recursive: true });
-	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: matchDir } });
+	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: localGit(root) });
 	const server = createApiServer({ handle: createRouter({ service }), getToken: () => TOKEN });
 	const { port } = await server.start(0);
 	t.after(async () => {

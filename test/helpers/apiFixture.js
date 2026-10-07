@@ -1,5 +1,7 @@
 // The app's API, running for a test: the real service, router and listener
-// on a throwaway copy of the fixtures, on a spare port.
+// on a throwaway copy of the fixtures, on a spare port. Its git is the guarded
+// one, with no repository behind any address; a test that connects one passes
+// its own in `serviceOptions`, made the same way.
 import { cpSync, mkdtempSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -8,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createListenerControl } from '../../core/apiListener.js';
 import { createRouter } from '../../core/apiRouter.js';
 import { createService } from '../../core/service.js';
+import { localGit } from './teamRemote.js';
 
 const FIXTURES = fileURLToPath(new URL('../fixtures/match', import.meta.url));
 
@@ -26,7 +29,7 @@ export async function startApi(t, { enabled = true, aiWrite = false, serviceOpti
 	const matchDir = join(root, 'match');
 	const dataDir = join(root, 'data');
 	cpSync(FIXTURES, matchDir, { recursive: true });
-	const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, ...serviceOptions });
+	const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: localGit(root), ...serviceOptions });
 	const listener = createListenerControl({ service, router: createRouter({ service, log: () => {} }) });
 	const port = await sparePort();
 	await service.saveSettings({ aiWrite });

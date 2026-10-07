@@ -1117,8 +1117,10 @@ test('as the app runs it, a folder on this computer is never a repository addres
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-teamapi-'));
 	const remote = seeded();
 	writeFileSync(join(root, 'settings.json'), JSON.stringify({ teamRepository: remote.url }));
-	// No options: this is how the app itself starts the service.
-	const service = await createService({ userDataDir: root, env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') } });
+	// The service is started as the app starts it, with `allowLocalRepositories`
+	// left at its default. Its git is the guarded one: with no folder behind any
+	// address, no address can get as far as a clone.
+	const service = await createService({ userDataDir: root, env: { SNIPPET_EDITOR_MATCH_DIR: join(root, 'match') }, git: localGit(root) });
 	t.after(() => service.dispose());
 	await service.teamFetched();
 	assert.deepEqual(await service.teamStatus(), { connected: false, repositories: [], installedOnly: [], problem: REFUSED(1) });

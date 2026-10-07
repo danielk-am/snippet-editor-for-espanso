@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter, refFromId } from '../core/apiRouter.js';
 import { createService } from '../core/service.js';
+import { localGit } from './helpers/teamRemote.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/match', import.meta.url));
 const at = (id) => '/api/v1/files/' + encodeURIComponent(id);
@@ -17,7 +18,7 @@ async function setup(t, logged = []) {
 	const root = mkdtempSync(join(tmpdir(), 'snippet-editor-router-'));
 	const matchDir = join(root, 'match');
 	cpSync(FIXTURES, matchDir, { recursive: true });
-	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: matchDir } });
+	const service = await createService({ userDataDir: join(root, 'data'), env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: localGit(root) });
 	t.after(() => service.dispose());
 	const handle = createRouter({ service, log: (error) => logged.push(error) });
 	const call = (method, path, extra = {}) => handle({ method, path, ...extra });
