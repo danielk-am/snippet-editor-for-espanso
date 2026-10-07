@@ -58,7 +58,7 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const MOST_MODELS = 40;
 const line = (value, most) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, most) : '');
 
-// What Codex prints for `codex debug models`, as the models it lists.
+// What Codex prints for `codex debug models --bundled`, as the models it lists.
 // Anything else it might print is no list.
 function codexModels(stdout) {
 	let said;
@@ -166,7 +166,10 @@ export function createBackends({ env = process.env, platform = process.platform,
 		const signedIn = await quick(program, ['login', 'status']).then((result) => result.code === 0, () => false);
 		if (!signedIn) return signedOut('codex', program, 'login');
 		// Its own list, when it will give one. Without it, its own choice answers.
-		const models = await quick(program, ['debug', 'models'], { most: LONG }).then((result) => (result.code === 0 ? codexModels(result.stdout) : []), () => []);
+		// The list that came with the program is asked for: Codex has that
+		// without asking anyone, where its fuller list is refreshed from OpenAI,
+		// and looking at the backends sends nothing anywhere.
+		const models = await quick(program, ['debug', 'models', '--bundled'], { most: LONG }).then((result) => (result.code === 0 ? codexModels(result.stdout) : []), () => []);
 		return entry('codex', 'ready', '', { models });
 	}
 

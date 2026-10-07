@@ -138,7 +138,8 @@ async function run() {
 		env: { SNIPPET_EDITOR_MATCH_DIR: matchDir },
 		onChange: () => win?.webContents.send('data:changed'),
 		onChatEvent: (event) => win?.webContents.send('chat:event', event),
-		chatOptions: { backends: { status: async () => chatStatus(), locate: async () => path.join(here, 'helpers', 'fakeAgent.mjs') } },
+		// A look at the backends is old at once here, so one is made after every answer, as it is after a minute in the app.
+		chatOptions: { backends: { status: async () => chatStatus(), locate: async () => path.join(here, 'helpers', 'fakeAgent.mjs') }, limits: { statusMs: 0 } },
 		getWindow: () => win,
 		isTrustedSender,
 		clipboard: { writeText: (text) => copied.push(text) },
@@ -881,17 +882,26 @@ async function run() {
 			await ask('ARGS');
 			await answered(9);
 			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('"exec","-m","quick-one","--json"')`), 'the chosen model was not named to the program');
-			// The model leaves Codex's list. Its own choice answers, and the footer says so.
+			// The model leaves Codex's list while the panel still shows it. The app
+			// learns of it at its next look, which comes after the next answer. The
+			// message after that is refused, and the panel then looks for itself:
+			// the footer falls back, and the message, still in the box, can be sent.
 			chatModels.codex = [LONG];
-			await js(`${inChat('Codex · Quick One')}.click()`);
-			await waitFor(`document.querySelector('.backends')`, 'who answers, to check again');
-			await js(`${inChat('Check again')}.click()`);
+			await ask('SAY Still the quick one.');
+			await answered(10);
+			await sleep(200);
+			await ask('ARGS');
+			await waitFor(`document.querySelector('.chat__notice')?.textContent.includes("Choose one of Codex's models, or its own choice.")`, 'the refusal of a model that is gone');
 			await waitFor(`${provider} === 'Codex'`, 'the footer to fall back to Codex alone');
+			check((await js(`document.querySelector('.chat__box').value`)) === 'ARGS' && (await js(`document.querySelectorAll('.msg--assistant').length`)) === 10, 'the refused message was not put back to be sent again');
+			await js(`${inChat('Send')}.click()`);
+			await answered(11);
+			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('"exec","--json"')`), 'a model that is gone from the list was still named to the program');
+			check(!(await js(`Boolean(document.querySelector('.chat__notice .alert--danger'))`)), 'the refusal stayed on screen after the message went');
+			await js(`${inChat('Codex')}.click()`);
+			await waitFor(`document.querySelector('.backends')`, 'who answers, after the fall back');
 			check((await js(`${codexRow}.querySelector('select').value`)) === '', 'a model that is gone from the list is still shown as chosen');
 			await js(`${inChat('Back to the conversation')}.click()`);
-			await ask('ARGS');
-			await answered(10);
-			check(await js(`${lastAnswer}.querySelector('.md').textContent.includes('"exec","--json"')`), 'a model that is gone from the list was still named to the program');
 			// Listed again, it is the choice again. Then back to Codex's own.
 			chatModels.codex = [QUICK, LONG];
 			await js(`${inChat('Codex')}.click()`);
@@ -912,7 +922,7 @@ async function run() {
 			await waitFor(`document.querySelectorAll('.chat__conversation').length === 1`, 'the conversation in History');
 			await shot('19g-assistant-history');
 			await js(`document.querySelector('.chat__conversation').click()`);
-			await waitFor(`document.querySelectorAll('.msg--assistant').length === 10`, 'the conversation to come back');
+			await waitFor(`document.querySelectorAll('.msg--assistant').length === 11`, 'the conversation to come back');
 			check(await js(`document.querySelectorAll('.found').length === 1 && document.querySelectorAll('.found__row').length === 3`), 'the closest matches were not kept with the conversation');
 
 			// The one that was chosen stops being ready while another is. The

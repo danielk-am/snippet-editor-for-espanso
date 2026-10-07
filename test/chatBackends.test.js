@@ -165,7 +165,7 @@ test('Codex is ready when its own check says it is signed in, and says what to r
 	const ready = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 0, stdout: 'Logged in using ChatGPT\n' } } });
 	assert.deepEqual(byId(await ready.backends.status()).codex, { id: 'codex', label: 'Codex', ready: true, state: 'ready', message: '', command: null, sendsTo: 'OpenAI', models: [] });
 	// Signed in, it is then asked which models it has.
-	assert.deepEqual(ready.asked, [[BUNDLED_CODEX, 'login', 'status'], [BUNDLED_CODEX, 'debug', 'models']]);
+	assert.deepEqual(ready.asked, [[BUNDLED_CODEX, 'login', 'status'], [BUNDLED_CODEX, 'debug', 'models', '--bundled']]);
 
 	const out = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 1, stdout: 'Not logged in\n' } } });
 	const codex = byId(await out.backends.status()).codex;
@@ -234,21 +234,23 @@ test('with nothing swapped out, a real program is found on the PATH and asked, a
 
 // --- the models each can answer with ---------------------------------------------------------
 
-// A cut of what Codex 0.160.1 printed for `codex debug models` on 2026-10-07: the fields read here, and a few beside them.
+// A cut of what Codex 0.160.1 printed for `codex debug models --bundled` on 2026-10-07: the fields read here, and a few beside them.
 const CATALOGUE = readFileSync(new URL('./fixtures/chat/codex-models.json', import.meta.url), 'utf8');
 const codexWith = async (stdout, extra = {}) => {
-	const made = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 0, stdout: 'Logged in using ChatGPT\n' }, 'debug models': stdout instanceof Error ? stdout : { code: 0, stdout }, ...extra } });
+	const made = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 0, stdout: 'Logged in using ChatGPT\n' }, 'debug models --bundled': stdout instanceof Error ? stdout : { code: 0, stdout }, ...extra } });
 	return { ...made, codex: byId(await made.backends.status()).codex };
 };
 
 test("Codex's models are read from Codex itself: the ones it lists, in its order, each with its name and what Codex says of it", async () => {
 	const { codex, asked } = await codexWith(CATALOGUE);
 	assert.equal(codex.ready, true);
-	assert.deepEqual(codex.models.map((model) => model.name), ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
+	assert.deepEqual(codex.models.map((model) => model.name), ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
 	assert.deepEqual(codex.models[3], { name: 'gpt-6-luna', label: 'GPT-6-Luna', about: 'Fast and affordable model for easier tasks.' });
-	// The two it hides are not offered.
-	assert.ok(!codex.models.some((model) => model.name === 'gpt-reserve' || model.name === 'codex-auto-review'));
-	assert.deepEqual(asked.filter((call) => call[1] === 'debug'), [[BUNDLED_CODEX, 'debug', 'models']]);
+	// The three it hides are not offered.
+	assert.equal(JSON.parse(CATALOGUE).models.length, 11);
+	assert.ok(!codex.models.some((model) => /daybreak|auto-review/.test(model.name)));
+	// It is asked for the list that came with it, which it has without asking anyone else.
+	assert.deepEqual(asked.filter((call) => call[1] === 'debug'), [[BUNDLED_CODEX, 'debug', 'models', '--bundled']]);
 });
 
 test('when Codex cannot say which models it has, none is offered and it is still ready', async () => {
@@ -257,7 +259,7 @@ test('when Codex cannot say which models it has, none is offered and it is still
 		assert.deepEqual([codex.ready, codex.state, codex.models], [true, 'ready', []], String(said));
 	}
 	// It ended badly, whatever it printed.
-	const failed = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 0, stdout: 'ok' }, 'debug models': { code: 2, stdout: CATALOGUE } } });
+	const failed = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 0, stdout: 'ok' }, 'debug models --bundled': { code: 2, stdout: CATALOGUE } } });
 	assert.deepEqual(byId(await failed.backends.status()).codex.models, []);
 });
 
@@ -305,11 +307,11 @@ test('at most forty models are offered', async () => {
 });
 
 test('Codex is not asked for its models when it is missing or signed out', async () => {
-	const out = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 1, stdout: 'Not logged in\n' }, 'debug models': { code: 0, stdout: CATALOGUE } } });
+	const out = computer({ files: [BUNDLED_CODEX], answers: { 'login status': { code: 1, stdout: 'Not logged in\n' }, 'debug models --bundled': { code: 0, stdout: CATALOGUE } } });
 	const codex = byId(await out.backends.status()).codex;
 	assert.deepEqual([codex.state, codex.models], ['signed-out', []]);
 	assert.ok(!out.asked.some((call) => call[1] === 'debug'));
-	const none = computer({ answers: { 'debug models': { code: 0, stdout: CATALOGUE } } });
+	const none = computer({ answers: { 'debug models --bundled': { code: 0, stdout: CATALOGUE } } });
 	assert.deepEqual(byId(await none.backends.status()).codex.models, []);
 	assert.deepEqual(none.asked, []);
 });
@@ -326,7 +328,7 @@ test("the real program is given room for Codex's long list, and a list longer th
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
 	const catalogue = join(dir, 'catalogue.json');
-	const script = (file) => `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then exit 0; fi\nif [ "$1 $2" = "debug models" ]; then cat "${file}"; exit 0; fi\nexit 2\n`;
+	const script = (file) => `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then exit 0; fi\nif [ "$1 $2 $3" = "debug models --bundled" ]; then cat "${file}"; exit 0; fi\nexit 2\n`;
 	writeFileSync(join(bin, 'codex'), script(catalogue));
 	chmodSync(join(bin, 'codex'), 0o755);
 	const backends = createBackends({ env: { PATH: bin }, home: dir, platform: 'linux' });
