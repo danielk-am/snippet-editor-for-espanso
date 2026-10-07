@@ -31,7 +31,7 @@ const textOr = (value, fallback) => (typeof value === 'string' ? value : fallbac
 const list = (value) => (Array.isArray(value) ? value : []);
 const strings = (value) => list(value).filter((item) => typeof item === 'string');
 
-export const emptyState = () => ({ prefs: { open: false, width: 400, wide: false, backend: null, model: '', told: [] }, conversations: [], current: null });
+export const emptyState = () => ({ prefs: { open: false, width: 400, wide: false, backend: null, models: { claude: '', codex: '', ollama: '' }, told: [] }, conversations: [], current: null });
 
 // What a conversation is called: its first message, on one short line.
 export function titleOf(text) {
@@ -128,12 +128,19 @@ function sound(raw, options) {
 	const state = emptyState();
 	if (!isObject(raw)) return state;
 	const prefs = isObject(raw.prefs) ? raw.prefs : {};
+	const models = isObject(prefs.models) ? prefs.models : {};
 	state.prefs = {
 		open: prefs.open === true,
 		width: Number.isFinite(prefs.width) ? Math.min(1200, Math.max(320, Math.round(prefs.width))) : 400,
 		wide: prefs.wide === true,
 		backend: BACKENDS.includes(prefs.backend) ? prefs.backend : null,
-		model: textOr(prefs.model, ''),
+		// The model chosen for each backend. An empty one is the backend's own
+		// choice. Before there was a choice for each, the one model was Ollama's.
+		models: {
+			claude: upTo(models.claude, 200),
+			codex: upTo(models.codex, 200),
+			ollama: upTo(isObject(prefs.models) ? models.ollama : prefs.model, 200),
+		},
 		told: strings(prefs.told).filter((key) => BACKENDS.some((id) => key === toldKey(id))),
 	};
 	state.conversations = list(raw.conversations)
