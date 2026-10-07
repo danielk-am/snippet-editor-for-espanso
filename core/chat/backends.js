@@ -14,6 +14,10 @@ import { createOllama } from './ollama.js';
 // A program is looked for on the PATH, then where it is usually installed
 // (an app started from the Dock gets a short PATH), then inside the desktop
 // apps that carry a copy: Claude's and ChatGPT's.
+//
+// A ready backend also says which models it can answer with, so that the
+// person can pick one. Ollama and Codex are asked for theirs. Claude Code has
+// no way to be asked, and takes the short name of a family instead.
 
 // Older than this, Claude Code does not know `--permission-prompts`.
 const CLAUDE_NEEDS = [2, 1, 259];
@@ -31,10 +35,13 @@ const exists = async (file) => {
 	}
 };
 
+// Codex's list of models, as it prints it, is over half a megabyte.
+const LONG = 4 * 1024 * 1024;
+
 // A short question to a program: how it ended and what it printed.
-const ask = (program, args) =>
+const ask = (program, args, { most = 65_536 } = {}) =>
 	new Promise((resolve, reject) => {
-		execFile(program, args, { timeout: 5000, windowsHide: true, maxBuffer: 65_536 }, (error, stdout) => {
+		execFile(program, args, { timeout: 5000, windowsHide: true, maxBuffer: most }, (error, stdout) => {
 			if (error && typeof error.code !== 'number') return reject(error);
 			resolve({ code: error ? error.code : 0, stdout: String(stdout ?? '') });
 		});
@@ -45,6 +52,42 @@ const numbers = (text) => {
 	return found ? found.slice(1).map(Number) : null;
 };
 const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+// A model's name is handed to a program as an argument, so it is plain or it
+// is not offered: nothing that could be read as an option or needs quoting.
+export const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
+const MOST_MODELS = 40;
+const line = (value, most) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, most) : '');
+
+// What Codex prints for `codex debug models`, as the models it lists.
+// Anything else it might print is no list.
+function codexModels(stdout) {
+	let said;
+	try {
+		said = JSON.parse(stdout);
+	} catch {
+		return [];
+	}
+	if (!isObject(said) || !Array.isArray(said.models)) return [];
+	const found = [];
+	for (const model of said.models) {
+		if (found.length === MOST_MODELS) break;
+		if (!isObject(model) || model.visibility !== 'list' || typeof model.slug !== 'string' || !MODEL_NAME.test(model.slug)) continue;
+		if (found.some((item) => item.name === model.slug)) continue;
+		found.push({ name: model.slug, label: line(model.display_name, 60) || model.slug, about: line(model.description, 200) });
+	}
+	return found;
+}
+
+// Claude Code turns each of these into the latest model of its family.
+const LATEST = 'Claude Code uses the latest model of this family.';
+const CLAUDE_MODELS = [
+	{ name: 'haiku', label: 'Haiku', about: 'The fastest family. Claude Code uses its latest model.' },
+	{ name: 'sonnet', label: 'Sonnet', about: LATEST },
+	{ name: 'opus', label: 'Opus', about: LATEST },
+	{ name: 'fable', label: 'Fable', about: LATEST },
+];
 
 export function createBackends({ env = process.env, platform = process.platform, home = os.homedir(), isFile = exists, list = (dir) => fs.readdir(dir), quick = ask, ollama = createOllama() } = {}) {
 	const path = platform === 'win32' ? nodePath.win32 : nodePath.posix;
@@ -116,14 +159,17 @@ export function createBackends({ env = process.env, platform = process.platform,
 			},
 			() => false
 		);
-		return signedIn ? entry('claude', 'ready') : signedOut('claude', program, 'auth login');
+		return signedIn ? entry('claude', 'ready', '', { models: CLAUDE_MODELS.map((model) => ({ ...model })) }) : signedOut('claude', program, 'auth login');
 	}
 
 	async function codex() {
 		const program = await locate('codex');
 		if (!program) return entry('codex', 'missing', 'Codex is not installed on this computer.');
 		const signedIn = await quick(program, ['login', 'status']).then((result) => result.code === 0, () => false);
-		return signedIn ? entry('codex', 'ready') : signedOut('codex', program, 'login');
+		if (!signedIn) return signedOut('codex', program, 'login');
+		// Its own list, when it will give one. Without it, its own choice answers.
+		const models = await quick(program, ['debug', 'models'], { most: LONG }).then((result) => (result.code === 0 ? codexModels(result.stdout) : []), () => []);
+		return entry('codex', 'ready', '', { models });
 	}
 
 	async function local() {
