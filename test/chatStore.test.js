@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { KEY, LIMITS, createChatStore, emptyState, titleOf } from '../renderer/lib/chatStore.js';
+import { KEY, LIMITS, createChatStore, emptyState, titleOf, toldKey } from '../renderer/lib/chatStore.js';
 import { diffLines } from '../renderer/lib/diff.js';
 
 function storage({ quota = Infinity, broken = false } = {}) {
@@ -21,7 +21,7 @@ function storage({ quota = Infinity, broken = false } = {}) {
 	};
 }
 
-const message = (id, role, text, extra = {}) => ({ id, role, text, ...(role === 'assistant' ? { backend: 'codex', tools: [], cards: [], ending: 'done', error: null } : {}), ...extra });
+const message = (id, role, text, extra = {}) => ({ id, role, text, ...(role === 'assistant' ? { backend: 'codex', found: [], tools: [], cards: [], ending: 'done', error: null } : {}), ...extra });
 const conversation = (id, updatedAt, messages = [message(`${id}-1`, 'user', `Question ${id}`), message(`${id}-2`, 'assistant', `Answer ${id}`)]) => ({ id, title: `Conversation ${id}`, updatedAt, messages });
 const card = (extra = {}) => ({ id: 'abc123', tool: 'snippets_add_snippet', kind: 'add', title: 'Add a snippet to base.yml', subject: ';x', fileId: 'local:base.yml', fileName: 'base.yml', before: null, after: '- trigger: ";x"\n', lines: [], warnings: [], status: 'applied', message: null, code: null, link: null, at: null, ...extra });
 
@@ -37,7 +37,7 @@ test('with nothing saved, the chat starts closed, 400 wide, with no conversation
 test('what is saved comes back as it was', () => {
 	const store = createChatStore(storage());
 	const state = {
-		prefs: { open: true, width: 520, wide: true, backend: 'ollama', model: 'qwen3:8b', told: ['codex'] },
+		prefs: { open: true, width: 520, wide: true, backend: 'ollama', model: 'qwen3:8b', told: ['codex@2'] },
 		conversations: [conversation('b', 200, [message('m1', 'user', 'Add a snippet'), message('m2', 'assistant', 'Proposed.', { tools: [{ id: 't1', name: 'snippets_add_snippet', status: 'done' }], cards: [card()] })]), conversation('a', 100)],
 		current: 'b',
 	};
@@ -94,7 +94,7 @@ test('damaged history is dropped piece by piece: what is sound is kept', () => {
 	for (const broken of ['', 'not json', 'null', '[]', '"text"', '{"conversations":"many"}']) assert.deepEqual(load(broken), emptyState(), broken);
 
 	const loaded = load({
-		prefs: { open: 'yes', width: 5, wide: 1, backend: 'gpt', model: 7, told: ['claude', 'evil', 3] },
+		prefs: { open: 'yes', width: 5, wide: 1, backend: 'gpt', model: 7, told: ['claude@2', 'evil', 3] },
 		conversations: [
 			conversation('good', 5),
 			{ id: 7, title: 'no', updatedAt: 1, messages: [] },
@@ -105,7 +105,7 @@ test('damaged history is dropped piece by piece: what is sound is kept', () => {
 		],
 		current: 'mixed',
 	});
-	assert.deepEqual(loaded.prefs, { open: false, width: 320, wide: false, backend: null, model: '', told: ['claude'] });
+	assert.deepEqual(loaded.prefs, { open: false, width: 320, wide: false, backend: null, model: '', told: ['claude@2'] });
 	assert.deepEqual(loaded.conversations.map((item) => item.id), ['good', 'mixed']);
 	const mixed = loaded.conversations[1];
 	assert.deepEqual([mixed.title, mixed.updatedAt], ['Kept', 0]);
@@ -196,4 +196,59 @@ test('two very long and very different texts are shown whole, old then new, with
 	// Long but nearly the same is still compared line by line.
 	const near = before.replace('old 1500\n', 'OLD 1500\n');
 	assert.deepEqual(diffLines(before, near, { context: 0 }), [skip(1500), row('remove', 'old 1500'), row('add', 'OLD 1500'), skip(18_499)]);
+});
+
+// --- the closest matches, and the notice ------------------------------------------------------
+
+const hit = (extra = {}) => ({ fileId: 'local:base.yml', fileName: 'base.yml', source: 'local', index: 2, triggers: [';ty', ';thanks'], label: '', preview: 'Thank you!', ...extra });
+
+test('the closest matches shown with an answer are kept with it', () => {
+	const store = createChatStore(storage());
+	const found = [hit(), hit({ fileId: 'package:goodbyes:package.yml', fileName: 'package.yml', source: 'package', package: 'goodbyes', index: 0, triggers: [':bye'], label: 'Friendly goodbye', preview: 'Have a great day!' }), hit({ fileId: 'team:support:replies.yml', source: 'team', package: 'support', index: 7 })];
+	const state = { ...emptyState(), conversations: [conversation('a', 100, [message('m1', 'user', 'Find thanks'), message('m2', 'assistant', 'It is ;ty.', { found })])], current: 'a' };
+	assert.equal(store.save(state), true);
+	assert.deepEqual(store.load().conversations[0].messages[1].found, found);
+	// An answer saved before there were any comes back with none.
+	const { found: dropped, ...older } = message('m2', 'assistant', 'It is ;ty.');
+	store.save({ ...emptyState(), conversations: [conversation('a', 100, [message('m1', 'user', 'Find thanks'), older])], current: 'a' });
+	assert.deepEqual(store.load().conversations[0].messages[1].found, []);
+});
+
+test('matches that are damaged are dropped, long ones are cut, and at most eight are kept', () => {
+	const store = createChatStore(storage());
+	const found = [
+		null,
+		'local:base.yml',
+		hit({ fileId: 7 }),
+		hit({ fileId: '' }),
+		hit({ index: -1 }),
+		hit({ index: 1.5 }),
+		hit({ index: '2' }),
+		hit({ fileId: 'local:odd.yml', fileName: 9, source: 'elsewhere', package: 4, triggers: 'not a list', label: null, preview: undefined }),
+		hit({ fileId: `local:${'f'.repeat(900)}.yml`, fileName: 'n'.repeat(900), package: 'p'.repeat(900), triggers: [...Array.from({ length: 9 }, () => 't'.repeat(900)), 5, null], label: 'l'.repeat(900), preview: 'p'.repeat(900) }),
+		...Array.from({ length: 12 }, (_, index) => hit({ index })),
+	];
+	store.save({ ...emptyState(), conversations: [conversation('a', 100, [message('m1', 'user', 'Find'), message('m2', 'assistant', 'Here.', { found })])], current: 'a' });
+	const kept = store.load().conversations[0].messages[1].found;
+	assert.equal(kept.length, 8);
+	assert.deepEqual(kept[0], { fileId: 'local:odd.yml', fileName: '', source: 'local', index: 2, triggers: [], label: '', preview: '' });
+	assert.equal(kept[1].fileId.length, 300);
+	assert.equal(kept[1].fileName.length, 80);
+	assert.equal(kept[1].package.length, 80);
+	assert.deepEqual(kept[1].triggers.map((trigger) => trigger.length), [80, 80, 80, 80, 80]);
+	assert.equal(kept[1].label.length, 80);
+	assert.equal(kept[1].preview.length, 120);
+	assert.deepEqual(kept.slice(2).map((item) => item.index), [0, 1, 2, 3, 4, 5]);
+	// Not a list at all.
+	store.save({ ...emptyState(), conversations: [conversation('a', 100, [message('m1', 'user', 'Find'), message('m2', 'assistant', 'Here.', { found: { 0: hit() } })])], current: 'a' });
+	assert.deepEqual(store.load().conversations[0].messages[1].found, []);
+});
+
+test('an OK given before the app began to send matches with every message does not count for the notice that says so', () => {
+	const store = createChatStore(storage());
+	assert.equal(toldKey('codex'), 'codex@2');
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, told: ['codex', 'claude', 'ollama@2', 'codex@1', 'nobody@2', 7] } });
+	assert.deepEqual(store.load().prefs.told, ['ollama@2']);
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, told: [toldKey('codex'), toldKey('claude')] } });
+	assert.deepEqual(store.load().prefs.told, ['codex@2', 'claude@2']);
 });

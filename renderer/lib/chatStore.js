@@ -6,13 +6,25 @@
 // Proposals live in the app's memory, not here. A card that was still
 // waiting when the app closed comes back as "expired", and an answer that
 // was under way comes back as stopped.
+//
+// The closest matches shown with an answer are kept with it. A row says
+// where a snippet was then: it is found again when it is pressed.
 
 export const KEY = 'snippet-editor.chat.v1';
 export const LIMITS = { conversations: 20, messages: 100, cardText: 4000 };
+const MATCHES = 8;
 
 const BACKENDS = ['claude', 'codex', 'ollama'];
 const ENDINGS = ['done', 'stopped', 'error'];
 const CARD_STATES = ['pending', 'applying', 'applied', 'stale', 'dismissed', 'expired'];
+const SOURCES = ['local', 'package', 'team'];
+
+// The notice that says where text is sent is agreed to once for each
+// backend. What is sent grew when the app began to send the closest matches
+// and what is open with every message, so an OK from before that is not an
+// OK to this: the name it is kept under carries which notice it was.
+const NOTICE = 2;
+export const toldKey = (backend) => `${backend}@${NOTICE}`;
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const textOr = (value, fallback) => (typeof value === 'string' ? value : fallback);
@@ -56,6 +68,24 @@ function cardOf(raw, { reopened }) {
 	};
 }
 
+const upTo = (value, most) => textOr(value, '').slice(0, most);
+
+function foundOf(raw) {
+	if (!isObject(raw) || typeof raw.fileId !== 'string' || !raw.fileId || !Number.isInteger(raw.index) || raw.index < 0) return null;
+	return {
+		fileId: raw.fileId.slice(0, 300),
+		fileName: upTo(raw.fileName, 80),
+		source: SOURCES.includes(raw.source) ? raw.source : 'local',
+		...(typeof raw.package === 'string' && raw.package ? { package: raw.package.slice(0, 80) } : {}),
+		index: raw.index,
+		triggers: strings(raw.triggers)
+			.slice(0, 5)
+			.map((trigger) => trigger.slice(0, 80)),
+		label: upTo(raw.label, 80),
+		preview: upTo(raw.preview, 120),
+	};
+}
+
 function messageOf(raw, options) {
 	if (!isObject(raw) || typeof raw.id !== 'string' || typeof raw.text !== 'string') return null;
 	if (raw.role === 'user') return { id: raw.id, role: 'user', text: raw.text };
@@ -66,6 +96,7 @@ function messageOf(raw, options) {
 		role: 'assistant',
 		text: raw.text,
 		backend: BACKENDS.includes(raw.backend) ? raw.backend : null,
+		found: list(raw.found).map(foundOf).filter(Boolean).slice(0, MATCHES),
 		tools: list(raw.tools)
 			.filter((tool) => isObject(tool) && typeof tool.id === 'string' && typeof tool.name === 'string')
 			.map((tool) => ({ id: tool.id, name: tool.name, status: options.reopened && tool.status !== 'done' ? 'failed' : textOr(tool.status, 'failed') })),
@@ -103,7 +134,7 @@ function sound(raw, options) {
 		wide: prefs.wide === true,
 		backend: BACKENDS.includes(prefs.backend) ? prefs.backend : null,
 		model: textOr(prefs.model, ''),
-		told: strings(prefs.told).filter((id) => BACKENDS.includes(id)),
+		told: strings(prefs.told).filter((key) => BACKENDS.some((id) => key === toldKey(id))),
 	};
 	state.conversations = list(raw.conversations)
 		.map((conversation) => conversationOf(conversation, options))
