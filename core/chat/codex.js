@@ -1,3 +1,5 @@
+import { modelArgs } from './modelName.js';
+
 // Codex as the chat's backend: how it is started, and how what it prints
 // becomes the events the panel shows.
 //
@@ -31,10 +33,11 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 // escaped and JSON leaves alone.
 const toml = (text) => JSON.stringify(String(text)).replaceAll('\u007f', '\\u007f');
 
-export function codexArgs({ cwd, system, mcp, sessionFile }) {
+export function codexArgs({ cwd, system, mcp, sessionFile, model }) {
 	const env = { ...mcp.env, SNIPPET_EDITOR_CHAT: sessionFile };
 	return [
 		'exec',
+		...modelArgs('-m', model),
 		'--json',
 		'--ephemeral',
 		'--skip-git-repo-check',

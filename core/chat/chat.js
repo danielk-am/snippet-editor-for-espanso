@@ -129,7 +129,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 
 	// --- Claude Code and Codex --------------------------------------------------
 
-	async function viaProgram(turn, id, input) {
+	async function viaProgram(turn, id, input, model) {
 		const label = LABEL[id];
 		await prepare();
 		const channel = await openChannel({ dir: chatDir, router, onProposal: (proposal) => proposalsOf(turn).receive(proposal), log });
@@ -145,10 +145,10 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			if (id === 'claude') {
 				configFile = path.join(chatDir, `mcp-${randomBytes(8).toString('hex')}.json`);
 				await fs.writeFile(configFile, JSON.stringify(claudeMcpConfig({ mcp, sessionFile: channel.file })), { mode: 0o600 });
-				args = claudeArgs({ mcpConfigFile: configFile, system: SYSTEM });
+				args = claudeArgs({ mcpConfigFile: configFile, system: SYSTEM, model });
 				parser = createClaudeParser({ tools: toolNames });
 			} else {
-				args = codexArgs({ cwd: emptyDir, system: SYSTEM, mcp, sessionFile: channel.file });
+				args = codexArgs({ cwd: emptyDir, system: SYSTEM, mcp, sessionFile: channel.file, model });
 				parser = createCodexParser({ tools: toolNames });
 			}
 
@@ -252,6 +252,8 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			const latest = messages.at(-1);
 			if (latest?.role !== 'user' || typeof latest.text !== 'string' || !latest.text.trim()) throw fail('INVALID', 'Write a message first.');
 			if (latest.text.length > MAX_MESSAGE) throw fail('INVALID', `That message is too long: ${count(latest.text.length)} characters, and the most is ${count(MAX_MESSAGE)}.`);
+			// Read once: what is checked below is what is used. None at all is the backend's own choice.
+			const wanted = input.model === null || input.model === '' ? undefined : input.model;
 			if (active) throw fail('BUSY', 'An answer is under way. Wait for it, or stop it first.');
 
 			// The place is taken before anything is waited for.
@@ -263,7 +265,16 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				if (closed) throw fail('CLOSED', 'The app is closing.');
 				const entry = list.find((item) => item.id === id);
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
-				if (id === 'ollama' && !entry.models.some((model) => model.name === input.model)) throw fail('INVALID', "Choose one of Ollama's models first.");
+				// Which model answers. Ollama needs one named. Claude Code and Codex
+				// have a choice of their own, and take another only from their list.
+				// A refusal here has a code of its own: it means the window's list of
+				// models is behind this one, and the window then looks again.
+				const offered = entry.models ?? [];
+				const named = offered.some((model) => model.name === wanted);
+				if (id === 'ollama' && !named) throw fail('MODEL', "Choose one of Ollama's models first.");
+				if (id !== 'ollama' && !named && wanted !== undefined) {
+					throw fail('MODEL', offered.length ? `Choose one of ${LABEL[id]}'s models, or its own choice.` : `${LABEL[id]} did not list its models just now, so its own choice will answer. Send your message again.`);
+				}
 			} catch (error) {
 				active = null;
 				throw error;
@@ -274,7 +285,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				if (turn.stopped) return { type: 'stopped' };
 				if (found.length) emit({ turnId: turn.id, type: 'found', hits: found });
 				const asked = { messages, context: input.context, lookups };
-				return id === 'ollama' ? viaOllama(turn, input.model, asked) : viaProgram(turn, id, asked);
+				return id === 'ollama' ? viaOllama(turn, wanted, asked) : viaProgram(turn, id, asked, wanted);
 			});
 			return { turnId: turn.id };
 		},

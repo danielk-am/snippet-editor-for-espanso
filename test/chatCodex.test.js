@@ -48,6 +48,19 @@ test('Codex is started with its shell, web search, sub-agents and the rest switc
 	assert.ok(!args.includes('code_mode_host'));
 });
 
+test('a chosen model is named straight after `exec`, and with none chosen the arguments are what they were', () => {
+	const input = { cwd: '/data/chat/empty', system: 'You help.', mcp: { command: '/app', args: ['/mcp.mjs'], env: {} }, sessionFile: '/data/chat/chat-ab.json' };
+	const plain = codexArgs(input);
+	const chosen = codexArgs({ ...input, model: 'gpt-6-luna' });
+	assert.deepEqual(chosen, ['exec', '-m', 'gpt-6-luna', ...plain.slice(1)]);
+	for (const none of [undefined, null, '']) assert.deepEqual(codexArgs({ ...input, model: none }), plain);
+	assert.ok(!plain.includes('-m') && !plain.includes('--model'));
+	// A name that is not plain is never written as an argument.
+	for (const bad of ['--oss', '-m', 'two words', 'quo"te', 'a;b', 'new\nline', 'x'.repeat(81), 7, {}, ['gpt-6-luna'], true]) {
+		assert.throws(() => codexArgs({ ...input, model: bad }), /That is not the name of a model\./, String(bad));
+	}
+});
+
 test('paths and instructions with quotes, backslashes and new lines are written so TOML reads them back unchanged', () => {
 	const args = codexArgs({
 		cwd: '/tmp/x',

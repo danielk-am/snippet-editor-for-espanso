@@ -29,7 +29,7 @@ const card = (extra = {}) => ({ id: 'abc123', tool: 'snippets_add_snippet', kind
 
 test('with nothing saved, the chat starts closed, 400 wide, with no conversations', () => {
 	const state = createChatStore(storage()).load();
-	assert.deepEqual(state, { prefs: { open: false, width: 400, wide: false, backend: null, model: '', told: [] }, conversations: [], current: null });
+	assert.deepEqual(state, { prefs: { open: false, width: 400, wide: false, backend: null, models: { claude: '', codex: '', ollama: '' }, told: [] }, conversations: [], current: null });
 	assert.deepEqual(state, emptyState());
 	assert.equal(KEY, 'snippet-editor.chat.v1');
 });
@@ -37,7 +37,7 @@ test('with nothing saved, the chat starts closed, 400 wide, with no conversation
 test('what is saved comes back as it was', () => {
 	const store = createChatStore(storage());
 	const state = {
-		prefs: { open: true, width: 520, wide: true, backend: 'ollama', model: 'qwen3:8b', told: ['codex@2'] },
+		prefs: { open: true, width: 520, wide: true, backend: 'ollama', models: { claude: 'haiku', codex: 'gpt-6-luna', ollama: 'qwen3:8b' }, told: ['codex@2'] },
 		conversations: [conversation('b', 200, [message('m1', 'user', 'Add a snippet'), message('m2', 'assistant', 'Proposed.', { tools: [{ id: 't1', name: 'snippets_add_snippet', status: 'done' }], cards: [card()] })]), conversation('a', 100)],
 		current: 'b',
 	};
@@ -105,7 +105,7 @@ test('damaged history is dropped piece by piece: what is sound is kept', () => {
 		],
 		current: 'mixed',
 	});
-	assert.deepEqual(loaded.prefs, { open: false, width: 320, wide: false, backend: null, model: '', told: ['claude@2'] });
+	assert.deepEqual(loaded.prefs, { open: false, width: 320, wide: false, backend: null, models: { claude: '', codex: '', ollama: '' }, told: ['claude@2'] });
 	assert.deepEqual(loaded.conversations.map((item) => item.id), ['good', 'mixed']);
 	const mixed = loaded.conversations[1];
 	assert.deepEqual([mixed.title, mixed.updatedAt], ['Kept', 0]);
@@ -274,7 +274,45 @@ test('what a version from before this change left in storage is read as it shoul
 		})
 	);
 	const loaded = createChatStore(kept).load();
-	assert.deepEqual(loaded.prefs, { open: true, width: 440, wide: false, backend: 'codex', model: '', told: [] });
+	assert.deepEqual(loaded.prefs, { open: true, width: 440, wide: false, backend: 'codex', models: { claude: '', codex: '', ollama: '' }, told: [] });
 	assert.deepEqual(loaded.conversations[0].messages[1], { id: 'm2', role: 'assistant', text: 'It is ;ty.', backend: 'codex', found: [], tools: [{ id: 't1', name: 'snippets_search', status: 'done' }], cards: [], ending: 'done', error: null });
 	assert.equal(loaded.current, 'a');
+});
+
+// --- the model chosen for each backend -------------------------------------------------------
+
+test('a model is remembered for each backend by itself, and the Ollama model from before this is carried over', () => {
+	const store = createChatStore(storage());
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models: { claude: 'haiku', codex: 'gpt-6-luna', ollama: 'qwen3:8b' } } });
+	assert.deepEqual(store.load().prefs.models, { claude: 'haiku', codex: 'gpt-6-luna', ollama: 'qwen3:8b' });
+
+	// What an earlier version saved: one model, and it was Ollama's.
+	const kept = storage();
+	kept.kept.set(KEY, JSON.stringify({ prefs: { open: true, width: 400, wide: false, backend: 'ollama', model: 'llama3.2:latest', told: [] }, conversations: [], current: null }));
+	const loaded = createChatStore(kept).load().prefs;
+	assert.deepEqual(loaded.models, { claude: '', codex: '', ollama: 'llama3.2:latest' });
+	assert.ok(!('model' in loaded));
+	// Once there is a place for each, the old one is not read again.
+	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'old-one', models: { ollama: 'new-one' } }, conversations: [], current: null }));
+	assert.deepEqual(createChatStore(kept).load().prefs.models, { claude: '', codex: '', ollama: 'new-one' });
+	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'old-one', models: { claude: 'haiku' } }, conversations: [], current: null }));
+	assert.deepEqual(createChatStore(kept).load().prefs.models, { claude: 'haiku', codex: '', ollama: '' });
+});
+
+test('a damaged choice of model becomes no choice', () => {
+	const store = createChatStore(storage());
+	for (const models of [null, 'gpt', 7, ['haiku'], { claude: 7, codex: null, ollama: ['x'] }, { claude: { name: 'haiku' }, nobody: 'x' }]) {
+		store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models } });
+		assert.deepEqual(store.load().prefs.models, { claude: '', codex: '', ollama: '' }, JSON.stringify(models));
+	}
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models: { claude: 'haiku', codex: 'x'.repeat(900), extra: 'dropped' } } });
+	const { models } = store.load().prefs;
+	assert.deepEqual(Object.keys(models), ['claude', 'codex', 'ollama']);
+	// A name too long to be one is let go whole. Cut short it would be the name of something else.
+	assert.deepEqual(models, { claude: 'haiku', codex: '', ollama: '' });
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models: { claude: 'c'.repeat(201), codex: 'x'.repeat(200), ollama: 'o'.repeat(200) } } });
+	assert.deepEqual(store.load().prefs.models, { claude: '', codex: 'x'.repeat(200), ollama: 'o'.repeat(200) });
+	const kept = storage();
+	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'm'.repeat(201) }, conversations: [], current: null }));
+	assert.equal(createChatStore(kept).load().prefs.models.ollama, '');
 });

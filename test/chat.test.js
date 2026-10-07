@@ -187,8 +187,9 @@ test('a message that cannot be sent is refused with the reason, and nothing is s
 	await refused({ backend: 'codex', messages: [{ role: 'user', text: 'Hi' }, { role: 'assistant', text: 'Hello' }] }, 'INVALID', /^Write a message first\.$/);
 	await refused({ backend: 'codex', messages: 'Hi' }, 'INVALID', /^Write a message first\.$/);
 	await refused({ backend: 'codex', messages: [{ role: 'user', text: 'x'.repeat(20_001) }] }, 'INVALID', /^That message is too long: 20,001 characters, and the most is 20,000\.$/);
-	await refused({ backend: 'ollama', messages: one }, 'INVALID', /^Choose one of Ollama's models first\.$/);
-	await refused({ backend: 'ollama', model: 'not-installed', messages: one }, 'INVALID', /^Choose one of Ollama's models first\.$/);
+	// A refusal over the model has a name of its own: it means the panel's list is behind.
+	await refused({ backend: 'ollama', messages: one }, 'MODEL', /^Choose one of Ollama's models first\.$/);
+	await refused({ backend: 'ollama', model: 'not-installed', messages: one }, 'MODEL', /^Choose one of Ollama's models first\.$/);
 	await refused(null, 'INVALID', /^Choose Claude Code/);
 	assert.deepEqual(events, []);
 });
@@ -669,4 +670,67 @@ test('looking up has a time limit: past it the backend is asked without, and wha
 	// The lookups finish at last, and nothing more is told for that answer.
 	await wait(450);
 	assert.deepEqual(context.events.map((event) => event.type).filter((type) => type === 'found'), []);
+});
+
+// --- which model answers ---------------------------------------------------------------------
+
+const QUICK = [{ name: 'quick-one', label: 'Quick One', about: 'Fast.' }, { name: 'big-one', label: 'Big One', about: 'Thorough.' }];
+const FAMILIES = [{ name: 'small', label: 'Small', about: '' }, { name: 'big-one', label: 'Big One', about: '' }, { name: 'claude-only', label: 'Claude Only', about: '' }];
+// Each backend has a list of its own. One name is on both.
+const withModels = { claude: ready('claude', 'Claude Code', { sendsTo: 'Anthropic', models: FAMILIES }), codex: ready('codex', 'Codex', { sendsTo: 'OpenAI', models: QUICK }) };
+
+test('a chosen model is named to the program, and with none chosen the program is left to choose', options, async (t) => {
+	const { ask } = await setup(t, { status: withModels });
+	const argsOf = async (backend, extra) => JSON.parse(textOf(await ask(backend, 'ARGS', extra))).args;
+
+	const codex = await argsOf('codex', { model: 'quick-one' });
+	assert.deepEqual(codex.slice(0, 3), ['exec', '-m', 'quick-one']);
+	const claude = await argsOf('claude', { model: 'big-one' });
+	assert.equal(claude[claude.indexOf('--model') + 1], 'big-one');
+	assert.equal(claude.filter((arg) => arg === '--model').length, 1);
+
+	for (const none of [{}, { model: undefined }, { model: null }, { model: '' }]) {
+		const plain = await argsOf('codex', none);
+		assert.ok(!plain.includes('-m') && !plain.includes('--model'), JSON.stringify(none));
+		assert.equal(plain[1], '--json');
+		assert.ok(!(await argsOf('claude', none)).includes('--model'), JSON.stringify(none));
+	}
+});
+
+test('a model that is not one of the backend\'s own is refused, and nothing is started', options, async (t) => {
+	const context = await setup(t, { status: withModels });
+	const send = (backend, model) => context.chat.send({ backend, model, messages: [{ role: 'user', text: 'SAY never' }] });
+	const refusal = (label) => (error) => error.code === 'MODEL' && error.message === `Choose one of ${label}'s models, or its own choice.`;
+	for (const model of ['gpt-other', 'Quick-One', 'quick-one ', '--oss', '-m', 7, {}, ['quick-one'], true]) {
+		await assert.rejects(send('codex', model), refusal('Codex'), String(model));
+		await assert.rejects(send('claude', model), refusal('Claude Code'), String(model));
+	}
+	// A name from another backend's list is no better than any other.
+	for (const model of ['small', 'claude-only', 'qwen3:8b']) await assert.rejects(send('codex', model), refusal('Codex'), model);
+	for (const model of ['quick-one', 'qwen3:8b']) await assert.rejects(send('claude', model), refusal('Claude Code'), model);
+	await assert.rejects(context.chat.send({ backend: 'ollama', model: 'quick-one', messages: [{ role: 'user', text: 'Hi' }] }), (error) => error.code === 'MODEL');
+	assert.equal(context.checks.located, 0);
+	assert.deepEqual(context.events, []);
+	// The refusal leaves the chat free for the next message. A name on both lists is taken by either.
+	assert.deepEqual(kinds(await context.ask('codex', 'SAY Fine.', { model: 'quick-one' })), ['text', 'done']);
+	assert.deepEqual(kinds(await context.ask('codex', 'SAY Fine.', { model: 'big-one' })), ['text', 'done']);
+	assert.deepEqual(kinds(await context.ask('claude', 'SAY Fine.', { model: 'big-one' })), ['text', 'done']);
+});
+
+test('with no list to choose from, no name is taken on trust, and the refusal says what will answer', options, async (t) => {
+	const bare = await setup(t);
+	for (const [backend, label] of [['codex', 'Codex'], ['claude', 'Claude Code']]) {
+		await assert.rejects(
+			bare.chat.send({ backend, model: 'quick-one', messages: [{ role: 'user', text: 'SAY never' }] }),
+			(error) => error.code === 'MODEL' && error.message === `${label} did not list its models just now, so its own choice will answer. Send your message again.`
+		);
+	}
+	assert.equal(bare.checks.located, 0);
+	assert.deepEqual(kinds(await bare.ask('codex', 'SAY Fine.')), ['text', 'done']);
+});
+
+test('a model the program will not answer with is said in the program\'s own words', options, async (t) => {
+	const { ask } = await setup(t, { status: withModels });
+	assert.deepEqual((await ask('codex', 'EXIT 1 The model quick-one is not available on your plan.', { model: 'quick-one' })).at(-1), { type: 'error', code: 'FAILED', message: 'Codex stopped unexpectedly: The model quick-one is not available on your plan.' });
+	assert.deepEqual((await ask('claude', 'EXIT 1 There is no model named small here.', { model: 'small' })).at(-1), { type: 'error', code: 'FAILED', message: 'Claude Code stopped unexpectedly: There is no model named small here.' });
 });

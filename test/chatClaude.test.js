@@ -39,6 +39,18 @@ test('Claude Code is started with nothing but the snippet tools, and the message
 	]);
 });
 
+test('a chosen model is named before the instructions, and with none chosen the arguments are what they were', () => {
+	const input = { mcpConfigFile: '/data/chat/mcp.json', system: 'You help with snippets.' };
+	const plain = claudeArgs(input);
+	const chosen = claudeArgs({ ...input, model: 'haiku' });
+	assert.deepEqual(chosen, [...plain.slice(0, -2), '--model', 'haiku', '--system-prompt', 'You help with snippets.']);
+	for (const none of [undefined, null, '']) assert.deepEqual(claudeArgs({ ...input, model: none }), plain);
+	assert.ok(!plain.includes('--model'));
+	for (const bad of ['--bare', '-p', 'two words', 'quo"te', 'new\nline', 'x'.repeat(81), 7, {}, ['haiku'], true]) {
+		assert.throws(() => claudeArgs({ ...input, model: bad }), /That is not the name of a model\./, String(bad));
+	}
+});
+
 test('the MCP server it is told to start is this app\'s, pointed at this message\'s listener', () => {
 	const config = claudeMcpConfig({ mcp: { command: '/Applications/Snippet Editor.app/Contents/MacOS/Snippet Editor', args: ['/res/mcp/server.mjs'], env: { ELECTRON_RUN_AS_NODE: '1' } }, sessionFile: '/data/chat/chat-ab.json' });
 	assert.deepEqual(config, {

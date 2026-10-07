@@ -2589,10 +2589,17 @@ li:first-child > .file-row {
   overflow-wrap: anywhere;
 }
 
-.backend__model {
+.backend__model,
+.backend__model-pick {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   font-size: 13px;
+}
+
+.backend__about {
+  color: var(--ui-muted-foreground);
+  font-size: 12px;
 }
 
 .backend__sends {

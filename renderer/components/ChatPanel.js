@@ -127,7 +127,28 @@ function Found({ hits, onOpen }) {
 
 // --- who answers ----------------------------------------------------------------------------
 
-function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, onCheck }) {
+// The model that answers for a backend. The one that was chosen, while the
+// backend still lists it. Otherwise Ollama, which has no choice of its own,
+// gets one that stays on this computer, and Claude Code and Codex are left
+// to choose for themselves, which is no model at all.
+function modelOf(backend, models) {
+	const picked = backend.models.find((item) => item.name === models[backend.id]);
+	if (picked) return picked;
+	return backend.id === 'ollama' ? (backend.models.find((item) => !item.cloud) ?? backend.models[0] ?? null) : null;
+}
+
+function ModelChoice({ backend, model, onModel }) {
+	const own = backend.id === 'ollama' ? [] : [{ id: '', label: `${backend.label}'s own choice` }];
+	return html`<div class="backend__model">
+		<label class="backend__model-pick">
+			<span>Model</span>
+			<${Select} value=${model?.name ?? ''} onChange=${onModel} options=${[...own, ...backend.models.map((item) => ({ id: item.name, label: item.label ?? item.name }))]} />
+		</label>
+		${model?.about && html`<p class="backend__about">${model.about}</p>`}
+	</div>`;
+}
+
+function Backends({ status, chosen, wanted, models, checking, onChoose, onModel, onCheck }) {
 	const lead = chosen
 		? 'Choose who answers.'
 		: wanted
@@ -150,12 +171,7 @@ function Backends({ status, chosen, wanted, model, checking, onChoose, onModel, 
 						<code>${backend.command}</code>
 						<${Button} size="sm" variant="outline" icon="copy" onClick=${() => api.copy(backend.command)}>Copy<//>
 					</div>`}
-					${backend.id === 'ollama' &&
-					backend.ready &&
-					html`<label class="backend__model">
-						<span>Model</span>
-						<${Select} value=${model?.name ?? ''} onChange=${onModel} options=${backend.models.map((item) => ({ id: item.name, label: item.name }))} />
-					</label>`}
+					${backend.ready && backend.models.length > 0 && html`<${ModelChoice} backend=${backend} model=${modelOf(backend, models)} onModel=${(name) => onModel(backend.id, name)} />`}
 					<p class="backend__sends">
 						${backend.id === 'ollama'
 							? 'Local models stay on this computer. With a cloud model, your messages, the snippets that match them, what you have open, and the snippets it reads go to Ollama.'
@@ -233,11 +249,12 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, files, isDirt
 	// another: a message would then go somewhere the person did not pick.
 	const wanted = (status ?? []).find((backend) => backend.id === prefs.backend) ?? null;
 	const chosen = wanted ? (wanted.ready ? wanted : null) : (ready[0] ?? null);
-	// With no model chosen, one that stays on this computer comes first.
-	const model = chosen?.id === 'ollama' ? (chosen.models.find((item) => item.name === prefs.model) ?? chosen.models.find((item) => !item.cloud) ?? chosen.models[0]) : null;
+	// With no model chosen, Ollama gets one that stays on this computer, and
+	// the others their own choice.
+	const model = chosen ? modelOf(chosen, prefs.models) : null;
 	const sendsTo = !chosen ? null : chosen.id === 'ollama' ? (model?.cloud ? 'Ollama' : null) : chosen.sendsTo;
 	const mustTell = Boolean(sendsTo) && !prefs.told.includes(toldKey(chosen.id));
-	const provider = chosen ? (model ? `Ollama · ${model.name}` : chosen.label) : status === null ? 'Checking…' : 'Not set up';
+	const provider = chosen ? (model ? `${chosen.label} · ${model.label ?? model.name}` : chosen.label) : status === null ? 'Checking…' : 'Not set up';
 
 	// The first one found ready becomes the person's choice there and then,
 	// shown in the footer. From then on it is theirs: if it stops being ready,
@@ -362,7 +379,9 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, files, isDirt
 			if (!earlier.length) setCurrentId(null);
 			setDraft(body);
 			setNotice(error.message);
-			if (error.code === 'NOT_READY') check();
+			// What the panel shows of the backends is behind what the app knows:
+			// a backend that is no longer ready, or a model no longer on its list.
+			if (error.code === 'NOT_READY' || error.code === 'MODEL') check();
 		}
 	}
 
@@ -555,10 +574,10 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, files, isDirt
 			status=${status ?? []}
 			chosen=${chosen}
 			wanted=${chosen ? null : wanted}
-			model=${model}
+			models=${prefs.models}
 			checking=${checking}
 			onChoose=${(id) => setPrefs({ backend: id })}
-			onModel=${(name) => setPrefs({ model: name })}
+			onModel=${(id, name) => setPrefs({ models: { ...prefs.models, [id]: name } })}
 			onCheck=${check}
 		/>`;
 	} else if (!messages.length) {
