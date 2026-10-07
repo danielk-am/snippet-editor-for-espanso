@@ -18,7 +18,7 @@ const ENDINGS = ['done', 'error', 'stopped'];
 
 const ready = (id, label, extra = {}) => ({ id, label, ready: true, state: 'ready', message: '', command: null, sendsTo: null, models: [], ...extra });
 
-async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {}, statusDelay = 0, locateDelay = 0, chunkDelay = 0 } = {}) {
+async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'), END] }], limits, aiWrite = true, program = FAKE, tap = () => {}, statusDelay = 0, locateDelay = 0, chunkDelay = 0, lookUp, log = () => {} } = {}) {
 	const api = await startApi(t, { enabled: false, aiWrite });
 	const ollama = await standIn(t, { answers, chunkDelay });
 	const events = [];
@@ -51,8 +51,9 @@ async function setup(t, { status = {}, answers = [{ chunks: [said('From Ollama.'
 			},
 		},
 		ollama: ollama.ollama,
-		log: () => {},
+		log,
 		...(limits ? { limits } : {}),
+		...(lookUp ? { lookUp } : {}),
 	});
 	t.after(() => chat.dispose());
 
@@ -128,6 +129,7 @@ test('ollama: the same message, with the tools run inside the app', async (t) =>
 	});
 	const events = await api.answer({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Find hello' }], context: { fileId: 'local:base.yml', fileName: 'base.yml' } });
 	assert.deepEqual(events, [
+		{ type: 'found', hits: [{ fileId: 'local:base.yml', fileName: 'base.yml', source: 'local', index: 0, triggers: [';hello'], label: '', preview: 'Hello there' }] },
 		{ type: 'text', text: 'Looking.' },
 		{ type: 'tool', id: 'call-1-1', name: 'snippets_search', status: 'started' },
 		{ type: 'tool', id: 'call-1-1', name: 'snippets_search', status: 'done' },
@@ -137,7 +139,9 @@ test('ollama: the same message, with the tools run inside the app', async (t) =>
 	const sent = api.ollama.requests[0].body;
 	assert.equal(sent.model, 'qwen3:8b');
 	assert.match(sent.messages[0].content, /^You are the assistant inside Snippet Editor/);
-	assert.equal(sent.messages.at(-1).content, '[Open in the app: The person has the file base.yml open (file id local:base.yml).]\n\nFind hello');
+	const asked = sent.messages.at(-1).content;
+	assert.ok(asked.startsWith('[Open in the app: The person has the file base.yml open (file id local:base.yml).]\n\n<looked_up_by_the_app>\n'), asked);
+	assert.ok(asked.endsWith('\n</looked_up_by_the_app>\n\nFind hello'), asked);
 	assert.equal(sent.tools.length, 12);
 	// The model was given what the search found.
 	assert.match(api.ollama.requests[1].body.messages.at(-1).content, /"file_id":"local:base\.yml"/);
@@ -219,12 +223,52 @@ test('the backends are not all checked again for every message: a check from the
 	assert.equal(context.checks.count, 2);
 	await context.answer(hello);
 	assert.equal(context.checks.count, 2);
+});
 
-	// With no memory at all, every message looks first.
-	const fresh = await setup(t, { limits: { statusMs: 0 } });
-	await fresh.answer(hello);
-	await fresh.answer(hello);
-	assert.equal(fresh.checks.count, 2);
+test('a message does not wait for the backends to be looked at again: the last look is used, and a new one runs behind the answer', async (t) => {
+	const context = await setup(t, { statusDelay: 300, limits: { statusMs: 1 } });
+	const hello = { backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] };
+	await context.chat.status();
+	assert.equal(context.checks.count, 1);
+	await wait(20);
+
+	// The look is stale by now, and sending does not wait 300 ms for a new one.
+	const began = Date.now();
+	const { turnId } = await context.chat.send(hello);
+	assert.ok(Date.now() - began < 150, `sending took ${Date.now() - began} ms`);
+	while (!context.events.some((event) => event.turnId === turnId && event.type === 'done')) await wait(10);
+	// One new look was started behind it, and only one however many messages follow meanwhile.
+	assert.equal(context.checks.count, 2);
+	await context.answer(hello);
+	assert.equal(context.checks.count, 2);
+	await wait(350);
+	// That look is now the last one, and it is fresh for a millisecond.
+	await wait(20);
+	await context.answer(hello);
+	assert.equal(context.checks.count, 3);
+	// Closing with a look still under way leaves nothing to go wrong.
+	await context.chat.dispose();
+	await wait(350);
+});
+
+test('the first message, with no look yet made, waits for one', async (t) => {
+	const context = await setup(t, { statusDelay: 200 });
+	const began = Date.now();
+	await context.chat.send({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] });
+	assert.ok(Date.now() - began >= 190, `sending took ${Date.now() - began} ms`);
+	assert.equal(context.checks.count, 1);
+});
+
+test('a look made behind an answer that finds the backend gone is what the next message is told', async (t) => {
+	const context = await setup(t, { limits: { statusMs: 1 } });
+	const hello = { backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Hi' }] };
+	await context.answer(hello);
+	await wait(20);
+	context.backends.ollama = { ...context.backends.ollama, ready: false, state: 'not-running', message: 'Ollama is not answering on this computer.' };
+	// This one still goes, on the strength of the last look, while a new look is made.
+	await context.answer(hello);
+	await wait(20);
+	await assert.rejects(context.chat.send(hello), (error) => error.code === 'NOT_READY' && error.message === 'Ollama is not answering on this computer.');
 });
 
 test('after an answer fails because of the backend itself, the next message looks again', options, async (t) => {
@@ -424,4 +468,89 @@ test('status is what the backends report, and applying or dismissing a card that
 	assert.deepEqual((await chat.status()).map((item) => [item.id, item.ready]), [['claude', true], ['codex', true], ['ollama', true]]);
 	await assert.rejects(chat.apply('nothing'), (error) => error.code === 'NOT_FOUND');
 	assert.throws(() => chat.dismiss('nothing'), (error) => error.code === 'NOT_FOUND');
+});
+
+// --- what the app looks up first -----------------------------------------------------------
+
+const THANKS = [
+	{ fileId: 'local:base.yml', fileName: 'base.yml', source: 'local', index: 2, triggers: [';ty', ';thanks'], label: '', preview: 'Thank you!' },
+	{ fileId: 'package:goodbyes:package.yml', fileName: 'package.yml', source: 'package', package: 'goodbyes', index: 0, triggers: [':bye'], label: 'Friendly goodbye', preview: 'Thanks for reaching out. Have a great day!' },
+];
+
+for (const backend of ['claude', 'codex']) {
+	test(`${backend}: the closest matches are told first, before the program is even looked for, and go to it with the message`, options, async (t) => {
+		let context;
+		let locatedThen = null;
+		context = await setup(t, {
+			tap: (event) => {
+				if (event.type === 'found') locatedThen = context.checks.located;
+			},
+		});
+		const events = await context.ask(backend, 'Where is my thanks snippet?\nARGS', { context: { fileId: 'local:base.yml', fileName: 'base.yml', index: 1, trigger: ';sig' } });
+		assert.deepEqual(squash(kinds(events)), ['found', 'text', 'done']);
+		assert.deepEqual(events[0], { type: 'found', hits: THANKS });
+		assert.equal(locatedThen, 0);
+
+		const seen = JSON.parse(textOf(events));
+		const block = seen.input.split('</open_in_the_app>\n\n')[1].split('\n\n<new_message>')[0].split('\n');
+		assert.equal(block[0], '<looked_up_by_the_app>');
+		assert.equal(block.at(-1), '</looked_up_by_the_app>');
+		assert.equal(block[2], 'snippets_get_snippet {"file_id":"local:base.yml","index":1} returned:');
+		assert.equal(JSON.parse(block[3]).snippet.label, 'Signature');
+		assert.match(block[4], /^The snippets closest to the words of the new message \(thanks, args\), closest first\./);
+		assert.deepEqual(JSON.parse(block[5]).items.map((item) => [item.file_id, item.index]), [['local:base.yml', 2], ['package:goodbyes:package.yml', 0]]);
+		assert.equal(block[6], 'snippets_get_file {"file_id":"local:base.yml","limit":25} returned:');
+		assert.match(JSON.parse(block[7]).version, /^[a-f0-9]{24}$/);
+		assert.equal(block.length, 9);
+		assert.ok(seen.input.endsWith('<new_message>\nWhere is my thanks snippet?\nARGS\n</new_message>\n'));
+		// Like the message, what was looked up is not among the arguments.
+		assert.ok(!seen.args.join('\n').includes('Thank you!'));
+	});
+}
+
+test('ollama: the closest matches are told first, and go to it ahead of the message', async (t) => {
+	const api = await setup(t);
+	const events = await api.answer({ backend: 'ollama', model: 'qwen3:8b', messages: [{ role: 'user', text: 'Where is my thanks snippet?' }] });
+	assert.deepEqual(events, [{ type: 'found', hits: THANKS }, { type: 'text', text: 'From Ollama.' }, { type: 'done' }]);
+	const content = api.ollama.requests[0].body.messages.at(-1).content;
+	assert.ok(content.startsWith('<looked_up_by_the_app>\n'));
+	assert.ok(content.endsWith('</looked_up_by_the_app>\n\nWhere is my thanks snippet?'));
+	assert.ok(content.includes('"triggers":[";ty",";thanks"]'));
+});
+
+test('a message with nothing to search for, or that nothing matches, tells of no matches', options, async (t) => {
+	const { ask } = await setup(t);
+	assert.deepEqual(kinds(await ask('codex', 'SAY Hi.')), ['text', 'done']);
+	assert.deepEqual(kinds(await ask('codex', 'Where is the zebra crossing rota?\nSAY Nowhere.')), ['text', 'done']);
+	// And nothing is put in the message for it.
+	const seen = JSON.parse(textOf(await ask('codex', 'ARGS')));
+	assert.equal(seen.input, '<new_message>\nARGS\n</new_message>\n');
+});
+
+test('looking up is a convenience: when it fails, the answer comes all the same', options, async (t) => {
+	const logged = [];
+	const { ask } = await setup(t, {
+		log: (error) => logged.push(error),
+		lookUp: async () => {
+			throw new Error('the lookups fell over');
+		},
+	});
+	assert.deepEqual(kinds(await ask('codex', 'Where is my thanks snippet?\nSAY Here.')), ['text', 'done']);
+	assert.deepEqual(logged.map((error) => error.message), ['the lookups fell over']);
+});
+
+test('Stop while the app is still looking ends the answer before any program runs, and tells of no matches', options, async (t) => {
+	const context = await setup(t, {
+		lookUp: async () => {
+			await wait(300);
+			return { found: THANKS, lookups: [] };
+		},
+	});
+	const { turnId } = await context.chat.send({ backend: 'codex', messages: [{ role: 'user', text: 'SAY should never be said' }] });
+	await wait(50);
+	context.chat.stop(turnId);
+	while (!context.events.some((event) => ['done', 'error', 'stopped'].includes(event.type))) await wait(20);
+	assert.deepEqual(context.events.map((event) => event.type), ['stopped']);
+	assert.equal(context.checks.located, 0);
+	assert.deepEqual(context.left(), []);
 });

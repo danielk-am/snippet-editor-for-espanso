@@ -5,6 +5,7 @@ import { createBackends } from './backends.js';
 import { openChannel } from './channel.js';
 import { claudeArgs, claudeMcpConfig, createClaudeParser } from './claudeCode.js';
 import { codexArgs, createCodexParser } from './codex.js';
+import { createLookups } from './lookups.js';
 import { createOllama, ollamaTurn } from './ollama.js';
 import { MAX_MESSAGE, SYSTEM, promptMessages, promptText } from './prompt.js';
 import { createProposals } from './proposals.js';
@@ -13,6 +14,7 @@ import { createRunner } from './run.js';
 // The chat, as the window sees it: a message goes in, and events come back
 // until the answer ends.
 //
+//   { turnId, type: 'found', hits }             the snippets closest to the message
 //   { turnId, type: 'text', text }              more of the answer
 //   { turnId, type: 'tool', id, name, status }  a tool started, ended or failed
 //   { turnId, type: 'proposal', card }          a change, waiting for Apply
@@ -20,10 +22,13 @@ import { createRunner } from './run.js';
 //   { turnId, type: 'error', code, message }    it ended some other way
 //   { turnId, type: 'stopped' }                 the person stopped it
 //
-// One answer at a time. Each message starts its backend fresh: Claude Code
-// and Codex as a program with a listener of its own to call back on, Ollama
-// as a request with the tools run here. When the answer ends, by any of the
-// three endings, nothing of it is left running or on disk.
+// One answer at a time. Before the backend is asked, the app looks up what
+// the answer will most likely need: the closest matches are told at once, and
+// all of it goes to the backend with the message. Each message starts its
+// backend fresh: Claude Code and Codex as a program with a listener of its
+// own to call back on, Ollama as a request with the tools run here. When the
+// answer ends, by any of the three endings, nothing of it is left running or
+// on disk.
 
 const LABEL = { claude: 'Claude Code', codex: 'Codex', ollama: 'Ollama' };
 // A model on this computer can take a while to load before its first word.
@@ -35,7 +40,7 @@ const TOO_LONG = { type: 'error', code: 'TOO_LONG', message: 'The answer was too
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const count = (number) => number.toLocaleString('en-US');
 
-export function createChat({ service, router, dataDir, mcp, emit, backends = createBackends(), runner = createRunner(), ollama = createOllama(), log = console.error, limits = {} }) {
+export function createChat({ service, router, dataDir, mcp, emit, backends = createBackends(), runner = createRunner(), ollama = createOllama(), log = console.error, limits = {}, lookUp }) {
 	const { idleMs, ollamaIdleMs, totalMs, maxText, statusMs } = { ...LIMITS, ...limits };
 	const chatDir = path.join(dataDir, 'chat');
 	// Where the programs run: a folder with nothing in it, so no file there
@@ -45,17 +50,26 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 	let closed = false;
 	let prepared = null;
 	// What the backends last said, and when. Looking takes over half a second,
-	// so a message uses a look from the last minute.
+	// so a message never waits for it twice: it goes on the last look, and when
+	// that is over a minute old a new one is made behind the answer. A backend
+	// that has gone since is found out by the answer, which says so.
 	let known = null;
-	const look = async () => {
-		const list = await backends.status();
-		known = { at: Date.now(), list };
-		return list;
-	};
+	let looking = null;
+	const look = () =>
+		(looking ??= (async () => {
+			try {
+				const list = await backends.status();
+				known = { at: Date.now(), list };
+				return list;
+			} finally {
+				looking = null;
+			}
+		})());
 
 	const proposals = createProposals({ router, aiWrite: () => service.settings().aiWrite, log });
 	// The names of the app's tools: what a backend may be seen to have and to use.
 	const toolNames = proposals.tools.list().map((tool) => tool.name);
+	const lookedUp = lookUp ?? createLookups({ store: service.store, tools: proposals.tools, log });
 	// The way in for one answer's proposals. A card carries the name of the
 	// answer that asked for it, and none is made once that answer is over.
 	const proposalsOf = (turn) =>
@@ -203,9 +217,10 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			const turn = { id: randomBytes(8).toString('hex'), open: true, stopped: false, stop: () => {}, finished: null };
 			active = turn;
 			try {
-				const list = known && Date.now() - known.at < statusMs ? known.list : await look();
+				const list = known ? known.list : await look();
 				// The app began to close while that was being looked up.
 				if (closed) throw fail('CLOSED', 'The app is closing.');
+				if (Date.now() - known.at >= statusMs) look().catch(log);
 				const entry = list.find((item) => item.id === id);
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
 				if (id === 'ollama' && !entry.models.some((model) => model.name === input.model)) throw fail('INVALID', "Choose one of Ollama's models first.");
@@ -213,8 +228,19 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				active = null;
 				throw error;
 			}
-			const asked = { messages, context: input.context };
-			turn.finished = answer(turn, () => (id === 'ollama' ? viaOllama(turn, input.model, asked) : viaProgram(turn, id, asked)));
+			turn.finished = answer(turn, async () => {
+				// Looking up is a convenience: without it the backend asks for itself.
+				const { found, lookups } = await Promise.resolve()
+					.then(() => lookedUp({ text: latest.text, context: input.context }))
+					.catch((error) => {
+						log(error);
+						return { found: [], lookups: [] };
+					});
+				if (turn.stopped) return { type: 'stopped' };
+				if (found.length) emit({ turnId: turn.id, type: 'found', hits: found });
+				const asked = { messages, context: input.context, lookups };
+				return id === 'ollama' ? viaOllama(turn, input.model, asked) : viaProgram(turn, id, asked);
+			});
 			return { turnId: turn.id };
 		},
 
