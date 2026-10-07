@@ -160,11 +160,14 @@ try {
 		document.querySelector('.topbar [aria-label="Show the assistant"]')?.click();
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		const status = await window.snippetEditor.invoke('chat:status');
-		return { open: Boolean(document.querySelector('.chat:not([hidden])')), ok: status.ok, ids: status.ok ? status.data.map((item) => item.id) : [], states: status.ok ? status.data.map((item) => item.id + ': ' + item.state) : [status.error?.message] };
+		return { open: Boolean(document.querySelector('.chat:not([hidden])')), ok: status.ok, ids: status.ok ? status.data.map((item) => item.id) : [], states: status.ok ? status.data.map((item) => item.id + ': ' + item.state) : [status.error?.message], models: status.ok ? status.data.map((item) => (Array.isArray(item.models) ? item.id + ' ' + item.models.length : item.id + ' has no list')) : [] };
 	})()`);
 	check(assistant.open, 'the assistant panel did not open in the packaged app');
 	check(assistant.ok && JSON.stringify(assistant.ids) === JSON.stringify(['claude', 'codex', 'ollama']), `the packaged app did not report its three backends: ${JSON.stringify(assistant.states)}`);
 	console.log(`Packaged app: backends on this computer: ${assistant.states.join(', ')}`);
+	// Each says which models it can answer with. How many depends on the computer.
+	check(assistant.models.length === 3 && assistant.models.every((line) => /^(claude|codex|ollama) \d+$/.test(line)), `the packaged app did not say which models each backend has: ${JSON.stringify(assistant.models)}`);
+	console.log(`Packaged app: models offered: ${assistant.models.join(', ')}`);
 
 	// What the assistant's "Closest matches" are made with is in the package
 	// and loads in its window. No message is sent here: on a computer with a

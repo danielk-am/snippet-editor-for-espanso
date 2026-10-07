@@ -252,6 +252,8 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 			const latest = messages.at(-1);
 			if (latest?.role !== 'user' || typeof latest.text !== 'string' || !latest.text.trim()) throw fail('INVALID', 'Write a message first.');
 			if (latest.text.length > MAX_MESSAGE) throw fail('INVALID', `That message is too long: ${count(latest.text.length)} characters, and the most is ${count(MAX_MESSAGE)}.`);
+			// Read once: what is checked below is what is used. None at all is the backend's own choice.
+			const wanted = input.model === null || input.model === '' ? undefined : input.model;
 			if (active) throw fail('BUSY', 'An answer is under way. Wait for it, or stop it first.');
 
 			// The place is taken before anything is waited for.
@@ -265,9 +267,14 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				if (!entry?.ready) throw fail('NOT_READY', entry?.message || `${LABEL[id]} is not ready.`);
 				// Which model answers. Ollama needs one named. Claude Code and Codex
 				// have a choice of their own, and take another only from their list.
-				const named = (entry.models ?? []).some((model) => model.name === input.model);
-				if (id === 'ollama' && !named) throw fail('INVALID', "Choose one of Ollama's models first.");
-				if (id !== 'ollama' && !named && input.model !== undefined && input.model !== null && input.model !== '') throw fail('INVALID', `Choose one of ${LABEL[id]}'s models, or its own choice.`);
+				// A refusal here has a code of its own: it means the window's list of
+				// models is behind this one, and the window then looks again.
+				const offered = entry.models ?? [];
+				const named = offered.some((model) => model.name === wanted);
+				if (id === 'ollama' && !named) throw fail('MODEL', "Choose one of Ollama's models first.");
+				if (id !== 'ollama' && !named && wanted !== undefined) {
+					throw fail('MODEL', offered.length ? `Choose one of ${LABEL[id]}'s models, or its own choice.` : `${LABEL[id]} did not list its models just now, so its own choice will answer. Send your message again.`);
+				}
 			} catch (error) {
 				active = null;
 				throw error;
@@ -278,7 +285,7 @@ export function createChat({ service, router, dataDir, mcp, emit, backends = cre
 				if (turn.stopped) return { type: 'stopped' };
 				if (found.length) emit({ turnId: turn.id, type: 'found', hits: found });
 				const asked = { messages, context: input.context, lookups };
-				return id === 'ollama' ? viaOllama(turn, input.model, asked) : viaProgram(turn, id, asked, input.model || undefined);
+				return id === 'ollama' ? viaOllama(turn, wanted, asked) : viaProgram(turn, id, asked, wanted);
 			});
 			return { turnId: turn.id };
 		},

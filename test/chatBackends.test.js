@@ -241,10 +241,13 @@ const codexWith = async (stdout, extra = {}) => {
 	return { ...made, codex: byId(await made.backends.status()).codex };
 };
 
-test("Codex's models are read from Codex itself: the ones it lists, in its order, each with its name and what Codex says of it", async () => {
+test("Codex's models are read from Codex itself: the ones it lists, in the order it ranks them, each with its name and what Codex says of it", async () => {
 	const { codex, asked } = await codexWith(CATALOGUE);
 	assert.equal(codex.ready, true);
-	assert.deepEqual(codex.models.map((model) => model.name), ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']);
+	// It prints GPT-6-Astra first and ranks GPT-6.1-Sol first: its ranking is followed.
+	assert.equal(JSON.parse(CATALOGUE).models[0].slug, 'gpt-6-astra');
+	// GPT-5.5 is listed too, and is not offered: it does not use tools the way the others do.
+	assert.deepEqual(codex.models.map((model) => model.name), ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 	assert.deepEqual(codex.models[3], { name: 'gpt-6-luna', label: 'GPT-6-Luna', about: 'Fast and affordable model for easier tasks.' });
 	// The three it hides are not offered.
 	assert.equal(JSON.parse(CATALOGUE).models.length, 11);
@@ -339,4 +342,75 @@ test("the real program is given room for Codex's long list, and a list longer th
 	writeFileSync(catalogue, JSON.stringify({ models: [{ slug: 'too-big', visibility: 'list', padding: 'p'.repeat(5_000_000) }] }));
 	const codex = byId(await backends.status()).codex;
 	assert.deepEqual([codex.ready, codex.models], [true, []]);
+});
+
+// --- after an independent review ---------------------------------------------------------------
+
+const listed = (slug, extra = {}) => ({ slug, visibility: 'list', ...extra });
+const names = async (models) => (await codexWith(JSON.stringify({ models }))).codex.models.map((model) => model.name);
+
+test("Codex's ranking decides the order, and where it gives none the order it printed stands", async () => {
+	assert.deepEqual(await names([listed('third', { priority: 9 }), listed('first', { priority: 1 }), listed('second', { priority: 4 })]), ['first', 'second', 'third']);
+	// The same rank: as printed.
+	assert.deepEqual(await names([listed('b', { priority: 2 }), listed('a', { priority: 2 }), listed('top', { priority: 1 })]), ['top', 'b', 'a']);
+	// No rank, or one that is not a number: after the ranked ones, as printed.
+	assert.deepEqual(await names([listed('none'), listed('text', { priority: 'high' }), listed('nan', { priority: null }), listed('ranked', { priority: 50 })]), ['ranked', 'none', 'text', 'nan']);
+	assert.deepEqual(await names([listed('x'), listed('y'), listed('z')]), ['x', 'y', 'z']);
+	// The forty that are kept are the forty it ranks highest.
+	const many = Array.from({ length: 60 }, (_, index) => listed(`m${index}`, { priority: 100 - index }));
+	const kept = await names(many);
+	assert.deepEqual([kept.length, kept[0], kept.at(-1)], [40, 'm59', 'm20']);
+});
+
+test('a model that uses tools another way than the one Codex ranks first is not offered', async () => {
+	const code = { tool_mode: 'code_mode_only' };
+	assert.deepEqual(await names([listed('legacy', { priority: 13 }), listed('top', { priority: 1, ...code }), listed('fast', { priority: 4, ...code }), listed('other', { priority: 5, tool_mode: 'direct' })]), ['top', 'fast']);
+	// Where none says how it uses tools, none is told apart.
+	assert.deepEqual(await names([listed('a', { priority: 1 }), listed('b', { priority: 2 })]), ['a', 'b']);
+	// It is the first-ranked of the ones it lists that sets the way: that is the one its own choice uses.
+	assert.deepEqual(await names([{ slug: 'hidden-top', visibility: 'hide', priority: 1, tool_mode: 'direct' }, listed('code', { priority: 2, ...code }), listed('direct', { priority: 3, tool_mode: 'direct' })]), ['code']);
+});
+
+test('a model that cannot think lightly, as the app asks every model to, is not offered', async () => {
+	const levels = (...efforts) => ({ supported_reasoning_levels: efforts.map((effort) => ({ effort })) });
+	assert.deepEqual(await names([listed('light', levels('low', 'high')), listed('heavy', levels('medium', 'high')), listed('unsaid'), listed('odd', { supported_reasoning_levels: 'all' }), listed('none', levels())]), ['light', 'unsaid', 'odd']);
+});
+
+const script = (file, pause = 0) => `#!/bin/sh\nif [ "$1 $2" = "login status" ]; then exit 0; fi\nif [ "$1 $2 $3" = "debug models --bundled" ]; then ${pause ? `sleep ${pause}; ` : ''}cat "${file}"; exit 0; fi\nexit 2\n`;
+const realCodex = (source, options = {}) => {
+	const dir = mkdtempSync(join(tmpdir(), 'snippet-editor-models-'));
+	const bin = join(dir, 'bin');
+	mkdirSync(bin);
+	const catalogue = join(dir, 'catalogue.json');
+	writeFileSync(join(bin, 'codex'), source(catalogue));
+	chmodSync(join(bin, 'codex'), 0o755);
+	return { catalogue, backends: createBackends({ env: { PATH: bin }, home: dir, platform: 'linux', ...options }) };
+};
+
+test('a Codex that is slow to say which models it has is still ready, with none offered, and is not waited on for long', { skip: process.platform === 'win32' }, async () => {
+	const { catalogue, backends } = realCodex((file) => script(file, 3), { patience: 400 });
+	writeFileSync(catalogue, JSON.stringify({ models: [{ slug: 'slow-one', visibility: 'list' }] }));
+	const began = Date.now();
+	const codex = byId(await backends.status()).codex;
+	assert.deepEqual([codex.ready, codex.state, codex.models], [true, 'ready', []]);
+	assert.ok(Date.now() - began < 2000, `the look took ${Date.now() - began} ms`);
+	// Given the time, the same program's list is read.
+	const patient = realCodex((file) => script(file, 1));
+	writeFileSync(patient.catalogue, JSON.stringify({ models: [{ slug: 'slow-one', visibility: 'list' }] }));
+	assert.deepEqual(byId(await patient.backends.status()).codex.models.map((model) => model.name), ['slow-one']);
+});
+
+test('the list is read up to 4 MB and not a byte beyond', { skip: process.platform === 'win32' }, async () => {
+	const { catalogue, backends } = realCodex((file) => script(file));
+	const sized = (bytes) => {
+		const frame = JSON.stringify({ models: [{ slug: 'edge', visibility: 'list', padding: '' }] });
+		const text = JSON.stringify({ models: [{ slug: 'edge', visibility: 'list', padding: 'p'.repeat(bytes - frame.length) }] });
+		assert.equal(Buffer.byteLength(text), bytes);
+		return text;
+	};
+	writeFileSync(catalogue, sized(4 * 1024 * 1024));
+	assert.deepEqual(byId(await backends.status()).codex.models.map((model) => model.name), ['edge']);
+	writeFileSync(catalogue, sized(4 * 1024 * 1024 + 1));
+	const over = byId(await backends.status()).codex;
+	assert.deepEqual([over.ready, over.models], [true, []]);
 });

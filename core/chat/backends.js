@@ -40,9 +40,9 @@ const exists = async (file) => {
 const LONG = 4 * 1024 * 1024;
 
 // A short question to a program: how it ended and what it printed.
-const ask = (program, args, { most = 65_536 } = {}) =>
+const ask = (program, args, { most = 65_536, within = 5000 } = {}) =>
 	new Promise((resolve, reject) => {
-		execFile(program, args, { timeout: 5000, windowsHide: true, maxBuffer: most }, (error, stdout) => {
+		execFile(program, args, { timeout: within, windowsHide: true, maxBuffer: most }, (error, stdout) => {
 			if (error && typeof error.code !== 'number') return reject(error);
 			resolve({ code: error ? error.code : 0, stdout: String(stdout ?? '') });
 		});
@@ -58,8 +58,14 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const MOST_MODELS = 40;
 const line = (value, most) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, most) : '');
 
-// What Codex prints for `codex debug models --bundled`, as the models it lists.
-// Anything else it might print is no list.
+// What Codex prints for `codex debug models --bundled`, as the models it
+// lists, in the order it ranks them. Anything else it might print is no list.
+//
+// Two kinds of listed model are not offered. The app asks every model to
+// think lightly, so one that cannot is left out. And how the assistant is
+// kept to the snippet tools was settled with the model Codex chooses by
+// itself: a model that uses tools another way than that one has not been
+// tried, and is left out too.
 function codexModels(stdout) {
 	let said;
 	try {
@@ -68,10 +74,19 @@ function codexModels(stdout) {
 		return [];
 	}
 	if (!isObject(said) || !Array.isArray(said.models)) return [];
+	const rank = (model) => (typeof model.priority === 'number' && Number.isFinite(model.priority) ? model.priority : Infinity);
+	const ranked = said.models
+		.filter((model) => isObject(model) && model.visibility === 'list')
+		.map((model, at) => ({ model, at }))
+		.sort((a, b) => rank(a.model) - rank(b.model) || a.at - b.at)
+		.map((item) => item.model);
+	const way = ranked[0]?.tool_mode;
 	const found = [];
-	for (const model of said.models) {
+	for (const model of ranked) {
 		if (found.length === MOST_MODELS) break;
-		if (!isObject(model) || model.visibility !== 'list' || typeof model.slug !== 'string' || !MODEL_NAME.test(model.slug)) continue;
+		if (typeof model.slug !== 'string' || !MODEL_NAME.test(model.slug) || model.tool_mode !== way) continue;
+		const levels = model.supported_reasoning_levels;
+		if (Array.isArray(levels) && !levels.some((level) => isObject(level) && level.effort === 'low')) continue;
 		if (found.some((item) => item.name === model.slug)) continue;
 		found.push({ name: model.slug, label: line(model.display_name, 60) || model.slug, about: line(model.description, 200) });
 	}
@@ -87,7 +102,7 @@ const CLAUDE_MODELS = [
 	{ name: 'fable', label: 'Fable', about: LATEST },
 ];
 
-export function createBackends({ env = process.env, platform = process.platform, home = os.homedir(), isFile = exists, list = (dir) => fs.readdir(dir), quick = ask, ollama = createOllama() } = {}) {
+export function createBackends({ env = process.env, platform = process.platform, home = os.homedir(), isFile = exists, list = (dir) => fs.readdir(dir), quick = ask, ollama = createOllama(), patience = 5000 } = {}) {
 	const path = platform === 'win32' ? nodePath.win32 : nodePath.posix;
 	const fileName = (name) => (platform === 'win32' ? `${name}.exe` : name);
 
@@ -141,11 +156,11 @@ export function createBackends({ env = process.env, platform = process.platform,
 	async function claude() {
 		const program = await locate('claude');
 		if (!program) return entry('claude', 'missing', 'Claude Code is not installed on this computer.');
-		const version = await quick(program, ['--version']).then((result) => numbers(result.stdout), () => null);
+		const version = await quick(program, ['--version'], { within: patience }).then((result) => numbers(result.stdout), () => null);
 		if (version && compare(version, CLAUDE_NEEDS) < 0) {
 			return entry('claude', 'old', `This Claude Code is version ${version.join('.')}, and the app needs ${CLAUDE_NEEDS.join('.')} or newer. Update Claude Code, then press Check again.`);
 		}
-		const signedIn = await quick(program, ['auth', 'status']).then(
+		const signedIn = await quick(program, ['auth', 'status'], { within: patience }).then(
 			(result) => {
 				try {
 					const said = JSON.parse(result.stdout);
@@ -163,13 +178,13 @@ export function createBackends({ env = process.env, platform = process.platform,
 	async function codex() {
 		const program = await locate('codex');
 		if (!program) return entry('codex', 'missing', 'Codex is not installed on this computer.');
-		const signedIn = await quick(program, ['login', 'status']).then((result) => result.code === 0, () => false);
+		const signedIn = await quick(program, ['login', 'status'], { within: patience }).then((result) => result.code === 0, () => false);
 		if (!signedIn) return signedOut('codex', program, 'login');
 		// Its own list, when it will give one. Without it, its own choice answers.
 		// The list that came with the program is asked for: Codex has that
 		// without asking anyone, where its fuller list is refreshed from OpenAI,
 		// and looking at the backends sends nothing anywhere.
-		const models = await quick(program, ['debug', 'models', '--bundled'], { most: LONG }).then((result) => (result.code === 0 ? codexModels(result.stdout) : []), () => []);
+		const models = await quick(program, ['debug', 'models', '--bundled'], { most: LONG, within: patience }).then((result) => (result.code === 0 ? codexModels(result.stdout) : []), () => []);
 		return entry('codex', 'ready', '', { models });
 	}
 

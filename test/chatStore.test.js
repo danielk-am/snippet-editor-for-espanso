@@ -308,5 +308,11 @@ test('a damaged choice of model becomes no choice', () => {
 	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models: { claude: 'haiku', codex: 'x'.repeat(900), extra: 'dropped' } } });
 	const { models } = store.load().prefs;
 	assert.deepEqual(Object.keys(models), ['claude', 'codex', 'ollama']);
-	assert.deepEqual([models.claude, models.codex.length, models.ollama], ['haiku', 200, '']);
+	// A name too long to be one is let go whole. Cut short it would be the name of something else.
+	assert.deepEqual(models, { claude: 'haiku', codex: '', ollama: '' });
+	store.save({ ...emptyState(), prefs: { ...emptyState().prefs, models: { claude: 'c'.repeat(201), codex: 'x'.repeat(200), ollama: 'o'.repeat(200) } } });
+	assert.deepEqual(store.load().prefs.models, { claude: '', codex: 'x'.repeat(200), ollama: 'o'.repeat(200) });
+	const kept = storage();
+	kept.kept.set(KEY, JSON.stringify({ prefs: { model: 'm'.repeat(201) }, conversations: [], current: null }));
+	assert.equal(createChatStore(kept).load().prefs.models.ollama, '');
 });

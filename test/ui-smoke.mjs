@@ -902,10 +902,15 @@ async function run() {
 			await waitFor(`document.querySelector('.backends')`, 'who answers, after the fall back');
 			check((await js(`${codexRow}.querySelector('select').value`)) === '', 'a model that is gone from the list is still shown as chosen');
 			await js(`${inChat('Back to the conversation')}.click()`);
-			// Listed again, it is the choice again. Then back to Codex's own.
-			chatModels.codex = [QUICK, LONG];
+			// Codex cannot say which models it has: no choice is offered, and its own answers.
+			chatModels.codex = [];
 			await js(`${inChat('Codex')}.click()`);
 			await waitFor(`document.querySelector('.backends')`, 'who answers, once more');
+			await js(`${inChat('Check again')}.click()`);
+			await waitFor(`${codexRow} && !${codexRow}.querySelector('select') && !${codexRow}.querySelector('.backend__about')`, 'the Model choice to go when there is no list');
+			check((await js(provider)) === 'Codex', 'with no list of models, the footer named one');
+			// Listed again, the remembered model is the choice again. Then back to Codex's own.
+			chatModels.codex = [QUICK, LONG];
 			await js(`${inChat('Check again')}.click()`);
 			await waitFor(`${provider} === 'Codex · Quick One'`, 'the remembered model to be chosen once it is listed again');
 			await pick('');

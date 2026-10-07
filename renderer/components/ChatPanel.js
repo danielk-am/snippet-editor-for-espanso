@@ -381,7 +381,7 @@ export function ChatPanel({ open, sheet, prefs, setPrefs, context, files, isDirt
 			setNotice(error.message);
 			// What the panel shows of the backends is behind what the app knows:
 			// a backend that is no longer ready, or a model no longer on its list.
-			if (error.code === 'NOT_READY' || error.code === 'INVALID') check();
+			if (error.code === 'NOT_READY' || error.code === 'MODEL') check();
 		}
 	}
 

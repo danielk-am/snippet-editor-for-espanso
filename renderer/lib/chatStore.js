@@ -69,6 +69,9 @@ function cardOf(raw, { reopened }) {
 }
 
 const upTo = (value, most) => textOr(value, '').slice(0, most);
+// The name of a model, or none. One too long to be a name is let go whole:
+// cut short, it would be the name of something else.
+const nameOf = (value) => (typeof value === 'string' && value.length <= 200 ? value : '');
 
 function foundOf(raw) {
 	if (!isObject(raw) || typeof raw.fileId !== 'string' || !raw.fileId || !Number.isInteger(raw.index) || raw.index < 0) return null;
@@ -137,9 +140,9 @@ function sound(raw, options) {
 		// The model chosen for each backend. An empty one is the backend's own
 		// choice. Before there was a choice for each, the one model was Ollama's.
 		models: {
-			claude: upTo(models.claude, 200),
-			codex: upTo(models.codex, 200),
-			ollama: upTo(isObject(prefs.models) ? models.ollama : prefs.model, 200),
+			claude: nameOf(models.claude),
+			codex: nameOf(models.codex),
+			ollama: nameOf(isObject(prefs.models) ? models.ollama : prefs.model),
 		},
 		told: strings(prefs.told).filter((key) => BACKENDS.some((id) => key === toldKey(id))),
 	};
