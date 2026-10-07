@@ -627,6 +627,14 @@ test('with several repositories, an install card is made for the one that offers
 	assert.deepEqual([update.title, update.lines], ['Update the team package goodbyes', [`Repository: ${second.url}`, 'Other goodbyes', 'The goodbyes package', '1 snippet']]);
 	assert.equal((await proposals.apply(update.id)).status, 'applied');
 	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you much later']));
+	// A marker that names no repository is nobody's: both show the package as
+	// installed, neither holds it, and which one has to be said.
+	const marker = join(matchDir, 'team', 'goodbyes', '.snippet-editor.json');
+	const written = readFileSync(marker, 'utf8');
+	writeFileSync(marker, '{ not json');
+	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes' })).error, `Two repositories offer goodbyes: ${listedAs(first)} and ${listedAs(second)}. ${WHICH}`);
+	writeFileSync(marker, written);
+	assert.equal((await propose('snippets_install_team_package', { name: 'goodbyes' })).lines[0], `Repository: ${second.url}`);
 
 	// Once the person has removed it, the name is free: which one has to be
 	// said again, and the card that was held back applies.
