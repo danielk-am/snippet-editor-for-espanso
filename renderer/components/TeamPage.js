@@ -1,5 +1,5 @@
 import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
-import { api } from '../lib/api.js';
+import { api, oneRepository } from '../lib/api.js';
 import { Alert, Badge, Button, ConfirmDialog, Empty, useToast } from '../lib/ui.js';
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -48,10 +48,11 @@ export function TeamPage({ navigate, refresh }) {
 	// Checked at once, where `busy` only changes on the next draw.
 	const working = useRef(false);
 
+	// This page shows one repository: see `oneRepository`.
 	const load = () =>
 		api.team().then(
 			(next) => {
-				setTeam(next);
+				setTeam(oneRepository(next));
 				setLoadError('');
 			},
 			(failure) => setLoadError(failure.message)
@@ -65,7 +66,7 @@ export function TeamPage({ navigate, refresh }) {
 		working.current = true;
 		setBusy(true);
 		try {
-			setTeam(await work());
+			setTeam(oneRepository(await work()));
 			// The sidebar and search read the folder, which has just changed.
 			await refresh();
 			toast({ title: done });
@@ -79,7 +80,7 @@ export function TeamPage({ navigate, refresh }) {
 	};
 
 	const install = (pkg, acceptCommands) =>
-		run(() => api.installTeamPackage(pkg.name, { acceptCommands }), `${pkg.title} ${pkg.installed ? 'updated' : 'installed'}`);
+		run(() => api.installTeamPackage(pkg.name, { repository: team.id, acceptCommands }), `${pkg.title} ${pkg.installed ? 'updated' : 'installed'}`);
 	const onInstall = (pkg) => (pkg.runsCommands ? setAsking({ about: 'commands', pkg }) : install(pkg));
 	const remove = (name, title) => run(() => api.removeTeamPackage(name), `${title} removed`);
 
@@ -152,7 +153,7 @@ export function TeamPage({ navigate, refresh }) {
 				<p>From <code>${team.repository}</code>${team.fetchedAt && `, last checked ${when(team.fetchedAt)}`}</p>
 			</div>
 			<div class="page-head__actions">
-				<${Button} variant="outline" icon="refresh" disabled=${busy} onClick=${() => run(api.refreshTeam, 'Checked for updates')}>Check for updates<//>
+				<${Button} variant="outline" icon="refresh" disabled=${busy} onClick=${() => run(() => api.refreshTeam(team.id), 'Checked for updates')}>Check for updates<//>
 			</div>
 		</div>
 		${team.problem &&

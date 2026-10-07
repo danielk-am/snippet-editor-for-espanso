@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRepositoryAddress, repositoryKey } from '../core/teamAddress.js';
+import { parseRepositoryAddress, repositoryKey, repositoryName } from '../core/teamAddress.js';
 
 const refused = (input, options) =>
 	assert.throws(
@@ -231,4 +231,14 @@ test('text that is not an address has no key, and asking never throws', () => {
 		assert.equal(repositoryKey(input, { allowLocal: true }), '', String(input).slice(0, 40));
 	}
 	assert.equal(repositoryKey('  acme/team-snippets  '), 'github.com/acme/team-snippets');
+});
+
+test('a message names a repository by its owner and name, whichever form its address has', () => {
+	for (const input of ['acme/team-snippets', 'https://github.com/acme/team-snippets.git', 'git@github.com:acme/team-snippets.git', 'ssh://git@github.com:22/acme/team-snippets']) {
+		assert.equal(repositoryName(parseRepositoryAddress(input)), 'acme/team-snippets', input);
+	}
+	// As it was typed, capitals and all: this is for a person to read, not for comparing.
+	assert.equal(repositoryName(parseRepositoryAddress('https://ghe.example.com:8443/Acme/Team.git')), 'Acme/Team');
+	// A folder, which only a test connects, has no owner. Its path stands in.
+	assert.equal(repositoryName(parseRepositoryAddress('/tmp/remotes/one/remote.git', { allowLocal: true })), '/tmp/remotes/one/remote.git');
 });

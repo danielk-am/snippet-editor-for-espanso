@@ -17,17 +17,23 @@ async function request(method, path, { query, body } = {}) {
 	throw Object.assign(new Error(reply.body.error.message), { code: reply.body.error.code });
 }
 
-// The app's team status lists every connected repository. Until the pages
-// show several, they are handed the one that is connected, in the shape the
-// status had when there could only be one. With none connected, or with more
-// than one, that is "none".
-function oneRepository(status) {
+// The app's team status lists every connected repository. The pages still
+// show one. Until they are redrawn to show several, each hands the status to
+// this, which gives it the one that is connected, in the shape the status had
+// when there could only be one. With none connected, or with more than one,
+// that is "none".
+export function oneRepository(status) {
 	if (status.repositories.length !== 1) {
-		return { connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: status.problem, problems: [], packages: [], installedOnly: status.installedOnly };
+		return { id: null, connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: status.problem, problems: [], packages: [], installedOnly: status.installedOnly };
 	}
 	const [only] = status.repositories;
 	return { ...only, problem: only.problem || status.problem, installedOnly: [...only.installedOnly, ...status.installedOnly] };
 }
+
+// A page that has no repository to name holds null for its id. To the app
+// that is no id at all, so it is left out.
+const noId = (id) => id === undefined || id === null;
+const idOrNone = (id) => (noId(id) ? undefined : id);
 
 const idOf = (ref) => (ref.source === 'local' ? `local:${ref.name}` : `${ref.source}:${ref.package}:${ref.name}`);
 const file = (ref) => `/files/${encodeURIComponent(idOf(ref))}`;
@@ -48,14 +54,19 @@ export const api = {
 	parseYaml: async (text) => (await request('POST', '/yaml/parse', { body: { text } })).value,
 	stringifyYaml: async (value) => (await request('POST', '/yaml/stringify', { body: { value } })).yaml,
 
-	// Team snippets.
-	team: () => request('GET', '/team').then(oneRepository),
-	refreshTeam: () => request('POST', '/team/refresh').then(oneRepository),
-	installTeamPackage: (name, { acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { acceptCommands } }).then(oneRepository),
-	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`).then(oneRepository),
-	propose: (input) => request('POST', '/team/proposals', { body: input }),
-	connectTeam: (address) => call('team:connect', address).then(oneRepository),
-	disconnectTeam: () => call('team:disconnect').then(oneRepository),
+	// Team snippets. Every call but `propose` and `openTeamLink` answers the
+	// team status: every connected repository, each with its `id`. Where a call
+	// names a repository, it is by that id. Left out, the app uses the only one
+	// that could be meant, and refuses when there is more than one.
+	team: () => request('GET', '/team'),
+	// One repository, or all of them when no id is given.
+	refreshTeam: (id) => request('POST', noId(id) ? '/team/refresh' : `/team/repositories/${encodeURIComponent(id)}/refresh`),
+	installTeamPackage: (name, { repository, acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { repository: idOrNone(repository), acceptCommands } }),
+	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`),
+	// `repository` says which one the proposal is for.
+	propose: ({ repository, ...input }) => request('POST', '/team/proposals', { body: { ...input, repository: idOrNone(repository) } }),
+	connectTeam: (address) => call('team:connect', address),
+	disconnectTeam: (id) => call('team:disconnect', idOrNone(id)),
 	openTeamLink: (url) => call('team:openLink', url),
 
 	// What AI tools may do, and how to connect one.

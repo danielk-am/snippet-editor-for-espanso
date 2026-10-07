@@ -1,5 +1,7 @@
 import { parseDocument, stringify } from 'yaml';
 import { stringifyMatch } from './matchFile.js';
+import { repositoryName } from './teamAddress.js';
+import { PACKAGE_NAME } from './teamRepo.js';
 import { isPlainObject } from '../shared/text.js';
 
 // The app's one contract. A request comes in as plain data, whichever way it
@@ -17,6 +19,7 @@ const STATUS = {
 	READ_ONLY: 403,
 	NOT_FOUND: 404,
 	METHOD_NOT_ALLOWED: 405,
+	AMBIGUOUS: 409,
 	CONFLICT: 409,
 	EXISTS: 409,
 	NOT_CONNECTED: 409,
@@ -69,12 +72,6 @@ function optional(body, field, check, kind) {
 
 const match = (body) => required(body, 'match', isPlainObject, 'a mapping of snippet keys');
 
-function connected(service) {
-	const team = service.team();
-	if (!team) throw fail('NOT_CONNECTED', 'No team repository is connected. Connect one in the app, under Settings.');
-	return team;
-}
-
 // Digits only. A number parser would also take "0x1", "1e2" and " 2 ".
 const isDigits = (text) => typeof text === 'string' && /^\d+$/.test(text);
 
@@ -95,6 +92,55 @@ function written(write) {
 		if (error instanceof RangeError) throw invalid('That value is nested too deeply to write as YAML.');
 		throw error;
 	}
+}
+
+// --- which team repository a request means -----------------------------------
+//
+// Several can be connected. A request names one by its `id`, from `GET team`.
+// It may leave that out where only one could be meant. Where more than one
+// could, it is refused and told which they are.
+
+const noneConnected = () => fail('NOT_CONNECTED', 'No team repository is connected. Connect one in the app, under Settings.');
+
+// The id a request's body names, or undefined when it names none.
+const repositoryIn = (body) => (isPlainObject(body) ? optional(body, 'repository', isText, 'text') : undefined);
+
+function repositoryWithId(service, id) {
+	const team = service.team(id);
+	if (!team) throw fail('NOT_FOUND', 'That repository is not connected.');
+	return team;
+}
+
+const COUNTED = ['Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+// Each is listed as owner/repo with its id in brackets, which is what to send.
+function ambiguous(teams, what) {
+	const names = teams.map((team) => `${repositoryName(team.address)} (${team.address.id})`);
+	return fail('AMBIGUOUS', `${COUNTED[teams.length - 2]} repositories ${what}: ${names.slice(0, -1).join(', ')} and ${names.at(-1)}. Say which: set \`repository\` to one of the ids in brackets.`);
+}
+
+// Where a proposal goes when the request names no repository: to the only one.
+function onlyRepository(service) {
+	const teams = service.teams();
+	if (!teams.length) throw noneConnected();
+	if (teams.length > 1) throw ambiguous(teams, 'are connected');
+	return teams[0];
+}
+
+// Where a package is installed from when the request names no repository:
+// from the one that offers it.
+async function repositoryOffering(service, name) {
+	const teams = service.teams();
+	if (!teams.length) throw noneConnected();
+	// The only one connected answers for itself, whatever is wrong with the name.
+	if (teams.length === 1) return teams[0];
+	if (!PACKAGE_NAME.test(name)) throw invalid('A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
+	// What each offers is read from the app's copy of it. Nothing is fetched.
+	const statuses = await Promise.all(teams.map((team) => team.status()));
+	const offering = teams.filter((team, index) => statuses[index].packages.some((pkg) => pkg.name === name));
+	if (!offering.length) throw fail('NOT_FOUND', `No connected repository has a package named ${name}.`);
+	if (offering.length > 1) throw ambiguous(offering, `offer ${name}`);
+	return offering[0];
 }
 
 // --- routes -----------------------------------------------------------------
@@ -152,18 +198,34 @@ const routes = [
 
 	['GET', 'team', ({ service }) => service.teamStatus()],
 
-	// Each of these answers what `GET team` answers: every connected repository.
-	['POST', 'team/refresh', ({ service }) => service.refreshTeam(connected(service).address.id)],
+	// Each of the next four answers what `GET team` answers: every connected
+	// repository.
+
+	// Fetches them all. One that cannot be fetched has that recorded on it,
+	// where the status shows it, and the rest are still fetched.
+	['POST', 'team/refresh', ({ service }) => {
+		if (!service.teams().length) throw noneConnected();
+		return service.refreshTeam();
+	}],
+
+	// Fetches one. If it cannot be fetched, that is the answer.
+	['POST', 'team/repositories/:id/refresh', ({ service, params }) => service.refreshTeam(params.id)],
 
 	['PUT', 'team/packages/:name/installed', async ({ service, params, body }) => {
-		await connected(service).install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined });
+		const id = repositoryIn(body);
+		const team = id === undefined ? await repositoryOffering(service, params.name) : repositoryWithId(service, id);
+		await team.install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined });
 		return service.teamStatus();
 	}],
 
+	// A name is installed once, so removing needs no repository.
 	['DELETE', 'team/packages/:name/installed', ({ service, params }) => service.removeTeamPackage(params.name)],
 
 	['POST', 'team/proposals', async ({ service, body }) => {
-		const team = connected(service);
+		// Which repository comes first. Until it is known, nothing else in the
+		// request is looked at and git is not run.
+		const id = repositoryIn(body);
+		const team = id === undefined ? onlyRepository(service) : repositoryWithId(service, id);
 		const ref = refFromId(required(body, 'fileId', isText, 'text'));
 		const input = {
 			package: required(body, 'package', isText, 'text'),

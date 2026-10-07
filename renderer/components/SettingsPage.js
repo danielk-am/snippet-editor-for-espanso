@@ -1,5 +1,5 @@
 import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
-import { api, platform } from '../lib/api.js';
+import { api, oneRepository, platform } from '../lib/api.js';
 import { Alert, Button, Card, ConfirmDialog, Field, IconButton, Segmented, Switch, useToast } from '../lib/ui.js';
 
 const SOURCES = {
@@ -196,8 +196,9 @@ function TeamCard({ navigate, refresh }) {
 	const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 	const working = useRef(false);
 
+	// This card shows one repository: see `oneRepository`.
 	useEffect(() => {
-		api.team().then(setTeam, () => {});
+		api.team().then((status) => setTeam(oneRepository(status)), () => {});
 	}, []);
 
 	const act = async (label, work, done) => {
@@ -206,7 +207,7 @@ function TeamCard({ navigate, refresh }) {
 		setBusy(label);
 		setError('');
 		try {
-			setTeam(await work());
+			setTeam(oneRepository(await work()));
 			await refresh();
 			if (done) toast({ title: done });
 		} catch (failure) {
@@ -257,7 +258,7 @@ function TeamCard({ navigate, refresh }) {
 			${error && html`<${Alert} tone="danger" icon="alert" title=${error} />`}
 			<div class="setting__actions">
 				<${Button} variant="outline" icon="team" onClick=${() => navigate({ view: 'team' })}>Browse team packages<//>
-				<${Button} variant="outline" icon="refresh" disabled=${Boolean(busy)} onClick=${() => act('check', api.refreshTeam, 'Checked for updates')}>
+				<${Button} variant="outline" icon="refresh" disabled=${Boolean(busy)} onClick=${() => act('check', () => api.refreshTeam(team.id), 'Checked for updates')}>
 					${busy === 'check' ? 'Checking…' : 'Check for updates'}
 				<//>
 				<${Button} variant="ghost" disabled=${Boolean(busy)} onClick=${() => setConfirmDisconnect(true)}>Disconnect<//>
@@ -271,7 +272,7 @@ function TeamCard({ navigate, refresh }) {
 			onClose=${() => setConfirmDisconnect(false)}
 			onConfirm=${() => {
 				setConfirmDisconnect(false);
-				act('disconnect', api.disconnectTeam, 'Repository disconnected');
+				act('disconnect', () => api.disconnectTeam(team.id), 'Repository disconnected');
 			}}
 		/>`}
 	<//>`;

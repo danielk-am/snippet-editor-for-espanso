@@ -60,14 +60,17 @@ export function registerIpc({ ipcMain, service, router, listener, chat, getWindo
 		return true;
 	});
 
-	// Which repository the app is connected to is a setting, so it is changed
-	// from the window only, like the match folder.
+	// Which repositories the app is connected to is a setting, so it is changed
+	// from the window only, like the match folder. Disconnecting names the
+	// repository by its id. With no id it means the only one connected.
 	handle('team:connect', (address) => service.connectTeam(address));
-	handle('team:disconnect', () => service.disconnectTeam());
-	// The window may open the connected repository's own pages in the browser,
-	// such as the page that starts a pull request, and nothing else.
+	handle('team:disconnect', (id) => service.disconnectTeam(id));
+	// The window may open a connected repository's own pages in the browser,
+	// such as the page that starts a pull request, and nothing else. The link
+	// is tried against each repository connected at this moment, so one kept
+	// from before its repository was disconnected opens no more.
 	handle('team:openLink', async (url) => {
-		if (!isTeamLink(url, service.team()?.address.webUrl ?? null)) throw Object.assign(new Error('That link is not part of the connected repository.'), { code: 'INVALID' });
+		if (!service.teams().some((team) => isTeamLink(url, team.address.webUrl))) throw Object.assign(new Error('That link is not part of a connected repository.'), { code: 'INVALID' });
 		await openExternal(url);
 		return true;
 	});

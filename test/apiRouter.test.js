@@ -403,3 +403,34 @@ test('an installed team file is read by its id, listed in /state, searched, and 
 	assert.deepEqual(code(await call('GET', at('team:farewells'))), [400, 'INVALID_NAME']);
 	assert.deepEqual(code(await call('GET', at('team:../x:package.yml'))), [400, 'INVALID_NAME']);
 });
+
+// --- team routes ------------------------------------------------------------------
+
+test('the route that checks one team repository takes its id as one name, under POST only', async (t) => {
+	const { call } = await setup(t);
+	const told = (reply) => [reply.status, reply.body.error.code, reply.body.error.message];
+	// None is connected here, so every id is one that is not. Whatever the id holds, it is looked up as one name.
+	for (const id of ['0123456789ab', 'x', 'a%2Fb', '..%2F..%2Fstate', '%20', 'refresh']) {
+		assert.deepEqual(told(await call('POST', `/api/v1/team/repositories/${id}/refresh`)), [404, 'NOT_FOUND', 'That repository is not connected.'], id);
+	}
+	for (const method of ['GET', 'PUT', 'DELETE']) assert.deepEqual(code(await call(method, '/api/v1/team/repositories/0123456789ab/refresh')), [405, 'METHOD_NOT_ALLOWED'], method);
+	for (const path of ['/api/v1/team/repositories', '/api/v1/team/repositories/0123456789ab', '/api/v1/team/repositories//refresh', '/api/v1/team/repositories/0123456789ab/refresh/more', '/api/v1/team/repositories/a/b/refresh']) {
+		assert.deepEqual(told(await call('POST', path)), [404, 'NOT_FOUND', 'There is nothing at that path.'], path);
+	}
+	assert.deepEqual(code(await call('POST', '/api/v1/team/repositories/%E0%A4%A/refresh')), [400, 'INVALID']);
+});
+
+test('a repository named in a body is text, checked before anything is looked up', async (t) => {
+	const { call } = await setup(t);
+	const proposal = { fileId: 'local:dates.yml', package: 'goodbyes', summary: 'Share' };
+	for (const repository of [7, null, false, ['0123456789ab'], { id: '0123456789ab' }]) {
+		const expected = { status: 400, body: { error: { code: 'INVALID', message: '`repository` must be text.' } } };
+		assert.deepEqual(await call('PUT', '/api/v1/team/packages/goodbyes/installed', { body: { repository } }), expected, JSON.stringify(repository));
+		assert.deepEqual(await call('POST', '/api/v1/team/proposals', { body: { ...proposal, repository } }), expected, JSON.stringify(repository));
+	}
+	// Left out, in a body that is no mapping at all, it is simply not named.
+	for (const body of [undefined, null, 'x', [], 7]) {
+		assert.deepEqual(code(await call('PUT', '/api/v1/team/packages/goodbyes/installed', { body })), [409, 'NOT_CONNECTED'], JSON.stringify(body));
+		assert.deepEqual(code(await call('POST', '/api/v1/team/proposals', { body })), [409, 'NOT_CONNECTED'], JSON.stringify(body));
+	}
+});

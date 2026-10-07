@@ -1,5 +1,5 @@
 import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
-import { api } from '../lib/api.js';
+import { api, oneRepository } from '../lib/api.js';
 import { Alert, Button, Dialog, Field, Select } from '../lib/ui.js';
 
 const NEW = '+new';
@@ -20,8 +20,10 @@ export function ProposeDialog({ file, onClose, navigate }) {
 	const busy = useRef(false);
 
 	useEffect(() => {
+		// This dialog proposes to one repository: see `oneRepository`.
 		api.team().then(
-			(next) => {
+			(status) => {
+				const next = oneRepository(status);
 				setTeam(next);
 				setTarget(next.packages[0]?.name ?? NEW);
 			},
@@ -42,6 +44,7 @@ export function ProposeDialog({ file, onClose, navigate }) {
 			setSent(
 				await api.propose({
 					fileId: file.id,
+					repository: team?.id,
 					package: isNew ? name.trim() : target,
 					summary: summary.trim(),
 					...(isNew ? { title: title.trim(), description: description.trim() } : {}),

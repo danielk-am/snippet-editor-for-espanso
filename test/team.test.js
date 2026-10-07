@@ -84,15 +84,24 @@ const OTHER = { other: MATCHES([':o', 'Other']) };
 const REFUSED = (place) => `Saved team repository ${place} has an address the app does not accept, so it was skipped. Connect it again in Settings.`;
 const REPEATED = (place, url) => `Saved team repository ${place} is the same repository as ${url}, so it was skipped.`;
 
-test('with no repository connected, the status says so and every other team route is 409', async (t) => {
-	const { call, service } = await setup(t);
+test('with no repository connected, the status says so, a team route that needs one is 409, and one that names one is 404', async (t) => {
+	const { call, service, calls } = await setup(t);
 	const status = await call('GET', '/team');
 	assert.deepEqual([status.status, status.body], [200, { connected: false, repositories: [], installedOnly: [], problem: '' }]);
 	assert.deepEqual(await service.teamStatus(), status.body);
 	assert.deepEqual([service.teams(), service.team(), service.team('0123456789ab')], [[], null, null]);
-	assert.deepEqual(code(await call('POST', '/team/refresh')), [409, 'NOT_CONNECTED']);
-	assert.deepEqual(code(await call('PUT', '/team/packages/goodbyes/installed', { body: {} })), [409, 'NOT_CONNECTED']);
-	assert.deepEqual(code(await call('POST', '/team/proposals', { body: { fileId: 'local:base.yml', package: 'goodbyes', summary: 'x' } })), [409, 'NOT_CONNECTED']);
+	const none = { status: 409, body: { error: { code: 'NOT_CONNECTED', message: 'No team repository is connected. Connect one in the app, under Settings.' } } };
+	const proposal = { fileId: 'local:base.yml', package: 'goodbyes', summary: 'x' };
+	assert.deepEqual(await call('POST', '/team/refresh'), none);
+	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: {} }), none);
+	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed'), none);
+	assert.deepEqual(await call('POST', '/team/proposals', { body: proposal }), none);
+	// A repository that is named is looked for, and is not there.
+	const gone = { status: 404, body: { error: { code: 'NOT_FOUND', message: 'That repository is not connected.' } } };
+	assert.deepEqual(await call('POST', '/team/repositories/0123456789ab/refresh'), gone);
+	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: '0123456789ab' } }), gone);
+	assert.deepEqual(await call('POST', '/team/proposals', { body: { ...proposal, repository: '0123456789ab' } }), gone);
+	assert.deepEqual(calls, []);
 });
 
 test('connecting saves the address and lists the packages', async (t) => {
@@ -626,6 +635,190 @@ test('"check for updates" copies the repository again if the copy has gone', asy
 	assert.deepEqual([refreshed.status, only(refreshed.body).commit, only(refreshed.body).packages.length], [200, remote.head(), 2]);
 });
 
+// --- the routes, where which repository is meant has to be said -----------------------------
+
+// How a message names a repository: owner/repo, then its id in brackets. A
+// test's repository is a folder, which has no owner, so its address stands in.
+const listed = (remote) => `${remote.url} (${idOf(remote)})`;
+const WHICH = 'Say which: set `repository` to one of the ids in brackets.';
+const NOT_CONNECTED = { status: 404, body: { error: { code: 'NOT_FOUND', message: 'That repository is not connected.' } } };
+const NOT_TEXT = { status: 400, body: { error: { code: 'INVALID', message: '`repository` must be text.' } } };
+const proposalsIn = (remote) => remote.branches().filter((branch) => branch.startsWith('snippet-editor/'));
+
+test('checking for updates by route: every repository, or one by its id', async (t) => {
+	const { service, call, remote } = await setup(t);
+	const other = another(OTHER);
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	const [mine, theirs] = [remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Newer']) }), other.commit({ 'packages/other/package.yml': MATCHES([':o', 'Newer']) })];
+
+	const one = await call('POST', `/team/repositories/${idOf(other)}/refresh`);
+	assert.equal(one.status, 200);
+	// It answers what the status route answers: every connected repository.
+	assert.deepEqual(one.body, (await call('GET', '/team')).body);
+	assert.notEqual(of(one.body, remote).commit, mine);
+	assert.equal(of(one.body, other).commit, theirs);
+
+	// Something new in each: checking all fetches both.
+	const [mineAgain, theirsAgain] = [remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Newer again']) }), other.commit({ 'packages/other/package.yml': MATCHES([':o', 'Newer again']) })];
+	const all = await call('POST', '/team/refresh');
+	assert.deepEqual([all.status, of(all.body, remote).commit, of(all.body, other).commit], [200, mineAgain, theirsAgain]);
+	assert.deepEqual(all.body, (await call('GET', '/team')).body);
+
+	for (const id of ['nothing', idOf(other).toUpperCase(), encodeURIComponent(other.url), '0123456789ab']) assert.deepEqual(await call('POST', `/team/repositories/${id}/refresh`), NOT_CONNECTED, id);
+	assert.deepEqual(code(await call('GET', `/team/repositories/${idOf(other)}/refresh`)), [405, 'METHOD_NOT_ALLOWED']);
+
+	// One out of reach. Checked among all, that is recorded on it and the rest
+	// are fetched. Checked by itself, the failure is the answer.
+	const newer = remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Newer still']) });
+	rmSync(other.url, { recursive: true, force: true });
+	const partly = await call('POST', '/team/refresh');
+	assert.equal(partly.status, 200);
+	assert.match(of(partly.body, other).problem, /^Git could not reach that repository\./);
+	assert.deepEqual([of(partly.body, remote).problem, of(partly.body, remote).commit, of(partly.body, other).commit], ['', newer, theirsAgain]);
+	assert.deepEqual(code(await call('POST', `/team/repositories/${idOf(other)}/refresh`)), [502, 'GIT_FAILED']);
+	assert.equal((await call('POST', `/team/repositories/${idOf(remote)}/refresh`)).status, 200);
+});
+
+test('with one connected, a request may name it or leave it out, and any other id is 404', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	await service.connectTeam(remote.url);
+	const id = idOf(remote);
+	const proposal = { fileId: 'local:dates.yml', package: 'goodbyes', summary: 'Share' };
+
+	assert.equal((await call('PUT', '/team/packages/goodbyes/installed')).status, 200);
+	const installed = await call('PUT', '/team/packages/support/installed', { body: { repository: id } });
+	assert.deepEqual([installed.status, named(only(installed.body).packages).support.installed], [200, true]);
+	assert.equal((await call('POST', '/team/proposals', { body: proposal })).status, 201);
+	assert.equal((await call('POST', '/team/proposals', { body: { ...proposal, summary: 'Share again', package: 'support', repository: id } })).status, 201);
+	assert.equal(proposalsIn(remote).length, 2);
+	assert.equal((await call('POST', `/team/repositories/${id}/refresh`)).status, 200);
+
+	for (const repository of ['nothing', '', id.toUpperCase(), remote.url]) {
+		assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository } }), NOT_CONNECTED, repository);
+		assert.deepEqual(await call('POST', '/team/proposals', { body: { ...proposal, repository } }), NOT_CONNECTED, repository);
+	}
+	for (const repository of [7, null, true, [id], { id }]) {
+		assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository } }), NOT_TEXT, JSON.stringify(repository));
+		assert.deepEqual(await call('POST', '/team/proposals', { body: { ...proposal, repository } }), NOT_TEXT, JSON.stringify(repository));
+	}
+	assert.equal(proposalsIn(remote).length, 2);
+	// The one connected repository still answers for a name it does not have, and for one that is no name.
+	assert.deepEqual(await call('PUT', '/team/packages/nothing/installed', { body: {} }), { status: 404, body: { error: { code: 'NOT_FOUND', message: 'The team repository has no package named nothing.' } } });
+	assert.deepEqual(code(await call('PUT', '/team/packages/Bad_Name/installed', { body: { repository: id } })), [400, 'INVALID']);
+	assert.deepEqual(readdirSync(join(matchDir, 'team')).sort(), ['goodbyes', 'support']);
+});
+
+test('installing with no repository named uses the one connected repository that offers the name', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	const other = another(OTHER);
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	const from = (name) => JSON.parse(readFileSync(join(matchDir, 'team', name, '.snippet-editor.json'), 'utf8')).repository;
+
+	const first = await call('PUT', '/team/packages/support/installed', { body: {} });
+	assert.deepEqual([first.status, from('support'), named(of(first.body, remote).packages).support.installed], [200, remote.url, true]);
+	assert.deepEqual(first.body, (await call('GET', '/team')).body);
+	// With no body at all, too.
+	const second = await call('PUT', '/team/packages/other/installed');
+	assert.deepEqual([second.status, from('other'), named(of(second.body, other).packages).other.installed], [200, other.url, true]);
+
+	// A name neither offers, and a name that is not one.
+	assert.deepEqual(await call('PUT', '/team/packages/nothing/installed', { body: {} }), { status: 404, body: { error: { code: 'NOT_FOUND', message: 'No connected repository has a package named nothing.' } } });
+	const bad = await call('PUT', '/team/packages/Bad_Name/installed', { body: {} });
+	assert.deepEqual([code(bad), bad.body.error.message], [[400, 'INVALID'], 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.']);
+
+	// Named, a repository is the only one asked: the second does not offer the first's package.
+	assert.deepEqual(await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: idOf(other) } }), { status: 404, body: { error: { code: 'NOT_FOUND', message: 'The team repository has no package named goodbyes.' } } });
+	assert.equal(existsSync(join(matchDir, 'team', 'goodbyes')), false);
+	assert.equal((await call('PUT', '/team/packages/goodbyes/installed', { body: { repository: idOf(remote) } })).status, 200);
+	assert.equal(from('goodbyes'), remote.url);
+
+	// Removing names no repository, with any number connected.
+	const removed = await call('DELETE', '/team/packages/other/installed');
+	assert.deepEqual([removed.status, named(of(removed.body, other).packages).other.installed, existsSync(join(matchDir, 'team', 'other'))], [200, false, false]);
+});
+
+test('a name that two repositories offer is installed only once the request says from which', async (t) => {
+	const { service, call, remote, matchDir, calls } = await setup(t);
+	const other = another({ goodbyes: MATCHES([':bye', 'The other goodbye']), other: MATCHES([':o', 'Other']) });
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	const path = '/team/packages/goodbyes/installed';
+
+	calls.length = 0;
+	const unsure = await call('PUT', path, { body: {} });
+	assert.deepEqual(unsure, { status: 409, body: { error: { code: 'AMBIGUOUS', message: `Two repositories offer goodbyes: ${listed(remote)} and ${listed(other)}. ${WHICH}` } } });
+	// Agreeing to commands does not say which, and neither does having no body.
+	assert.deepEqual(code(await call('PUT', path, { body: { acceptCommands: true } })), [409, 'AMBIGUOUS']);
+	assert.deepEqual(code(await call('PUT', path)), [409, 'AMBIGUOUS']);
+	for (const repository of [7, null, true, [idOf(other)]]) assert.deepEqual(await call('PUT', path, { body: { repository } }), NOT_TEXT, JSON.stringify(repository));
+	for (const repository of ['nothing', '', other.url]) assert.deepEqual(await call('PUT', path, { body: { repository } }), NOT_CONNECTED, repository);
+	assert.equal(existsSync(join(matchDir, 'team', 'goodbyes')), false);
+	// Nothing was fetched to find that out: what each offers is read from its copy.
+	assert.deepEqual(calls.filter((args) => ['clone', 'fetch', 'ls-remote', 'push'].includes(args[0])), []);
+
+	const chosen = await call('PUT', path, { body: { repository: idOf(other) } });
+	assert.equal(chosen.status, 200);
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':bye', 'The other goodbye']));
+	assert.deepEqual([shown(of(chosen.body, other), 'goodbyes'), shown(of(chosen.body, remote), 'goodbyes')], [[true, false, ''], [false, false, other.url]]);
+
+	// The name is now the other's. The first is refused by the install rule, in its own words.
+	assert.deepEqual(await call('PUT', path, { body: { repository: idOf(remote) } }), { status: 409, body: { error: { code: 'EXISTS', message: taken('goodbyes', other.url) } } });
+	// Two still offer it, so an update has to say which as well.
+	assert.deepEqual(code(await call('PUT', path, { body: {} })), [409, 'AMBIGUOUS']);
+	assert.equal((await call('PUT', path, { body: { repository: idOf(other) } })).status, 200);
+	// A name only one of them offers needs no choosing.
+	assert.equal((await call('PUT', '/team/packages/support/installed', { body: {} })).status, 200);
+
+	// A third that offers it is listed with the other two.
+	const third = another({ goodbyes: MATCHES([':bye', 'A third goodbye']) });
+	await service.connectTeam(third.url);
+	assert.equal((await call('PUT', path, { body: {} })).body.error.message, `Three repositories offer goodbyes: ${listed(remote)}, ${listed(other)} and ${listed(third)}. ${WHICH}`);
+	// Disconnected, the first is no longer one of them.
+	await service.disconnectTeam(idOf(remote));
+	assert.equal((await call('PUT', path, { body: {} })).body.error.message, `Two repositories offer goodbyes: ${listed(other)} and ${listed(third)}. ${WHICH}`);
+});
+
+test('with several connected, a proposal says which repository it is for, and goes to that one only', async (t) => {
+	const { service, call, remote, calls } = await setup(t);
+	const other = another(OTHER);
+	await service.connectTeam(remote.url);
+	await service.connectTeam(other.url);
+	const good = { fileId: 'local:dates.yml', package: 'goodbyes', summary: 'Share' };
+
+	calls.length = 0;
+	const unsure = await call('POST', '/team/proposals', { body: good });
+	assert.deepEqual(unsure, { status: 409, body: { error: { code: 'AMBIGUOUS', message: `Two repositories are connected: ${listed(remote)} and ${listed(other)}. ${WHICH}` } } });
+	// Which repository comes first: nothing else in the request is looked at until it is known.
+	assert.deepEqual(code(await call('POST', '/team/proposals', { body: {} })), [409, 'AMBIGUOUS']);
+	assert.deepEqual(code(await call('POST', '/team/proposals')), [409, 'AMBIGUOUS']);
+	for (const repository of [7, null, true, [idOf(other)]]) assert.deepEqual(await call('POST', '/team/proposals', { body: { ...good, repository } }), NOT_TEXT, JSON.stringify(repository));
+	for (const repository of ['nothing', '', other.url]) assert.deepEqual(await call('POST', '/team/proposals', { body: { ...good, repository } }), NOT_CONNECTED, repository);
+	// All of that was refused before git ran.
+	assert.deepEqual(calls, []);
+	assert.deepEqual([proposalsIn(remote), proposalsIn(other)], [[], []]);
+
+	// Each repository has its own names: goodbyes is a package of the first, and would be a new one in the second.
+	const untitled = await call('POST', '/team/proposals', { body: { ...good, repository: idOf(other) } });
+	assert.deepEqual(code(untitled), [400, 'INVALID']);
+	assert.match(untitled.body.error.message, /`title`/);
+	const created = await call('POST', '/team/proposals', { body: { ...good, repository: idOf(other), title: 'Goodbyes', description: 'Ways to say goodbye' } });
+	assert.deepEqual([created.status, created.body.created], [201, true]);
+	assert.deepEqual([proposalsIn(other), proposalsIn(remote)], [[created.body.branch], []]);
+	assert.equal(other.show(created.body.branch, 'packages/goodbyes/_manifest.yml').includes('title: Goodbyes'), true);
+
+	const added = await call('POST', '/team/proposals', { body: { ...good, repository: idOf(remote) } });
+	assert.deepEqual([added.status, added.body.created], [201, false]);
+	assert.deepEqual([proposalsIn(remote), proposalsIn(other)], [[added.body.branch], [created.body.branch]]);
+
+	// What is checked of a proposal is still checked once the repository is known.
+	const refused = await call('POST', '/team/proposals', { body: { ...good, repository: idOf(remote), fileId: 'team:goodbyes:package.yml' } });
+	assert.deepEqual(code(refused), [400, 'INVALID']);
+	assert.match(refused.body.error.message, /your own files/);
+	assert.deepEqual(code(await call('POST', '/team/proposals', { body: { ...good, repository: idOf(remote), summary: undefined } })), [400, 'INVALID']);
+});
+
 // --- at start ---------------------------------------------------------------------------
 
 test('the app reconnects every repository from its settings at the next start, and fetches each in the background', async (t) => {
@@ -682,7 +875,12 @@ test('a start with the repository out of reach still opens, and says what went w
 	// What was fetched before is still there to browse.
 	assert.equal(named(only(body).packages).goodbyes.installed, true);
 	assert.equal((await again.call('GET', '/state')).body.files.length, 4);
-	assert.deepEqual(code(await again.call('POST', '/team/refresh')), [502, 'GIT_FAILED']);
+	// Checked by itself, the failure is the answer. Checked among all, it is recorded and the answer is the status.
+	assert.deepEqual(code(await again.call('POST', `/team/repositories/${idOf(context.remote)}/refresh`)), [502, 'GIT_FAILED']);
+	const still = await again.call('POST', '/team/refresh');
+	assert.equal(still.status, 200);
+	assert.match(only(still.body).problem, /^Git could not reach that repository\./);
+	assert.equal(named(only(still.body).packages).goodbyes.installed, true);
 
 	// Once it answers again, the complaint goes away.
 	cpSync(`${context.remote.url}.moved`, context.remote.url, { recursive: true });
@@ -927,7 +1125,9 @@ test('when git stops working, the status still answers, and the repository can s
 	broken = true;
 	const reply = await handle({ method: 'GET', path: '/api/v1/team' });
 	assert.deepEqual([reply.status, reply.body.connected, only(reply.body).repository, only(reply.body).problem, only(reply.body).packages], [200, true, remote.url, 'Git is not installed on this computer.', []]);
-	assert.deepEqual(code(await handle({ method: 'POST', path: '/api/v1/team/refresh' })), [502, 'GIT_FAILED']);
+	assert.deepEqual(code(await handle({ method: 'POST', path: `/api/v1/team/repositories/${idOf(remote)}/refresh` })), [502, 'GIT_FAILED']);
+	const all = await handle({ method: 'POST', path: '/api/v1/team/refresh' });
+	assert.deepEqual([all.status, only(all.body).problem], [200, 'Git is not installed on this computer.']);
 	const after = await service.disconnectTeam(idOf(remote));
 	assert.deepEqual([after.connected, service.settings().teamRepositories], [false, []]);
 });
@@ -989,68 +1189,11 @@ test('closing the app stops any git call still under way', async (t) => {
 	assert.equal(stopped, 1);
 });
 
-// --- until the tools, the cards and the window name a repository --------------------------
+// --- until the tools and the cards name a repository --------------------------------------
 //
-// The status lists every repository. The MCP tools, the chat's cards and the
-// window's pages still read one, so each is handed the one that is connected
-// until it is changed to list several. These tests go when that is done.
-
-const NONE = { connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: '', problems: [], packages: [], installedOnly: [] };
-
-test('the window\'s calls hand its pages the one connected repository, in the shape they read', async (t) => {
-	const { service, remote } = await setup(t);
-	const other = another(OTHER);
-	// The bridge the preload script gives the window, over the same router and service.
-	const handle = createRouter({ service, log: () => {} });
-	const channels = {
-		'api:request': (request) => handle(request),
-		'team:connect': (address) => service.connectTeam(address),
-		'team:disconnect': () => service.disconnectTeam(),
-	};
-	const invoke = async (channel, ...args) => {
-		try {
-			return { ok: true, data: await channels[channel](...args) };
-		} catch (error) {
-			return { ok: false, error: { code: error.code ?? 'ERROR', message: error.message } };
-		}
-	};
-	globalThis.window = { snippetEditor: { platform: 'test', on: () => {}, invoke } };
-	t.after(() => delete globalThis.window);
-	const { api } = await import('../renderer/lib/api.js');
-
-	assert.deepEqual(await api.team(), NONE);
-	await fails(api.connectTeam('ext::sh -c "touch /tmp/owned"'), (error) => assert.equal(error.code, 'INVALID'));
-
-	const connected = await api.connectTeam(remote.url);
-	assert.deepEqual(connected, await api.team());
-	assert.deepEqual(
-		[connected.connected, connected.repository, connected.webUrl, connected.branch, connected.commit, connected.problem, connected.problems, connected.installedOnly],
-		[true, remote.url, null, 'main', remote.head(), '', [], []]
-	);
-	assert.deepEqual(connected.packages.map((pkg) => [pkg.name, pkg.installed, pkg.updateAvailable]), [['goodbyes', false, false], ['support', false, false]]);
-
-	assert.equal(named((await api.installTeamPackage('support')).packages).support.installed, true);
-	await api.installTeamPackage('goodbyes');
-	remote.commit({ 'packages/support/_manifest.yml': null, 'packages/support/replies.yml': null, 'packages/support/escalations.yml': null });
-	const refreshed = await api.refreshTeam();
-	assert.deepEqual([refreshed.commit, refreshed.packages.map((pkg) => pkg.name), refreshed.installedOnly], [remote.head(), ['goodbyes'], [{ name: 'support' }]]);
-	assert.deepEqual((await api.removeTeamPackage('support')).installedOnly, []);
-	await fails(api.removeTeamPackage('support'), (error) => assert.equal(error.code, 'NOT_FOUND'));
-
-	// Disconnected: what stays installed is still listed by name.
-	assert.deepEqual(await api.disconnectTeam(), { ...NONE, installedOnly: [{ name: 'goodbyes', repository: remote.url }] });
-
-	// Another repository, with the first one's package still installed: both lists are shown as one.
-	other.commit({ 'packages/kept/_manifest.yml': MANIFEST('kept'), 'packages/kept/package.yml': MATCHES([':k', 'Kept']) });
-	await api.connectTeam(other.url);
-	await api.installTeamPackage('kept');
-	other.commit({ 'packages/kept/_manifest.yml': null, 'packages/kept/package.yml': null });
-	assert.deepEqual((await api.refreshTeam()).installedOnly, [{ name: 'kept' }, { name: 'goodbyes', repository: remote.url }]);
-
-	// With two connected, the pages are not yet able to show them.
-	await service.connectTeam(remote.url);
-	assert.deepEqual([(await api.team()).connected, (await api.team()).packages], [false, []]);
-});
+// The status lists every repository. The MCP tools and the chat's cards still
+// read one, so each is handed the one that is connected until it is changed
+// to name the repository it means. This test goes when that is done.
 
 test('the tools and the cards are handed the one connected repository, and none when there are several', async (t) => {
 	const { oneRepository } = await import('../mcp/tools.mjs');
