@@ -27,7 +27,8 @@ export function oneRepository(status) {
 		return { id: null, connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: status.problem, problems: [], packages: [], installedOnly: status.installedOnly };
 	}
 	const [only] = status.repositories;
-	return { ...only, problem: only.problem || status.problem, installedOnly: [...only.installedOnly, ...status.installedOnly] };
+	// What is wrong with this repository, then what was wrong with the saved list.
+	return { ...only, problem: [only.problem, status.problem].filter(Boolean).join(' '), installedOnly: [...only.installedOnly, ...status.installedOnly] };
 }
 
 // A page that has no repository to name holds null for its id. To the app

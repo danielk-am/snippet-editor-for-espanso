@@ -1189,39 +1189,6 @@ test('closing the app stops any git call still under way', async (t) => {
 	assert.equal(stopped, 1);
 });
 
-// --- until the tools and the cards name a repository --------------------------------------
-//
-// The status lists every repository. The MCP tools and the chat's cards still
-// read one, so each is handed the one that is connected until it is changed
-// to name the repository it means. This test goes when that is done.
-
-test('the tools and the cards are handed the one connected repository, and none when there are several', async (t) => {
-	const { oneRepository } = await import('../mcp/tools.mjs');
-	const { service, remote, matchDir } = await setup(t);
-	const other = another(OTHER);
-	assert.deepEqual(oneRepository(await service.teamStatus()), { connected: false, repository: null, packages: [], installedOnly: [], problem: '' });
-
-	await service.connectTeam(remote.url);
-	await service.team().install('goodbyes');
-	const one = oneRepository(await service.teamStatus());
-	assert.deepEqual([one.connected, one.repository, one.problem, one.installedOnly, named(one.packages).goodbyes.installed], [true, remote.url, '', [], true]);
-
-	// A repository's own problem comes before a complaint about the saved list.
-	assert.equal(oneRepository({ repositories: [{ ...one, problem: 'Git did not finish in time.' }], installedOnly: [], problem: 'About the list.' }).problem, 'Git did not finish in time.');
-	assert.equal(oneRepository({ repositories: [one], installedOnly: [], problem: 'About the list.' }).problem, 'About the list.');
-	assert.deepEqual(oneRepository({ repositories: [{ ...one, installedOnly: [{ name: 'dropped' }] }], installedOnly: [{ name: 'stray', repository: '' }], problem: '' }).installedOnly, [{ name: 'dropped' }, { name: 'stray', repository: '' }]);
-
-	await service.connectTeam(other.url);
-	mkdirSync(join(matchDir, 'team', 'stray'), { recursive: true });
-	writeFileSync(join(matchDir, 'team', 'stray', '.snippet-editor.json'), '{ not json');
-	assert.deepEqual(oneRepository(await service.teamStatus()), { connected: false, repository: null, packages: [], installedOnly: [{ name: 'stray', repository: '' }], problem: '' });
-
-	// A reply that is not a status at all is "none", not a crash.
-	for (const reply of [undefined, null, {}, { packages: [{ name: 'goodbyes' }] }, { repositories: 'x', installedOnly: 7, problem: 3 }]) {
-		assert.deepEqual(oneRepository(reply), { connected: false, repository: null, packages: [], installedOnly: [], problem: '' });
-	}
-});
-
 // --- a package belongs to the repository it was installed from ------------------------
 
 // Two repositories that offer the same two packages, as the service holds

@@ -257,10 +257,12 @@ test('until the pages show several, they are handed the one connected repository
 	second.commit({ 'packages/tools/_manifest.yml': null, 'packages/tools/package.yml': null });
 	assert.deepEqual(oneRepository(await api.refreshTeam(other.id)).installedOnly, [{ name: 'tools' }, { name: 'goodbyes', repository: urlOf('acme/first') }]);
 
-	// A repository's own problem comes before a complaint about the saved list.
+	// What is wrong with the repository and what is wrong with the saved list are two things. Both are shown.
 	const status = await api.team();
+	const unreached = { ...status, repositories: [{ ...status.repositories[0], problem: 'Git did not finish in time.' }] };
 	assert.equal(oneRepository({ ...status, problem: 'About the list.' }).problem, 'About the list.');
-	assert.equal(oneRepository({ ...status, repositories: [{ ...status.repositories[0], problem: 'Git did not finish in time.' }], problem: 'About the list.' }).problem, 'Git did not finish in time.');
+	assert.equal(oneRepository(unreached).problem, 'Git did not finish in time.');
+	assert.equal(oneRepository({ ...unreached, problem: 'About the list.' }).problem, 'Git did not finish in time. About the list.');
 
 	// With two connected, the pages are not yet able to show them.
 	await service.connectTeam('acme/first');

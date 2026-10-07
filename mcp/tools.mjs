@@ -14,6 +14,7 @@
 const MAX_REPLY = 25_000;
 const SWITCHED_OFF = 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor\'s Settings, then try again.';
 const LIST_FILES = 'Call snippets_list_files to see the files and their ids.';
+const LIST_REPOSITORIES = 'Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.';
 const IN_CHAT = ' In this chat the change is not made at once: the person sees it as a card and decides. Nothing is written until they press Apply.';
 const NOT_YET = 'Shown to the person as a card. Nothing has changed yet: it is written only if they press Apply. Say what you proposed and that it is waiting for them. Do not say it is done.';
 const consent = (what) => `${what} would run a command on the person's computer each time it is used. Ask the person first. If they agree, call again with accept_commands set to true.`;
@@ -39,6 +40,17 @@ const SNIPPET = {
 const LIMIT = whole('How many items to return, from 1 to 200. Default 50.', 1, 200);
 const OFFSET = whole('How many items to skip, for the next page. Use `next_offset` from the last reply. Default 0.', 0);
 const ACCEPT = { type: 'boolean', description: 'Pass true only after the person has agreed to a snippet that runs a command (a variable of type shell or script). Example: true.' };
+// A model reads these. Each says what the id is, where it comes from, when it
+// is needed and what happens without it.
+const REPOSITORY = {
+	list: text('The id of one connected repository, to list only its packages. Ids are the `id` values in `repositories`, in the reply of snippets_list_team_packages called without this input. Leave it out to list every repository. Example: "980ba86f6835".'),
+	install: text(
+		'The id of the repository to install from: the `repository` value on that package in snippets_list_team_packages. Needed when more than one connected repository offers a package of this name: without it the call fails and the error lists them with their ids. Otherwise leave it out. Example: "980ba86f6835".'
+	),
+	propose: text(
+		'The id of the repository to send it to: an `id` from `repositories` in snippets_list_team_packages. Needed when more than one repository is connected: without it the call fails and the error lists them with their ids. With one connected, leave it out. Example: "980ba86f6835".'
+	),
+};
 
 const schema = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
@@ -123,17 +135,23 @@ const brief = (match, index) => ({ index, triggers: triggersOf(match), label: is
 // match reads the same whoever found it.
 export const foundItem = (hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) });
 
-// The app's team status lists every connected repository. Until these tools
-// name the repository they mean, they work with the one that is connected,
-// in the shape the status had when there could only be one. With none
-// connected, or with more than one, that is "none". The chat's cards use it too.
-export function oneRepository(status) {
-	const repositories = Array.isArray(status?.repositories) ? status.repositories : [];
-	const apart = Array.isArray(status?.installedOnly) ? status.installedOnly : [];
-	const problem = typeof status?.problem === 'string' ? status.problem : '';
-	if (repositories.length !== 1) return { connected: false, repository: null, packages: [], installedOnly: apart, problem };
-	const [only] = repositories;
-	return { ...only, installedOnly: [...only.installedOnly, ...apart], problem: only.problem || problem };
+// The app's team status: every connected repository with what it offers, then
+// the installed packages that belong to none of them. It is read with care.
+// This server and the app are two programs, and one can be older than the
+// other, so whatever is not a status reads as nothing connected.
+function teamOf(status) {
+	const list = (value) => (Array.isArray(value) ? value.filter(isObject) : []);
+	return {
+		repositories: list(status?.repositories).map((repository) => ({
+			id: textOf(repository.id),
+			address: textOf(repository.repository),
+			problem: textOf(repository.problem),
+			packages: list(repository.packages),
+			installedOnly: list(repository.installedOnly),
+		})),
+		installedOnly: list(status?.installedOnly),
+		problem: textOf(status?.problem),
+	};
 }
 
 function page(items, { offset = 0, limit = 50 }) {
@@ -143,17 +161,19 @@ function page(items, { offset = 0, limit = 50 }) {
 }
 
 // Cuts a list at a whole item until the reply fits, and says where to go on.
+// A note the reply already carries stays, in front, and is counted too.
 function fit(data, key, { offset = 0, limit = 50 }) {
 	const size = (value) => JSON.stringify(value).length;
 	if (size(data) <= MAX_REPLY) return data;
 	const items = data[key];
 	let keep = items.length;
+	const said = data.note ? `${data.note} ` : '';
 	const trimmed = (count) => ({
 		...data,
 		[key]: items.slice(0, count),
 		has_more: true,
 		next_offset: offset + count,
-		note: `Cut to fit: this reply holds ${count} of the ${Math.min(limit, items.length)} asked for. Ask again with offset ${offset + count}, or use a smaller limit.`,
+		note: `${said}Cut to fit: this reply holds ${count} of the ${Math.min(limit, items.length)} asked for. Ask again with offset ${offset + count}, or use a smaller limit.`,
 	});
 	while (keep > 1 && size(trimmed(keep)) > MAX_REPLY) keep = Math.max(1, Math.floor(keep * 0.8));
 	const result = trimmed(keep);
@@ -174,15 +194,24 @@ export function explain(reply, { file, fileId, tool } = {}) {
 		case 'READ_ONLY':
 			return `${name} is read-only: it belongs to a package, a team package, or is write-protected. To change a snippet from it, add your own copy to one of the person's files with snippets_add_snippet.`;
 		case 'NOT_FOUND':
-			return tool === 'team' ? `${message} Call snippets_list_team_packages to see what the repository offers.` : `${message} ${LIST_FILES}`;
+			return tool === 'team' ? `${message} ${LIST_REPOSITORIES}` : `${message} ${LIST_FILES}`;
 		case 'INVALID_NAME':
 			return fileId === undefined ? message : `That is not a file id. ${LIST_FILES}`;
 		case 'EXISTS':
-			return tool === 'team' ? `${message} Ask the person to move or remove that folder.` : `${message} Choose another name, or change the existing file.`;
+			if (tool !== 'team') return `${message} Choose another name, or change the existing file.`;
+			// The name is held by another repository's package, which the person
+			// removes in the app, or by a folder someone else made.
+			return /already installed from/.test(message ?? '')
+				? `${message} These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`
+				: `${message} Ask the person to move or remove that folder.`;
+		case 'AMBIGUOUS':
+			// The app's message lists the repositories, their ids and the input to add.
+			return `${message} If the person has not said which one, ask them.`;
 		case 'PARSE_ERROR':
 			return `That YAML has errors, so nothing was saved: ${message}`;
 		case 'NOT_CONNECTED':
-			return 'No team repository is connected. Ask the person to connect one in the app, under Settings.';
+			// One of several that is on its way out is not "none connected".
+			return /being disconnected/.test(message ?? '') ? `${message} ${LIST_REPOSITORIES}` : 'No team repository is connected. Ask the person to connect one in the app, under Settings.';
 		case 'UNREPRESENTABLE':
 			return 'That holds a value that cannot be sent here: a number that is not finite, or a list or mapping that contains itself. Ask the person to open it in the app.';
 		case 'INVALID':
@@ -233,7 +262,7 @@ export function createTools({ api, propose }) {
 			name: 'snippets_list_files',
 			title: 'List match files',
 			description:
-				'List the Espanso match files: the person\'s own (source "local"), files from installed packages ("package") and from team packages ("team"). Use it to learn file ids, how many snippets each file holds, which are read-only, and which have problems. A "package" was installed by Espanso and a "team" package by this app from the team repository: the two are separate, even when they share a name. `total_count` counts files, not snippets. Use snippets_search instead to find a particular snippet.',
+				'List the Espanso match files: the person\'s own (source "local"), files from installed packages ("package") and from team packages ("team"). Use it to learn file ids, how many snippets each file holds, which are read-only, and which have problems. A "package" was installed by Espanso and a "team" package by this app from a team repository: the two are separate, even when they share a name. `total_count` counts files, not snippets. Use snippets_search instead to find a particular snippet.',
 			inputSchema: schema({ source: { enum: ['local', 'package', 'team'], description: 'Keep to one source. Leave out for all three. Example: "local".' }, limit: LIMIT, offset: OFFSET }),
 			async run({ source, limit = 50, offset = 0 }) {
 				const state = await ask('GET', '/state');
@@ -314,26 +343,58 @@ export function createTools({ api, propose }) {
 			name: 'snippets_list_team_packages',
 			title: 'List team packages',
 			description:
-				'Show the team repository the app is connected to and the packages it offers: which are installed, which have an update, and which run commands when their snippets are used. Use it before snippets_install_team_package or snippets_propose_to_team. `snippet_count` is what the repository offers now. `installed_only` names packages that are installed but that the repository no longer offers. Team packages are separate from packages Espanso installed, even when they share a name. If no repository is connected, it says so.',
-			inputSchema: schema({ limit: LIMIT, offset: OFFSET }),
-			async run({ limit = 50, offset = 0 }) {
-				const team = oneRepository(await ask('GET', '/team'));
+				'Show the team repositories the app is connected to and the packages each one offers: which are installed, which have an update, and which run commands when their snippets are used. There can be several repositories, one, or none. `repositories` lists each with its `id`, its `address` and, when it could not be reached, a `problem`. Every package carries `repository`, the id of the repository that offers it. Use this before snippets_install_team_package or snippets_propose_to_team: both take that id as `repository` when more than one repository could be meant. Two repositories can offer a package of the same name, but a name is installed from one of them at a time: `installed` is true only on the package of the repository it was installed from, and on the other `installed_from` gives the address of the repository that holds the name. `snippet_count` is what its repository offers now. `installed_only` lists installed packages that are not on offer where they came from: `repository` is the id of the connected repository that no longer offers the package, or null when it came from a repository that is not connected now, and `installed_from` is the address it was installed from. Team packages are separate from packages Espanso installed, even when they share a name. If no repository is connected, it says so.',
+			inputSchema: schema({ repository: REPOSITORY.list, limit: LIMIT, offset: OFFSET }),
+			async run({ repository, limit = 50, offset = 0 }) {
+				const team = teamOf(await ask('GET', '/team'));
+				if (repository !== undefined && !team.repositories.some((item) => item.id === repository)) {
+					throw new ToolError(explain({ body: { error: { code: 'NOT_FOUND', message: 'That repository is not connected.' } } }, { tool: 'team' }));
+				}
+				// One list, in the order the repositories were connected, so a page
+				// can end in one repository and the next begin in another.
+				const shown = team.repositories.filter((item) => repository === undefined || item.id === repository);
 				const { items, ...paging } = page(
-					team.packages.map((pkg) => ({
-						name: pkg.name,
-						title: pkg.title,
-						description: pkg.description,
-						snippet_count: pkg.matchCount,
-						installed: pkg.installed,
-						update_available: pkg.updateAvailable,
-						runs_commands: pkg.runsCommands,
-					})),
+					shown.flatMap((item) =>
+						item.packages.map((pkg) => ({
+							repository: item.id,
+							name: pkg.name,
+							title: pkg.title,
+							description: pkg.description,
+							snippet_count: pkg.matchCount,
+							installed: pkg.installed,
+							installed_from: textOf(pkg.installedFrom),
+							update_available: pkg.updateAvailable,
+							runs_commands: pkg.runsCommands,
+						}))
+					),
 					{ offset, limit }
 				);
-				const data = fit({ connected: team.connected, repository: team.repository, packages: items, ...paging, installed_only: team.installedOnly.map((item) => item.name) }, 'packages', { offset, limit });
-				if (!team.connected) data.note = team.problem || 'No team repository is connected. The person can connect one in the app, under Settings.';
-				else if (team.problem) data.note = `${team.problem} What is listed is from the last time the repository could be reached.`;
-				return data;
+				const left = [
+					// Dropped by a repository that is still connected.
+					...shown.flatMap((item) => item.installedOnly.map((pkg) => ({ name: textOf(pkg.name), repository: item.id, installed_from: item.address }))),
+					// From a repository that is not connected. A damaged marker names none.
+					...(repository === undefined ? team.installedOnly.map((pkg) => ({ name: textOf(pkg.name), repository: null, installed_from: textOf(pkg.repository) })) : []),
+				];
+				// What is wrong with the saved list and what is wrong with a
+				// repository are two things, and both are said.
+				const notes = [team.problem];
+				if (!team.repositories.length) notes.push('No team repository is connected. The person can connect one in the app, under Settings.');
+				else if (shown.some((item) => item.problem)) notes.push('A repository with a `problem` could not be reached just now. What is listed for it is from the last time it could.');
+				const note = notes.filter(Boolean).join(' ');
+				// Every connected repository is named, also when the packages are
+				// narrowed to one: this is where their ids are read.
+				return fit(
+					{
+						connected: team.repositories.length > 0,
+						repositories: team.repositories.map(({ id, address, problem }) => ({ id, address, problem })),
+						packages: items,
+						...paging,
+						installed_only: left,
+						...(note ? { note } : {}),
+					},
+					'packages',
+					{ offset, limit }
+				);
 			},
 		},
 		{
@@ -430,24 +491,27 @@ export function createTools({ api, propose }) {
 			write: true,
 			destructive: true,
 			description:
-				'Install a package from the connected team repository, or update an installed one to what the repository has now. Its snippets then work in Espanso and show as read-only files with source "team". A package that runs commands is refused until the person agrees and you pass accept_commands. See what is on offer with snippets_list_team_packages.',
+				'Install a package from a connected team repository, or update an installed one to what its repository has now. Its snippets then work in Espanso and show as read-only files with source "team". When more than one connected repository offers a package of this name, say which with `repository`. A name is installed from one repository at a time: if a package of this name is already installed from another repository, the call is refused and says from which, and the person has to remove that package in the app first. A package that runs commands is refused until the person agrees and you pass accept_commands. See what is on offer, and the id of each repository, with snippets_list_team_packages.',
 			inputSchema: schema(
 				{
 					name: text('The package name, from snippets_list_team_packages. Example: "goodbyes".'),
+					repository: REPOSITORY.install,
 					accept_commands: { type: 'boolean', description: 'Pass true only after the person has agreed to install a package that runs commands. Example: true.' },
 				},
 				['name']
 			),
-			async run({ name, accept_commands: accept }) {
-				const reply = await api.request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { acceptCommands: accept }, timeout: 150_000 });
+			async run({ name, repository, accept_commands: accept }) {
+				const reply = await api.request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { repository, acceptCommands: accept }, timeout: 150_000 });
 				if (reply.status >= 400) {
 					if (/runs commands/.test(reply.body?.error?.message ?? '')) {
 						throw new ToolError(`The ${name} package runs commands on the person's computer when its snippets are used. Ask the person whether to install it. If they agree, call again with accept_commands set to true.`);
 					}
 					throw new ToolError(explain(reply, { tool: 'team' }));
 				}
-				const pkg = oneRepository(reply.body).packages.find((item) => item.name === name);
-				return { name, installed: pkg?.installed ?? true, update_available: pkg?.updateAvailable ?? false };
+				// The repository it came from is the one that now shows it as its own.
+				const from = teamOf(reply.body).repositories.find((item) => item.packages.some((pkg) => pkg.name === name && pkg.installed));
+				const pkg = from?.packages.find((item) => item.name === name);
+				return { name, repository: from?.id ?? repository ?? null, installed: pkg?.installed ?? true, update_available: pkg?.updateAvailable ?? false };
 			},
 		},
 		{
@@ -456,10 +520,11 @@ export function createTools({ api, propose }) {
 			write: true,
 			openWorld: true,
 			description:
-				'Send one of the person\'s own files to a package in the team repository, as a new branch on GitHub that the team can review. This leaves the computer: everyone who can read the repository will be able to read every snippet in the file, so ask the person first. It never changes the repository\'s main branch. For a package that does not exist yet, give `title` and `description` too.',
+				'Send one of the person\'s own files to a package in a connected team repository, as a new branch on GitHub that the team can review. This leaves the computer: everyone who can read that repository will be able to read every snippet in the file, so ask the person first. When more than one repository is connected, say which with `repository`, and ask the person if they have not said. It never changes a repository\'s main branch. For a package that does not exist yet in that repository, give `title` and `description` too: each repository has its own package names.',
 			inputSchema: schema(
 				{
 					file_id: FILE_ID,
+					repository: REPOSITORY.propose,
 					package: text('The package to send it to, existing or new: lowercase letters, digits and dashes. Example: "goodbyes".'),
 					summary: text('One line the team will see on the pull request. Example: "Add shipping replies".'),
 					title: { type: 'string', description: 'For a new package only: its title. Example: "Shipping replies".' },
@@ -467,10 +532,10 @@ export function createTools({ api, propose }) {
 				},
 				['file_id', 'package', 'summary']
 			),
-			async run({ file_id: fileId, package: name, summary, title, description }) {
+			async run({ file_id: fileId, repository, package: name, summary, title, description }) {
 				// Read first: a file that is not there is then reported as a file.
 				await readFile(fileId);
-				const sent = await ask('POST', '/team/proposals', { body: { fileId, package: name, summary, title, description }, timeout: 150_000 }, { fileId, tool: 'team' });
+				const sent = await ask('POST', '/team/proposals', { body: { fileId, repository, package: name, summary, title, description }, timeout: 150_000 }, { fileId, tool: 'team' });
 				return {
 					branch: sent.branch,
 					pull_request_url: sent.compareUrl,

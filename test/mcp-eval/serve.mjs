@@ -1,6 +1,7 @@
 // Runs the app's API for the usability check: the fixtures, a long file that
-// forces paging, and a team repository with one package installed. Nothing
-// here touches the real Espanso folder, the network or GitHub.
+// forces paging, and two team repositories with one package installed from
+// the first. Nothing here touches the real Espanso folder, the network or
+// GitHub.
 //
 //   node test/mcp-eval/serve.mjs      (leave it running; Ctrl+C to stop)
 //
@@ -15,7 +16,7 @@ import { createListenerControl } from '../../core/apiListener.js';
 import { createRouter } from '../../core/apiRouter.js';
 import { createGit } from '../../core/git.js';
 import { createService } from '../../core/service.js';
-import { MANIFEST, gitEnv, seeded } from '../helpers/teamRemote.js';
+import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from '../helpers/teamRemote.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const root = mkdtempSync(join(tmpdir(), 'snippet-editor-eval-'));
@@ -37,6 +38,20 @@ remote.commit({
 	'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
 });
 
+// A second team repository. It offers a package named goodbyes as well, with
+// other snippets in it, and one package of its own. Whoever answers has to
+// tell the two repositories apart by the `repository` on each package.
+const second = createRemote(join(root, 'remote-2'));
+second.commit(
+	{
+		'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes', { title: 'Short goodbyes' }),
+		'packages/goodbyes/package.yml': MATCHES([':ciao', 'Ciao']),
+		'packages/shipping/_manifest.yml': MANIFEST('shipping'),
+		'packages/shipping/package.yml': MATCHES([':sent', 'Your parcel is on its way.'], [':late', 'Your parcel is late.'], [':lost', 'We are looking for your parcel.']),
+	},
+	'Seed'
+);
+
 const port = await new Promise((resolve) => {
 	const probe = net.createServer();
 	probe.listen(0, '127.0.0.1', () => {
@@ -47,7 +62,9 @@ const port = await new Promise((resolve) => {
 const dataDir = join(root, 'data');
 const service = await createService({ userDataDir: dataDir, env: { SNIPPET_EDITOR_MATCH_DIR: matchDir }, git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true });
 await service.connectTeam(remote.url);
-await service.team().install('support');
+await service.connectTeam(second.url);
+// With two connected, a repository is found by its place or its id.
+await service.teams()[0].install('support');
 const listener = createListenerControl({ service, router: createRouter({ service }) });
 await listener.set({ enabled: true, port });
 

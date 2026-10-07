@@ -7,7 +7,8 @@ import { createApiClient } from '../mcp/client.mjs';
 import { createTools, foundItem } from '../mcp/tools.mjs';
 import { likelyFiles, searchFiles } from '../shared/search.js';
 import { startApi } from './helpers/apiFixture.js';
-import { MANIFEST, gitEnv, seeded } from './helpers/teamRemote.js';
+import { parseRepositoryAddress } from '../core/teamAddress.js';
+import { MANIFEST, MATCHES, createRemote, gitEnv, seeded } from './helpers/teamRemote.js';
 
 async function setup(t, options = {}) {
 	const api = await startApi(t, options);
@@ -26,6 +27,13 @@ async function setup(t, options = {}) {
 	const version = async (fileId) => (await call('snippets_get_file', { file_id: fileId })).version;
 	return { ...api, tools, call, read, version };
 }
+
+const idOf = (remote) => parseRepositoryAddress(remote.url, { allowLocal: true }).id;
+// How the app lists a repository when more than one could be meant. A test's
+// repository is a folder, which has no owner, so its address stands in.
+const listedAs = (remote) => `${remote.url} (${idOf(remote)})`;
+const proposalsIn = (remote) => remote.branches().filter((branch) => branch.startsWith('snippet-editor/'));
+const local = (remote) => ({ git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true });
 
 const WRITE_TOOLS = ['snippets_add_snippet', 'snippets_update_snippet', 'snippets_delete_snippet', 'snippets_create_file', 'snippets_replace_file_yaml', 'snippets_install_team_package', 'snippets_propose_to_team'];
 const READ_TOOLS = ['snippets_search', 'snippets_list_files', 'snippets_get_file', 'snippets_get_snippet', 'snippets_list_team_packages'];
@@ -188,6 +196,10 @@ test('every input is checked before the app is asked, and the reply names the in
 		['snippets_get_snippet', { file_id: 'local:base.yml', index: '0' }, /^`index` must be a whole number, 0 or more\./],
 		['snippets_add_snippet', { file_id: 'local:base.yml', version: 'v', snippet: 'text' }, /^`snippet` must be an object of Espanso keys/],
 		['snippets_install_team_package', { name: 'goodbyes', accept_commands: 'yes' }, /^`accept_commands` must be true or false\./],
+		['snippets_install_team_package', { name: 'goodbyes', repository: 7 }, /^`repository` must be text\. The id of the repository to install from/],
+		['snippets_propose_to_team', { file_id: 'local:base.yml', package: 'goodbyes', summary: 'Share', repository: '' }, /^`repository` must not be empty\. The id of the repository to send it to/],
+		['snippets_list_team_packages', { repository: ['980ba86f6835'] }, /^`repository` must be text\. The id of one connected repository/],
+		['snippets_list_team_packages', { address: 'acme/team' }, /^Unknown input `address`\. This tool takes: repository, limit, offset\./],
 	];
 	for (const [name, args, pattern] of cases) assert.match((await call(name, args)).error, pattern, `${name} ${JSON.stringify(args)}`);
 });
@@ -328,7 +340,7 @@ test('team tools, with no repository connected', async (t) => {
 	const { call } = await setup(t, { aiWrite: true });
 	assert.deepEqual(await call('snippets_list_team_packages'), {
 		connected: false,
-		repository: null,
+		repositories: [],
 		packages: [],
 		total_count: 0,
 		has_more: false,
@@ -339,6 +351,11 @@ test('team tools, with no repository connected', async (t) => {
 	const expected = { error: 'No team repository is connected. Ask the person to connect one in the app, under Settings.' };
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), expected);
 	assert.deepEqual(await call('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share' }), expected);
+	// One that is named is looked for, and the reply says where the ids are.
+	const gone = { error: 'That repository is not connected. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.' };
+	assert.deepEqual(await call('snippets_list_team_packages', { repository: '980ba86f6835' }), gone);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: '980ba86f6835' }), gone);
+	assert.deepEqual(await call('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share', repository: '980ba86f6835' }), gone);
 });
 
 test('team tools, with a repository: list, install, accept commands, propose', async (t) => {
@@ -350,22 +367,26 @@ test('team tools, with a repository: list, install, accept commands, propose', a
 	const { call, service, matchDir } = await setup(t, { aiWrite: true, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
 	await service.connectTeam(remote.url);
 
+	const id = idOf(remote);
 	const listed = await call('snippets_list_team_packages');
-	assert.deepEqual([listed.connected, listed.repository], [true, remote.url]);
+	assert.deepEqual(Object.keys(listed), ['connected', 'repositories', 'packages', 'total_count', 'has_more', 'next_offset', 'installed_only']);
+	assert.deepEqual([listed.connected, listed.repositories, listed.installed_only], [true, [{ id, address: remote.url, problem: '' }], []]);
 	assert.deepEqual(listed.packages, [
-		{ name: 'goodbyes', title: 'Goodbyes', description: 'The goodbyes package', snippet_count: 2, installed: false, update_available: false, runs_commands: false },
-		{ name: 'support', title: 'Support replies', description: 'The support package', snippet_count: 4, installed: false, update_available: false, runs_commands: false },
-		{ name: 'tools', title: 'Tools', description: 'The tools package', snippet_count: 1, installed: false, update_available: false, runs_commands: true },
+		{ repository: id, name: 'goodbyes', title: 'Goodbyes', description: 'The goodbyes package', snippet_count: 2, installed: false, installed_from: '', update_available: false, runs_commands: false },
+		{ repository: id, name: 'support', title: 'Support replies', description: 'The support package', snippet_count: 4, installed: false, installed_from: '', update_available: false, runs_commands: false },
+		{ repository: id, name: 'tools', title: 'Tools', description: 'The tools package', snippet_count: 1, installed: false, installed_from: '', update_available: false, runs_commands: true },
 	]);
+	// With one connected, naming it changes nothing.
+	assert.deepEqual(await call('snippets_list_team_packages', { repository: id }), listed);
 
-	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), { name: 'support', installed: true, update_available: false });
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), { name: 'support', repository: id, installed: true, update_available: false });
 	assert.ok(readFileSync(join(matchDir, 'team', 'support', 'replies.yml'), 'utf8').includes(':refund'));
 	assert.deepEqual((await call('snippets_list_files', { source: 'team' })).items.map((item) => item.file_id), ['team:support:escalations.yml', 'team:support:replies.yml']);
 
 	assert.deepEqual(await call('snippets_install_team_package', { name: 'tools' }), {
 		error: 'The tools package runs commands on the person\'s computer when its snippets are used. Ask the person whether to install it. If they agree, call again with accept_commands set to true.',
 	});
-	assert.equal((await call('snippets_install_team_package', { name: 'tools', accept_commands: true })).installed, true);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'tools', accept_commands: true, repository: id }), { name: 'tools', repository: id, installed: true, update_available: false });
 	assert.match((await call('snippets_install_team_package', { name: 'nothing' })).error, /no package named nothing.*snippets_list_team_packages/s);
 
 	const proposed = await call('snippets_propose_to_team', { file_id: 'local:dates.yml', package: 'goodbyes', summary: 'Share the date snippets' });
@@ -506,6 +527,16 @@ test('errors point at the next call that fits what went wrong', async (t) => {
 	// A package name is one name: written like a path, it must not install another package.
 	assert.ok((await call('snippets_install_team_package', { name: 'support/installed?x=' })).error);
 	assert.equal(existsSync(join(matchDir, 'team', 'support')), false);
+	// A name another repository holds is not a folder to move: the person removes that package first, in the app.
+	await call('snippets_install_team_package', { name: 'support' });
+	const other = createRemote();
+	other.commit({ 'packages/support/_manifest.yml': MANIFEST('support'), 'packages/support/package.yml': MATCHES([':s', 'Another support']) });
+	await service.disconnectTeam(idOf(remote));
+	await service.connectTeam(other.url);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), {
+		error: `A package named support is already installed from ${remote.url}. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`,
+	});
+	assert.ok(readFileSync(join(matchDir, 'team', 'support', 'replies.yml'), 'utf8').includes(':refund'));
 	// An empty file has no positions to offer.
 	writeFileSync(join(matchDir, 'empty.yml'), 'matches: []\n');
 	assert.deepEqual(await call('snippets_get_snippet', { file_id: 'local:empty.yml', index: 0 }), { error: 'empty.yml has no snippets.' });
@@ -568,6 +599,261 @@ test('the list of team packages is paged like every other list', async (t) => {
 	assert.deepEqual([second.packages.map((pkg) => pkg.name), second.has_more, second.next_offset], [['support'], false, null]);
 });
 
+// --- several team repositories -----------------------------------------------------------
+
+// Two repositories. Both offer `goodbyes`. The first also offers `support`
+// and `tools`, which runs commands. The second also offers `shipping`.
+async function twoRepositories(t, options = {}) {
+	const first = seeded();
+	first.commit({
+		'packages/tools/_manifest.yml': MANIFEST('tools'),
+		'packages/tools/package.yml': 'matches:\n  - trigger: ":ip"\n    replace: "{{ip}}"\n    vars:\n      - name: ip\n        type: shell\n        params:\n          cmd: "ipconfig getifaddr en0"\n',
+	});
+	const second = createRemote();
+	second.commit({
+		'packages/goodbyes/_manifest.yml': MANIFEST('goodbyes', { title: 'Other goodbyes' }),
+		'packages/goodbyes/package.yml': MATCHES([':later', 'See you later']),
+		'packages/shipping/_manifest.yml': MANIFEST('shipping'),
+		'packages/shipping/package.yml': MATCHES([':sent', 'Your parcel is on its way.'], [':late', 'Your parcel is late.']),
+	});
+	const context = await setup(t, { aiWrite: true, ...options, serviceOptions: local(first) });
+	await context.service.connectTeam(first.url);
+	await context.service.connectTeam(second.url);
+	return { ...context, first, second, one: idOf(first), two: idOf(second) };
+}
+
+const WHICH = 'Say which: set `repository` to one of the ids in brackets. If the person has not said which one, ask them.';
+const NOT_CONNECTED = { error: 'That repository is not connected. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.' };
+
+test('with several repositories, the list says which offers each package, and pages run across all of them', async (t) => {
+	const { call, first, second, one, two } = await twoRepositories(t);
+	const listed = await call('snippets_list_team_packages');
+	assert.deepEqual(listed.repositories, [{ id: one, address: first.url, problem: '' }, { id: two, address: second.url, problem: '' }]);
+	assert.deepEqual(listed.packages.map((pkg) => [pkg.repository, pkg.name, pkg.title, pkg.snippet_count, pkg.runs_commands]), [
+		[one, 'goodbyes', 'Goodbyes', 2, false],
+		[one, 'support', 'Support replies', 4, false],
+		[one, 'tools', 'Tools', 1, true],
+		[two, 'goodbyes', 'Other goodbyes', 1, false],
+		[two, 'shipping', 'Shipping', 2, false],
+	]);
+	assert.deepEqual([listed.connected, listed.total_count, listed.has_more, listed.next_offset, listed.installed_only, 'note' in listed], [true, 5, false, null, [], false]);
+
+	// One list, in the order connected: a page can end in one repository and the next begin in another.
+	const pages = [];
+	for (let offset = 0; offset !== null; ) {
+		const page = await call('snippets_list_team_packages', { limit: 2, offset });
+		assert.deepEqual([page.total_count, page.repositories.length], [5, 2]);
+		pages.push(page.packages.map((pkg) => `${pkg.repository === one ? 'first' : 'second'}/${pkg.name}`));
+		offset = page.next_offset;
+	}
+	assert.deepEqual(pages, [['first/goodbyes', 'first/support'], ['first/tools', 'second/goodbyes'], ['second/shipping']]);
+
+	// Narrowed to one: its packages only, counted by themselves. Every repository is still named, with its id.
+	const narrowed = await call('snippets_list_team_packages', { repository: two });
+	assert.deepEqual([narrowed.packages.map((pkg) => [pkg.repository, pkg.name]), narrowed.total_count, narrowed.has_more], [[[two, 'goodbyes'], [two, 'shipping']], 2, false]);
+	assert.deepEqual(narrowed.repositories, listed.repositories);
+	const paged = await call('snippets_list_team_packages', { repository: two, limit: 1, offset: 1 });
+	assert.deepEqual([paged.packages.map((pkg) => pkg.name), paged.total_count, paged.has_more, paged.next_offset], [['shipping'], 2, false, null]);
+	for (const repository of ['nothing', one.toUpperCase(), second.url]) assert.deepEqual(await call('snippets_list_team_packages', { repository }), NOT_CONNECTED, repository);
+});
+
+test('with several repositories, installing says which when more than one offers the name', async (t) => {
+	const { call, first, second, one, two, matchDir } = await twoRepositories(t);
+	// A repository that is named is the only one asked.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'shipping', repository: one }), {
+		error: 'The team repository has no package named shipping. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.',
+	});
+	// Offered by one of them: no need to say.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'support' }), { name: 'support', repository: one, installed: true, update_available: false });
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'shipping' }), { name: 'shipping', repository: two, installed: true, update_available: false });
+
+	// Offered by both: the error names them, their ids and the input to add.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes' }), { error: `Two repositories offer goodbyes: ${listedAs(first)} and ${listedAs(second)}. ${WHICH}` });
+	assert.equal(existsSync(join(matchDir, 'team', 'goodbyes')), false);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: two }), { name: 'goodbyes', repository: two, installed: true, update_available: false });
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you later']));
+
+	// The list then shows who holds the name, on the other's package.
+	const shown = Object.fromEntries((await call('snippets_list_team_packages')).packages.map((pkg) => [`${pkg.repository}/${pkg.name}`, [pkg.installed, pkg.installed_from, pkg.update_available]]));
+	assert.deepEqual([shown[`${two}/goodbyes`], shown[`${one}/goodbyes`], shown[`${one}/support`], shown[`${one}/tools`]], [[true, '', false], [false, second.url, false], [true, '', false], [false, '', false]]);
+
+	// From the other it is refused, and the reply says what comes first and who does it.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: one }), {
+		error: `A package named goodbyes is already installed from ${second.url}. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.`,
+	});
+	assert.equal(readFileSync(join(matchDir, 'team', 'goodbyes', 'package.yml'), 'utf8'), MATCHES([':later', 'See you later']));
+
+	// What a single repository says is said as before.
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'goodbyes', repository: 'nothing' }), NOT_CONNECTED);
+	assert.match((await call('snippets_install_team_package', { name: 'tools' })).error, /^The tools package runs commands on the person's computer/);
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'tools', repository: one, accept_commands: true }), { name: 'tools', repository: one, installed: true, update_available: false });
+	assert.deepEqual(await call('snippets_install_team_package', { name: 'nothing' }), {
+		error: 'No connected repository has a package named nothing. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.',
+	});
+});
+
+test('with several repositories, a proposal says which one it is for', async (t) => {
+	const { call, first, second, one, two } = await twoRepositories(t);
+	const args = { file_id: 'local:dates.yml', package: 'shipping', summary: 'Share the date snippets' };
+	assert.deepEqual(await call('snippets_propose_to_team', args), { error: `Two repositories are connected: ${listedAs(first)} and ${listedAs(second)}. ${WHICH}` });
+	assert.deepEqual(await call('snippets_propose_to_team', { ...args, repository: 'nothing' }), NOT_CONNECTED);
+	assert.deepEqual([proposalsIn(first), proposalsIn(second)], [[], []]);
+
+	const sent = await call('snippets_propose_to_team', { ...args, repository: two });
+	assert.deepEqual([sent.created_package, proposalsIn(second), proposalsIn(first)], [false, [sent.branch], []]);
+	// The same name is a new package in the repository that does not have it yet.
+	assert.match((await call('snippets_propose_to_team', { ...args, repository: one })).error, /^A new package needs a `title`/);
+	const created = await call('snippets_propose_to_team', { ...args, repository: one, title: 'Shipping', description: 'Replies about parcels' });
+	assert.deepEqual([created.created_package, proposalsIn(first), proposalsIn(second)], [true, [created.branch], [sent.branch]]);
+	// A file that is not there is still reported as a file, whichever repository was named.
+	assert.match((await call('snippets_propose_to_team', { ...args, file_id: 'local:missing.yml' })).error, /^missing\.yml is no longer in the match folder/);
+});
+
+test('what is installed but no longer on offer is listed with where it came from', async (t) => {
+	const { call, service, first, second, one, two, matchDir } = await twoRepositories(t);
+	await call('snippets_install_team_package', { name: 'support' });
+	await call('snippets_install_team_package', { name: 'shipping' });
+	second.commit({ 'packages/shipping/_manifest.yml': null, 'packages/shipping/package.yml': null });
+	await service.refreshTeam();
+	// A marker that cannot be read names no repository.
+	mkdirSync(join(matchDir, 'team', 'stray'), { recursive: true });
+	writeFileSync(join(matchDir, 'team', 'stray', '.snippet-editor.json'), '{ not json');
+
+	// Dropped by its repository, which is still connected: under that repository's id.
+	const dropped = await call('snippets_list_team_packages');
+	assert.deepEqual(dropped.installed_only, [{ name: 'shipping', repository: two, installed_from: second.url }, { name: 'stray', repository: null, installed_from: '' }]);
+	assert.deepEqual(dropped.packages.map((pkg) => pkg.name), ['goodbyes', 'support', 'tools', 'goodbyes']);
+
+	// Its repository disconnected: no id, and the address it was installed from.
+	await service.disconnectTeam(one);
+	const left = await call('snippets_list_team_packages');
+	assert.deepEqual(left.repositories, [{ id: two, address: second.url, problem: '' }]);
+	assert.deepEqual(left.installed_only, [
+		{ name: 'shipping', repository: two, installed_from: second.url },
+		{ name: 'stray', repository: null, installed_from: '' },
+		{ name: 'support', repository: null, installed_from: first.url },
+	]);
+	// Narrowed to a repository, only what that one left behind.
+	assert.deepEqual((await call('snippets_list_team_packages', { repository: two })).installed_only, [{ name: 'shipping', repository: two, installed_from: second.url }]);
+
+	await service.disconnectTeam(two);
+	const none = await call('snippets_list_team_packages');
+	assert.deepEqual([none.connected, none.repositories, none.packages, none.note], [false, [], [], 'No team repository is connected. The person can connect one in the app, under Settings.']);
+	assert.deepEqual(none.installed_only, [
+		{ name: 'shipping', repository: null, installed_from: second.url },
+		{ name: 'stray', repository: null, installed_from: '' },
+		{ name: 'support', repository: null, installed_from: first.url },
+	]);
+});
+
+test('a repository that cannot be reached says so on its own entry, and the others are listed as usual', async (t) => {
+	const { call, service, first, second, one, two } = await twoRepositories(t);
+	rmSync(second.url, { recursive: true, force: true });
+	await service.refreshTeam();
+	const listed = await call('snippets_list_team_packages');
+	assert.deepEqual(listed.repositories[0], { id: one, address: first.url, problem: '' });
+	assert.deepEqual([listed.repositories[1].id, listed.repositories[1].address], [two, second.url]);
+	assert.match(listed.repositories[1].problem, /^Git could not reach that repository\./);
+	// What it offered when it was last reached is still listed.
+	assert.deepEqual(listed.packages.map((pkg) => pkg.name), ['goodbyes', 'support', 'tools', 'goodbyes', 'shipping']);
+	assert.equal(listed.note, 'A repository with a `problem` could not be reached just now. What is listed for it is from the last time it could.');
+});
+
+test('what is wrong with the saved list and what is wrong with a repository are both said', async () => {
+	const skipped = 'Saved team repository 2 has an address the app does not accept, so it was skipped. Connect it again in Settings.';
+	const unreached = 'A repository with a `problem` could not be reached just now. What is listed for it is from the last time it could.';
+	const repository = { id: '980ba86f6835', repository: 'https://github.com/acme/team-snippets.git', problem: 'Git did not finish in time.', packages: [], installedOnly: [] };
+	const listing = async (body) => (await createTools({ api: { request: async () => ({ status: 200, body }) } }).call('snippets_list_team_packages', {})).structuredContent;
+
+	const both = await listing({ connected: true, repositories: [repository], installedOnly: [], problem: skipped });
+	assert.deepEqual(both.repositories, [{ id: '980ba86f6835', address: 'https://github.com/acme/team-snippets.git', problem: 'Git did not finish in time.' }]);
+	assert.equal(both.note, `${skipped} ${unreached}`);
+	assert.equal((await listing({ connected: true, repositories: [{ ...repository, problem: '' }], installedOnly: [], problem: skipped })).note, skipped);
+	assert.equal((await listing({ connected: true, repositories: [repository], installedOnly: [], problem: '' })).note, unreached);
+	assert.equal((await listing({ connected: false, repositories: [], installedOnly: [], problem: skipped })).note, `${skipped} No team repository is connected. The person can connect one in the app, under Settings.`);
+	assert.equal('note' in (await listing({ connected: true, repositories: [{ ...repository, problem: '' }], installedOnly: [], problem: '' })), false);
+});
+
+test('a list of team packages cut to fit a reply still says what is wrong, and the two notes are counted in its length', async () => {
+	const skipped = 'Saved team repository 2 has an address the app does not accept, so it was skipped. Connect it again in Settings.';
+	const unreached = 'A repository with a `problem` could not be reached just now. What is listed for it is from the last time it could.';
+	// Ten packages, of which eight or so fill a reply. Over a range of sizes,
+	// some leave room for those eight only if the notes are not counted.
+	const listing = async (length) => {
+		const packages = Array.from({ length: 10 }, (_, index) => ({ name: `p${index}`, title: 'T', description: 'd'.repeat(length), matchCount: 1, installed: false, installedFrom: '', updateAvailable: false, runsCommands: false }));
+		const body = { connected: true, repositories: [{ id: '980ba86f6835', repository: 'https://github.com/acme/team-snippets.git', problem: 'Git did not finish in time.', packages, installedOnly: [] }], installedOnly: [], problem: skipped };
+		return createTools({ api: { request: async () => ({ status: 200, body }) } }).call('snippets_list_team_packages', {});
+	};
+	for (let length = 2800; length <= 3000; length += 4) {
+		const result = await listing(length);
+		const data = result.structuredContent;
+		assert.ok(result.content[0].text.length <= 25000, `with descriptions of ${length}, the reply is ${result.content[0].text.length} long`);
+		assert.deepEqual([data.has_more, data.next_offset, data.total_count], [true, data.packages.length, 10], String(length));
+		assert.equal(data.note, `${skipped} ${unreached} Cut to fit: this reply holds ${data.packages.length} of the 10 asked for. Ask again with offset ${data.packages.length}, or use a smaller limit.`, String(length));
+	}
+});
+
+test('a reply from the app that is not a team status is read as nothing connected, not as a fault', async () => {
+	for (const body of [undefined, null, {}, 'x', { packages: [{ name: 'goodbyes' }] }, { repositories: 'x', installedOnly: 7, problem: 3 }, { connected: true, repositories: [null, 7, { id: 'x' }], installedOnly: [null] }]) {
+		const tools = createTools({ api: { settings: async () => ({ aiWrite: true }), request: async () => ({ status: 200, body }) } });
+		const listed = await tools.call('snippets_list_team_packages', {});
+		assert.equal(listed.isError, false, JSON.stringify(body));
+		assert.deepEqual([listed.structuredContent.packages, listed.structuredContent.total_count], [[], 0], JSON.stringify(body));
+		const installed = await tools.call('snippets_install_team_package', { name: 'goodbyes' });
+		assert.deepEqual([installed.isError, installed.structuredContent], [false, { name: 'goodbyes', repository: null, installed: true, update_available: false }], JSON.stringify(body));
+	}
+});
+
+test('no description speaks of one team repository, and each team tool says what `repository` is and when it is needed', async (t) => {
+	const { tools } = await setup(t);
+	const chat = createTools({ api: {}, propose: async () => ({ id: 'p' }) });
+	for (const listed of [tools.list(), chat.list()]) {
+		for (const tool of listed) {
+			const words = [tool.description, ...Object.values(tool.inputSchema.properties).map((property) => property.description)];
+			for (const text of words) assert.doesNotMatch(text, /\bthe (connected )?team repository\b|\bthe repository the app is connected to\b/i, `${tool.name}: ${text}`);
+		}
+		const byName = Object.fromEntries(listed.map((tool) => [tool.name, tool]));
+		for (const name of ['snippets_list_team_packages', 'snippets_install_team_package', 'snippets_propose_to_team']) {
+			const { repository } = byName[name].inputSchema.properties;
+			assert.deepEqual([repository.type, repository.minLength], ['string', 1], name);
+			// Where the id comes from, and an example of one.
+			assert.match(repository.description, /snippets_list_team_packages/, name);
+			assert.match(repository.description, /Example: "[0-9a-f]{12}"\.$/, name);
+			assert.equal(byName[name].inputSchema.required.includes('repository'), false, name);
+			assert.match(byName[name].description, /repositor(y|ies)/, name);
+		}
+		// When it is needed, and what happens without it.
+		for (const name of ['snippets_install_team_package', 'snippets_propose_to_team']) {
+			assert.match(byName[name].inputSchema.properties.repository.description, /more than one/, name);
+			assert.match(byName[name].inputSchema.properties.repository.description, /the call fails and the error lists them/, name);
+		}
+		assert.match(byName.snippets_list_team_packages.description, /`repositories`.*`id`/s);
+		assert.match(byName.snippets_list_team_packages.description, /`installed_from`/);
+		assert.match(byName.snippets_list_team_packages.description, /`installed_only`/);
+	}
+});
+
+test('a refusal over which repository, or over a name already taken, says what to do next', async () => {
+	const { explain } = await import('../mcp/tools.mjs');
+	const told = (code, message, context = { tool: 'team' }) => explain({ status: 409, body: { error: { code, message } } }, context);
+	const listed = 'Two repositories offer goodbyes: acme/team (980ba86f6835) and other/team (cda6f9e4bdce). Say which: set `repository` to one of the ids in brackets.';
+	assert.equal(told('AMBIGUOUS', listed), `${listed} If the person has not said which one, ask them.`);
+	assert.equal(
+		told('EXISTS', 'A package named goodbyes is already installed from acme/team. Remove it first, then install this one.'),
+		'A package named goodbyes is already installed from acme/team. Remove it first, then install this one. These tools cannot remove a team package. Tell the person which repository holds the name, and that removing it comes first: they do that in the app, on the Team packages page.'
+	);
+	// A folder someone else made is still theirs to move.
+	assert.equal(
+		told('EXISTS', 'A folder named goodbyes is already in match/team and was not put there by this app.'),
+		'A folder named goodbyes is already in match/team and was not put there by this app. Ask the person to move or remove that folder.'
+	);
+	assert.equal(told('EXISTS', 'A file named base.yml already exists.', {}), 'A file named base.yml already exists. Choose another name, or change the existing file.');
+	assert.equal(told('NOT_FOUND', 'That repository is not connected.'), 'That repository is not connected. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.');
+	assert.equal(told('NOT_CONNECTED', 'No team repository is connected. Connect one in the app, under Settings.'), 'No team repository is connected. Ask the person to connect one in the app, under Settings.');
+	// One of several that is on its way out is not "none connected".
+	assert.equal(told('NOT_CONNECTED', 'That repository is being disconnected.'), 'That repository is being disconnected. Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.');
+});
+
 test('what each tool may do is marked exactly', async (t) => {
 	const { tools } = await setup(t);
 	const marks = Object.fromEntries(tools.list().map((tool) => [tool.name, [tool.annotations.readOnlyHint, tool.annotations.destructiveHint, tool.annotations.idempotentHint, tool.annotations.openWorldHint]]));
@@ -596,7 +882,7 @@ test('the two tools that wait on git are given longer than the rest', async () =
 			calls.push([method, path, options.timeout]);
 			if (path.startsWith('/files/')) return { status: 200, body: { id: 'local:dates.yml', name: 'dates.yml', matches: [{}], text: '' } };
 			if (path === '/team/proposals') return { status: 201, body: { branch: 'b', compareUrl: null, created: false } };
-			return { status: 200, body: { packages: [{ name: 'goodbyes', installed: true, updateAvailable: false }] } };
+			return { status: 200, body: { connected: true, repositories: [{ id: '980ba86f6835', packages: [{ name: 'goodbyes', installed: true, updateAvailable: false }], installedOnly: [] }], installedOnly: [], problem: '' } };
 		},
 	};
 	const tools = createTools({ api });

@@ -1,8 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { brokenFile, createTools, explain, fileRuns, oneRepository, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
+import { brokenFile, createTools, explain, fileRuns, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
 import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
+import { whichRepository } from '../apiRouter.js';
 import { isSafeFileName } from '../store.js';
+import { parseRepositoryAddress, repositoryName } from '../teamAddress.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
 import { createInProcessApi } from './inProcess.js';
 
@@ -21,7 +23,10 @@ import { createInProcessApi } from './inProcess.js';
 //   - a change or a deletion does while the snippet it was made for is still
 //     in the file, unchanged. If it moved, it is found by its content;
 //   - a new text for a file, and a file sent to the team, do while the file's
-//     text is what the card was made from.
+//     text is what the card was made from;
+//   - a card for a team repository, to install from it or to send to it, does
+//     while that repository is connected. Each card names its own, so one
+//     connected since changes nothing, and nothing goes to another in its place.
 // When it does not, nothing is written and the card says to ask again.
 
 const COMMAND = 'Runs a command on your computer each time it is used.';
@@ -37,6 +42,16 @@ const stale = () => Object.assign(new Error(STALE), { code: 'STALE' });
 const oneLine = (value, most) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= most && !/[\r\n]/.test(value);
 const pathOf = (fileId) => `/files/${encodeURIComponent(fileId)}`;
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
+// How a repository is named for a person: owner/repo. A test connects a
+// folder, which is no address to the app as it runs, so that is named by the
+// address it was connected under.
+const nameOf = (url) => {
+	try {
+		return repositoryName(parseRepositoryAddress(url));
+	} catch {
+		return url;
+	}
+};
 
 export function createProposals({ router, aiWrite, onCard = () => {}, log = console.error, limit = 200 }) {
 	// The app's routes, for making a card and for Apply.
@@ -83,6 +98,31 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 		const problem = snippetProblem(snippet);
 		if (problem) throw refused(problem);
 	}
+
+	// --- which team repository a call means -----------------------------------
+	//
+	// The rule the app's routes follow, asked before a card is made, so that a
+	// call the app would refuse is refused now, in words the model can act on.
+
+	const teamRefusal = (code, message) => refused(explain({ body: { error: { code, message } } }, { tool: 'team' }));
+
+	async function connectedRepositories() {
+		const { repositories } = await ask('GET', '/team');
+		if (!repositories.length) throw teamRefusal('NOT_CONNECTED');
+		return repositories;
+	}
+
+	function repositoryWithId(repositories, id) {
+		const found = repositories.find((repository) => repository.id === id);
+		if (!found) throw teamRefusal('NOT_FOUND', 'That repository is not connected.');
+		return found;
+	}
+
+	const which = (repositories, what) => teamRefusal('AMBIGUOUS', whichRepository(repositories.map((repository) => ({ name: nameOf(repository.repository), id: repository.id })), what));
+
+	// The repository a card was made for, as it is now, or nothing when it has
+	// been disconnected since. A card remembers its repository's address.
+	const stillConnected = async (address) => (await route('GET', '/team')).repositories.find((repository) => repository.repository === address);
 
 	// --- the app's own words, for the person ---------------------------------
 
@@ -218,36 +258,51 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 		},
 
 		snippets_install_team_package: {
-			async build({ name }) {
-				const team = oneRepository(await ask('GET', '/team'));
-				if (!team.connected) throw refused(explain({ body: { error: { code: 'NOT_CONNECTED' } } }));
-				const pkg = team.packages.find((item) => item.name === name);
-				if (!pkg) throw refused(explain({ body: { error: { code: 'NOT_FOUND', message: `The team repository has no package named ${name}.` } } }, { tool: 'team' }));
+			async build({ name, repository }) {
+				const repositories = await connectedRepositories();
+				let source;
+				if (repository !== undefined) source = repositoryWithId(repositories, repository);
+				else {
+					const offering = repositories.filter((item) => item.packages.some((pkg) => pkg.name === name));
+					if (offering.length > 1) throw which(offering, `offer ${name}`);
+					// The only one connected answers for a name it does not have.
+					source = offering[0] ?? (repositories.length === 1 ? repositories[0] : null);
+					if (!source) throw teamRefusal('NOT_FOUND', `No connected repository has a package named ${name}.`);
+				}
+				const pkg = source.packages.find((item) => item.name === name);
+				if (!pkg) throw teamRefusal('NOT_FOUND', `The team repository has no package named ${name}.`);
+				// The name is held by another repository's package. A card for it could only fail.
+				if (pkg.installedFrom) throw teamRefusal('EXISTS', `A package named ${name} is already installed from ${nameOf(pkg.installedFrom)}. Remove it first, then install this one.`);
 				if (pkg.matchCount === null) throw refused('This package was not read, so it cannot be installed from here.');
 				return {
 					card: {
 						kind: 'install',
 						title: `${pkg.installed ? 'Update' : 'Install'} the team package ${name}`,
 						subject: name,
-						lines: [pkg.title, pkg.description, count(pkg.matchCount, 'snippet')].filter(Boolean),
+						lines: [`Repository: ${nameOf(source.repository)}`, pkg.title, pkg.description, count(pkg.matchCount, 'snippet')].filter(Boolean),
 						warnings: pkg.runsCommands ? ['This package runs commands on your computer when its snippets are used.'] : [],
 					},
-					made: { runsCommands: pkg.runsCommands === true },
+					made: { repository: source.repository, runsCommands: pkg.runsCommands === true },
 				};
 			},
 			async apply({ args, made }) {
-				// The person agreed to what the card showed, and to nothing more.
-				const team = oneRepository(await route('GET', '/team'));
-				const pkg = team.packages?.find((item) => item.name === args.name);
-				if (pkg && (pkg.runsCommands === true) !== made.runsCommands) throw stale();
-				await route('PUT', `/team/packages/${encodeURIComponent(args.name)}/installed`, { body: { acceptCommands: made.runsCommands } });
+				// The person agreed to what the card showed, and to nothing more:
+				// this package, from this repository, running commands or not.
+				const source = await stillConnected(made.repository);
+				const pkg = source?.packages.find((item) => item.name === args.name);
+				if (!pkg || (pkg.runsCommands === true) !== made.runsCommands) throw stale();
+				// If the name was installed from another repository meanwhile, the
+				// app refuses, and its own words go on the card.
+				await route('PUT', `/team/packages/${encodeURIComponent(args.name)}/installed`, { body: { repository: source.id, acceptCommands: made.runsCommands } });
 			},
 		},
 
 		snippets_propose_to_team: {
-			async build({ file_id: fileId, package: name, summary, title, description }) {
-				const team = oneRepository(await ask('GET', '/team'));
-				if (!team.connected) throw refused(explain({ body: { error: { code: 'NOT_CONNECTED' } } }));
+			async build({ file_id: fileId, repository, package: name, summary, title, description }) {
+				const repositories = await connectedRepositories();
+				// With several connected, which one has to be said.
+				if (repository === undefined && repositories.length > 1) throw which(repositories, 'are connected');
+				const team = repository === undefined ? repositories[0] : repositoryWithId(repositories, repository);
 				const file = await ask('GET', pathOf(fileId), {}, { fileId });
 				if (file.source !== 'local') throw refused("Only one of the person's own files can be proposed. Copy the snippets into one first.");
 				withSnippets(file);
@@ -274,14 +329,15 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				};
 			},
 			async apply({ args, made }) {
-				// To the repository the card named, and no other.
-				const team = oneRepository(await route('GET', '/team'));
-				if (!team.connected || team.repository !== made.repository) throw stale();
+				// To the repository the card named, and no other. Another connected
+				// since does not matter. Its own disconnected since does.
+				const team = await stillConnected(made.repository);
+				if (!team) throw stale();
 				const file = await route('GET', pathOf(args.file_id));
 				if (file.text !== made.text) throw stale();
 				// A title and a description go only with a new package, where the card showed them.
 				const naming = made.isNew ? { title: args.title, description: args.description } : {};
-				const sent = await route('POST', '/team/proposals', { body: { fileId: args.file_id, package: args.package, summary: args.summary, ...naming } });
+				const sent = await route('POST', '/team/proposals', { body: { fileId: args.file_id, package: args.package, summary: args.summary, ...naming, repository: team.id } });
 				return {
 					link: sent.compareUrl ?? null,
 					message: `Sent as the branch ${sent.branch}. ${sent.compareUrl ? 'Open the page to start the pull request.' : "A person on the team opens the pull request on the repository's site."}`,

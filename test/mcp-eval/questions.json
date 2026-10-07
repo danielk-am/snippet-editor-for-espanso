@@ -9,8 +9,8 @@
     { "id": 5, "question": "What date format does the snippet triggered by :today use? Answer with the format string only.", "answer": "%d %B %Y" },
     { "id": 6, "question": "The form snippet triggered by :meet has one field with a fixed list of choices. How many choices are there, and which is last? Answer as: N, Name", "answer": "3, Friday" },
     { "id": 7, "question": "In catalog.yml one snippet expands to a much longer text than all the others. What is its position in the file, counting from 0? Answer with a number.", "answer": "317" },
-    { "id": 8, "question": "Does the connected team repository offer a package that runs commands? Answer with the package name, or: none", "answer": "tools" },
-    { "id": 9, "question": "Which team package is installed, and how many snippets does it hold? Answer as: name, N", "answer": "support, 4" },
+    { "id": 8, "question": "Two team repositories are connected. One of them offers a package that runs commands. What is that package called, and how many packages does its repository offer in all? Answer as: name, N", "answer": "tools, 3" },
+    { "id": 9, "question": "Both connected team repositories offer a package named goodbyes. How many snippets does each of the two hold? Answer with the smaller number first, as: N, M", "answer": "1, 2" },
     { "id": 10, "question": "In the installed team package, the file escalations.yml holds three snippets. What does the third one expand to? Answer with the text only.", "answer": "A specialist will reply." }
   ]
 }

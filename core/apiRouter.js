@@ -113,11 +113,16 @@ function repositoryWithId(service, id) {
 
 const COUNTED = ['Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
 
-// Each is listed as owner/repo with its id in brackets, which is what to send.
-function ambiguous(teams, what) {
-	const names = teams.map((team) => `${repositoryName(team.address)} (${team.address.id})`);
-	return fail('AMBIGUOUS', `${COUNTED[teams.length - 2]} repositories ${what}: ${names.slice(0, -1).join(', ')} and ${names.at(-1)}. Say which: set \`repository\` to one of the ids in brackets.`);
+// What a caller is told when more than one repository could be meant.
+// `listed` is each of them as { name, id }. It is written owner/repo with its
+// id in brackets, which is what to send. The chat's cards say the same thing
+// before a card is made, so the words are kept in one place.
+export function whichRepository(listed, what) {
+	const names = listed.map(({ name, id }) => `${name} (${id})`);
+	return `${COUNTED[listed.length - 2]} repositories ${what}: ${names.slice(0, -1).join(', ')} and ${names.at(-1)}. Say which: set \`repository\` to one of the ids in brackets.`;
 }
+
+const ambiguous = (teams, what) => fail('AMBIGUOUS', whichRepository(teams.map((team) => ({ name: repositoryName(team.address), id: team.address.id })), what));
 
 // Where a proposal goes when the request names no repository: to the only one.
 function onlyRepository(service) {

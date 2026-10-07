@@ -1,6 +1,8 @@
 # Usability check: result
 
-Run on 2026-10-06, against `questions.json` in this folder.
+Run on 2026-10-06, against `questions.json` as it was that day.
+
+Since then the app can connect several team repositories. On 2026-10-07 `serve.mjs` gained a second repository, and questions 8 and 9 were rewritten so that answering them needs the `repository` each package now carries. The old question 8 asked whether "the connected team repository" offers a package that runs commands (answer: tools), and the old question 9 asked which team package is installed and how many snippets it holds (answer: support, 4). The set has not been run since that change, so the result below says nothing about the two new questions or about the new wording of the three team tools.
 
 | | |
 | --- | --- |
