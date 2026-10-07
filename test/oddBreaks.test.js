@@ -137,7 +137,7 @@ test('a team package that hides a command behind one counts as a package that ma
 	remote.commit({ 'packages/sly/_manifest.yml': MANIFEST('sly'), 'packages/sly/package.yml': HIDDEN(BREAKS['U+2028']) });
 	const api = await startApi(t, { enabled: false, serviceOptions: { git: createGit({ allowLocal: true, env: gitEnv(remote.root) }), allowLocalRepositories: true } });
 	await api.service.connectTeam(remote.url);
-	const sly = (await api.service.teamStatus()).packages.find((pkg) => pkg.name === 'sly');
+	const sly = (await api.service.teamStatus()).repositories[0].packages.find((pkg) => pkg.name === 'sly');
 	// Not read, so not counted, and marked as one that may run commands.
 	assert.deepEqual([sly.runsCommands, sly.matchCount], [true, 0]);
 });

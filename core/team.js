@@ -5,15 +5,16 @@ import { PACKAGE_NAME, createTeamRepo } from './teamRepo.js';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
-// What the app says about team snippets when no repository is connected.
-export const NOT_CONNECTED = { connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: '', problems: [], packages: [] };
-
 // `installed` is a function, not a value: the match folder can change while a
 // repository stays connected, and installs must follow it.
 export function createTeam({ dataDir, address, git, installed, limits }) {
 	const repo = createTeamRepo({ dataDir, address, git, limits });
 	// The last thing that went wrong reaching the repository, if it still holds.
 	let problem = '';
+	// Set once this repository is being disconnected. A fetch asked for after
+	// that would otherwise wait its turn behind the disconnect, find no copy,
+	// and make one again.
+	let leaving = false;
 
 	// Always answers. If git or the copy fails here, the repository is still
 	// the connected one: the answer says what went wrong and lists nothing, so
@@ -65,6 +66,7 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 
 	const reaching = async (work) => {
 		try {
+			if (leaving) throw fail('NOT_CONNECTED', 'That repository is being disconnected.');
 			await work();
 			problem = '';
 		} catch (error) {
@@ -97,6 +99,15 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 		},
 
 		propose: (input) => repo.propose(input),
-		disconnect: () => repo.disconnect(),
+		async disconnect() {
+			leaving = true;
+			try {
+				await repo.disconnect();
+			} catch (error) {
+				// The copy is still there, so the repository is still connected.
+				leaving = false;
+				throw error;
+			}
+		},
 	};
 }

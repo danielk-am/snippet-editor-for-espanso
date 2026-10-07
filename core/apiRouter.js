@@ -152,9 +152,13 @@ const routes = [
 
 	['GET', 'team', ({ service }) => service.teamStatus()],
 
-	['POST', 'team/refresh', ({ service }) => connected(service).refresh()],
+	// Each of these answers what `GET team` answers: every connected repository.
+	['POST', 'team/refresh', ({ service }) => service.refreshTeam(connected(service).address.id)],
 
-	['PUT', 'team/packages/:name/installed', ({ service, params, body }) => connected(service).install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined })],
+	['PUT', 'team/packages/:name/installed', async ({ service, params, body }) => {
+		await connected(service).install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined });
+		return service.teamStatus();
+	}],
 
 	['DELETE', 'team/packages/:name/installed', ({ service, params }) => service.removeTeamPackage(params.name)],
 

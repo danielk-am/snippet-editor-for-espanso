@@ -123,6 +123,19 @@ const brief = (match, index) => ({ index, triggers: triggersOf(match), label: is
 // match reads the same whoever found it.
 export const foundItem = (hit) => ({ file_id: hit.fileId, file: hit.fileName, source: hit.source, ...(hit.package ? { package: hit.package } : {}), ...brief(hit.match, hit.index) });
 
+// The app's team status lists every connected repository. Until these tools
+// name the repository they mean, they work with the one that is connected,
+// in the shape the status had when there could only be one. With none
+// connected, or with more than one, that is "none". The chat's cards use it too.
+export function oneRepository(status) {
+	const repositories = Array.isArray(status?.repositories) ? status.repositories : [];
+	const apart = Array.isArray(status?.installedOnly) ? status.installedOnly : [];
+	const problem = typeof status?.problem === 'string' ? status.problem : '';
+	if (repositories.length !== 1) return { connected: false, repository: null, packages: [], installedOnly: apart, problem };
+	const [only] = repositories;
+	return { ...only, installedOnly: [...only.installedOnly, ...apart], problem: only.problem || problem };
+}
+
 function page(items, { offset = 0, limit = 50 }) {
 	const shown = items.slice(offset, offset + limit);
 	const more = offset + shown.length < items.length;
@@ -304,7 +317,7 @@ export function createTools({ api, propose }) {
 				'Show the team repository the app is connected to and the packages it offers: which are installed, which have an update, and which run commands when their snippets are used. Use it before snippets_install_team_package or snippets_propose_to_team. `snippet_count` is what the repository offers now. `installed_only` names packages that are installed but that the repository no longer offers. Team packages are separate from packages Espanso installed, even when they share a name. If no repository is connected, it says so.',
 			inputSchema: schema({ limit: LIMIT, offset: OFFSET }),
 			async run({ limit = 50, offset = 0 }) {
-				const team = await ask('GET', '/team');
+				const team = oneRepository(await ask('GET', '/team'));
 				const { items, ...paging } = page(
 					team.packages.map((pkg) => ({
 						name: pkg.name,
@@ -433,7 +446,7 @@ export function createTools({ api, propose }) {
 					}
 					throw new ToolError(explain(reply, { tool: 'team' }));
 				}
-				const pkg = reply.body.packages.find((item) => item.name === name);
+				const pkg = oneRepository(reply.body).packages.find((item) => item.name === name);
 				return { name, installed: pkg?.installed ?? true, update_available: pkg?.updateAvailable ?? false };
 			},
 		},

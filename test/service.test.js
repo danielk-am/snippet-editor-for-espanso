@@ -25,6 +25,7 @@ test('state names the folder, where it came from, and a backups folder inside th
 	assert.equal(state.files.length, 4);
 	assert.equal(state.maxBackups, 20);
 	assert.deepEqual([state.teamConnected, state.team], [false, []]);
+	assert.deepEqual([service.teams(), service.team()], [[], null]);
 	assert.ok(state.backupDir.startsWith(join(root, 'data', 'backups')));
 });
 
@@ -37,6 +38,24 @@ test('settings are handed out as a copy and saved through the service', async (t
 	assert.deepEqual([saved.apiEnabled, saved.apiPort], [true, 30123]);
 	assert.deepEqual([service.settings().apiEnabled, service.settings().apiPort], [true, 30123]);
 	assert.equal(service.tokenFile, join(root, 'data', 'api-token'));
+});
+
+test('the list of team repositories in the settings is handed out as a copy too', async (t) => {
+	const { service } = await setup(t);
+	await service.saveSettings({ teamRepositories: ['https://github.com/acme/team.git'] });
+	const saved = await service.saveSettings({ maxBackups: 9 });
+	saved.teamRepositories.push('https://github.com/acme/other.git');
+	service.settings().teamRepositories.length = 0;
+	assert.deepEqual(service.settings().teamRepositories, ['https://github.com/acme/team.git']);
+});
+
+test('with no team repository, the team status lists none and nothing is waited for', async (t) => {
+	const { service } = await setup(t);
+	assert.equal(await service.teamFetched(), undefined);
+	const empty = { connected: false, repositories: [], installedOnly: [], problem: '' };
+	assert.deepEqual(await service.teamStatus(), empty);
+	// Checking for updates with none connected is not a failure: it answers the same.
+	assert.deepEqual([await service.refreshTeam(), await service.disconnectTeam(), await service.disconnectTeam('0123456789ab')], [empty, empty, empty]);
 });
 
 test('choosing another match folder switches the files and the backups folder', async (t) => {

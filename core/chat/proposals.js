@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { brokenFile, createTools, explain, fileRuns, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
+import { brokenFile, createTools, explain, fileRuns, oneRepository, outOfRange, snippetProblem, snippetRuns, triggersOf } from '../../mcp/tools.mjs';
 import { ANY_BREAK, oddBreak, oddBreakMessage } from '../../shared/text.js';
 import { isSafeFileName } from '../store.js';
 import { PACKAGE_NAME } from '../teamRepo.js';
@@ -219,7 +219,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 
 		snippets_install_team_package: {
 			async build({ name }) {
-				const team = await ask('GET', '/team');
+				const team = oneRepository(await ask('GET', '/team'));
 				if (!team.connected) throw refused(explain({ body: { error: { code: 'NOT_CONNECTED' } } }));
 				const pkg = team.packages.find((item) => item.name === name);
 				if (!pkg) throw refused(explain({ body: { error: { code: 'NOT_FOUND', message: `The team repository has no package named ${name}.` } } }, { tool: 'team' }));
@@ -237,7 +237,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 			},
 			async apply({ args, made }) {
 				// The person agreed to what the card showed, and to nothing more.
-				const team = await route('GET', '/team');
+				const team = oneRepository(await route('GET', '/team'));
 				const pkg = team.packages?.find((item) => item.name === args.name);
 				if (pkg && (pkg.runsCommands === true) !== made.runsCommands) throw stale();
 				await route('PUT', `/team/packages/${encodeURIComponent(args.name)}/installed`, { body: { acceptCommands: made.runsCommands } });
@@ -246,7 +246,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 
 		snippets_propose_to_team: {
 			async build({ file_id: fileId, package: name, summary, title, description }) {
-				const team = await ask('GET', '/team');
+				const team = oneRepository(await ask('GET', '/team'));
 				if (!team.connected) throw refused(explain({ body: { error: { code: 'NOT_CONNECTED' } } }));
 				const file = await ask('GET', pathOf(fileId), {}, { fileId });
 				if (file.source !== 'local') throw refused("Only one of the person's own files can be proposed. Copy the snippets into one first.");
@@ -275,7 +275,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 			},
 			async apply({ args, made }) {
 				// To the repository the card named, and no other.
-				const team = await route('GET', '/team');
+				const team = oneRepository(await route('GET', '/team'));
 				if (!team.connected || team.repository !== made.repository) throw stale();
 				const file = await route('GET', pathOf(args.file_id));
 				if (file.text !== made.text) throw stale();

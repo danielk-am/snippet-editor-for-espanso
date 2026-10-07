@@ -17,6 +17,18 @@ async function request(method, path, { query, body } = {}) {
 	throw Object.assign(new Error(reply.body.error.message), { code: reply.body.error.code });
 }
 
+// The app's team status lists every connected repository. Until the pages
+// show several, they are handed the one that is connected, in the shape the
+// status had when there could only be one. With none connected, or with more
+// than one, that is "none".
+function oneRepository(status) {
+	if (status.repositories.length !== 1) {
+		return { connected: false, repository: null, webUrl: null, branch: null, commit: null, fetchedAt: null, problem: status.problem, problems: [], packages: [], installedOnly: status.installedOnly };
+	}
+	const [only] = status.repositories;
+	return { ...only, problem: only.problem || status.problem, installedOnly: [...only.installedOnly, ...status.installedOnly] };
+}
+
 const idOf = (ref) => (ref.source === 'local' ? `local:${ref.name}` : `${ref.source}:${ref.package}:${ref.name}`);
 const file = (ref) => `/files/${encodeURIComponent(idOf(ref))}`;
 
@@ -37,13 +49,13 @@ export const api = {
 	stringifyYaml: async (value) => (await request('POST', '/yaml/stringify', { body: { value } })).yaml,
 
 	// Team snippets.
-	team: () => request('GET', '/team'),
-	refreshTeam: () => request('POST', '/team/refresh'),
-	installTeamPackage: (name, { acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { acceptCommands } }),
-	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`),
+	team: () => request('GET', '/team').then(oneRepository),
+	refreshTeam: () => request('POST', '/team/refresh').then(oneRepository),
+	installTeamPackage: (name, { acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { acceptCommands } }).then(oneRepository),
+	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`).then(oneRepository),
 	propose: (input) => request('POST', '/team/proposals', { body: input }),
-	connectTeam: (address) => call('team:connect', address),
-	disconnectTeam: () => call('team:disconnect'),
+	connectTeam: (address) => call('team:connect', address).then(oneRepository),
+	disconnectTeam: () => call('team:disconnect').then(oneRepository),
 	openTeamLink: (url) => call('team:openLink', url),
 
 	// What AI tools may do, and how to connect one.
