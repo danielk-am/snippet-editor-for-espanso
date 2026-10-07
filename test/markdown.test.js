@@ -8,6 +8,23 @@ const strong = (...children) => ({ type: 'strong', children });
 const em = (...children) => ({ type: 'em', children });
 const p = (...inline) => ({ type: 'paragraph', inline });
 
+// How much work a reading is, in milliseconds: the processor time this process
+// used for it, not the time that passed. On a busy machine the time that
+// passed is mostly spent waiting for a processor, which says nothing of the
+// reader. A reading over its limit is tried twice more and the least is taken,
+// since one go can be charged for clearing memory the tests before it used.
+// A reader that is slow on such text is slow on every go, and by far more.
+function work(read, limit) {
+	let least = Infinity;
+	for (let go = 0; go < 3 && least >= limit; go += 1) {
+		const before = process.cpuUsage();
+		read();
+		const used = process.cpuUsage(before);
+		least = Math.min(least, (used.user + used.system) / 1000);
+	}
+	return least;
+}
+
 test('plain text is paragraphs, set apart by empty lines, with the line breaks inside one kept', () => {
 	assert.deepEqual(parseMarkdown('One.\n\nTwo,\nstill two.\n\n\n\nThree.'), [p(t('One.')), p(t('Two,\nstill two.')), p(t('Three.'))]);
 	assert.deepEqual(parseMarkdown(''), []);
@@ -149,11 +166,11 @@ test('no line, however long or oddly spaced, takes more than a moment to read', 
 		'many dashes and spaces': '- '.repeat(40_000),
 	};
 	for (const [name, line] of Object.entries(lines)) {
-		const began = performance.now();
-		parseMarkdown(`before\n${line}\nafter`);
-		parseMarkdown(`${line}\n${line}\n${line}`);
-		const took = performance.now() - began;
-		assert.ok(took < 250, `${name}: ${Math.round(took)} ms`);
+		const took = work(() => {
+			parseMarkdown(`before\n${line}\nafter`);
+			parseMarkdown(`${line}\n${line}\n${line}`);
+		}, 250);
+		assert.ok(took < 250, `${name}: ${Math.round(took)} ms of work`);
 	}
 	// And they still mean what they should.
 	assert.deepEqual(parseMarkdown(`# Title${' '.repeat(50)}`), [{ type: 'heading', level: 1, inline: [t('Title')] }]);
@@ -164,10 +181,9 @@ test('no line, however long or oddly spaced, takes more than a moment to read', 
 test('a great many marks that open nothing are read as quickly as plain words', () => {
 	const cases = { 'a million square brackets': '['.repeat(1_000_000), 'stars that never close': '*a '.repeat(333_333), 'backticks apart': '` '.repeat(500_000), 'brackets and stars': '[*'.repeat(500_000), 'underscores': ' _a'.repeat(333_333) };
 	for (const [name, text] of Object.entries(cases)) {
-		const began = performance.now();
-		const blocks = parseMarkdown(text);
-		const took = performance.now() - began;
-		assert.ok(took < 400, `${name}: ${Math.round(took)} ms`);
+		let blocks;
+		const took = work(() => (blocks = parseMarkdown(text)), 400);
+		assert.ok(took < 400, `${name}: ${Math.round(took)} ms of work`);
 		// Where no mark can pair with another, nothing is lost: it all comes out as text.
 		if (!['backticks apart', 'brackets and stars'].includes(name)) assert.equal(blocks.map((block) => block.inline.map((part) => part.text ?? '').join('')).join('').length, text.trimEnd().length, name);
 	}

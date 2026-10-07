@@ -8,7 +8,7 @@ import { quitWhenDisposed } from '../electron/quit.js';
 // 'will-quit' it takes no notice of another quit. That lasts until the call
 // into the listener has fully returned, which is after every promise already
 // settled has run its callbacks. A quit asked for there is lost, silently.
-function fakeApp() {
+function fakeApp(onGone = () => {}) {
 	const listeners = [];
 	let telling = false;
 	const app = {
@@ -32,10 +32,31 @@ function fakeApp() {
 			setImmediate(() => (telling = false));
 			let held = false;
 			for (const listener of listeners) listener({ preventDefault: () => (held = true) });
-			if (!held) app.gone = true;
+			if (!held) {
+				app.gone = true;
+				onGone();
+			}
 		},
 	};
 	return app;
+}
+
+// Until what a quit sets going has run. That takes turns of the event loop,
+// not a length of time: nothing in it waits on a clock. A short sleep here
+// would be a race. On a busy machine ten milliseconds can pass before the
+// loop has taken its next turn, and the check would then come too soon.
+async function settled() {
+	for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+// Until something has happened. The wait is long because it only matters when
+// the thing never happens: what has happened is seen at the next look.
+async function until(happened, what, within = 30_000) {
+	const end = Date.now() + within;
+	while (!happened()) {
+		if (Date.now() > end) throw new Error(`Still waiting for ${what}.`);
+		await wait(5);
+	}
 }
 
 test('the app does not go until what it started has been stopped', async () => {
@@ -55,19 +76,33 @@ test('the app does not go until what it started has been stopped', async () => {
 	app.quit();
 	assert.deepEqual([app.gone, disposed], [false, 1]);
 	finish();
-	await wait(10);
+	await settled();
 	assert.deepEqual([app.gone, disposed], [true, 1]);
 });
 
 test('stopping things has a time limit, so the app always goes', async () => {
-	const app = fakeApp();
-	quitWhenDisposed({ app, dispose: () => new Promise(() => {}), deadline: 150 });
+	// Two apps whose stopping never ends, one with a short limit and one with a
+	// limit ten times as long. What is checked is the order they go in, and
+	// that neither goes before its limit: never that a wait was short enough.
+	// On a busy machine a timer can be late by any amount. It is not early, and
+	// the one due first is still told first.
+	const SHORT = 150;
+	const LONG = 1500;
+	const went = [];
 	const began = Date.now();
-	app.quit();
-	assert.equal(app.gone, false);
-	while (!app.gone && Date.now() - began < 2000) await wait(10);
-	assert.equal(app.gone, true);
-	assert.ok(Date.now() - began >= 140);
+	const patient = fakeApp(() => went.push({ limit: LONG, after: Date.now() - began, otherGone: hasty.gone }));
+	const hasty = fakeApp(() => went.push({ limit: SHORT, after: Date.now() - began, otherGone: patient.gone }));
+	quitWhenDisposed({ app: patient, dispose: () => new Promise(() => {}), deadline: LONG });
+	quitWhenDisposed({ app: hasty, dispose: () => new Promise(() => {}), deadline: SHORT });
+	// The one with the long limit is asked first. Were the limit given not the
+	// one kept, it would also be the first to go.
+	patient.quit();
+	hasty.quit();
+	assert.deepEqual([patient.gone, hasty.gone], [false, false]);
+	await until(() => patient.gone && hasty.gone, 'both apps to go');
+	assert.deepEqual(went.map((one) => [one.limit, one.otherGone]), [[SHORT, false], [LONG, true]]);
+	// A timer may be a few milliseconds early by this clock, as the test allowed before.
+	for (const one of went) assert.ok(one.after >= one.limit - 10, `the app with a limit of ${one.limit} ms went after ${one.after} ms`);
 });
 
 test('a fault while stopping things does not keep the app open, and is logged', async () => {
@@ -76,7 +111,7 @@ test('a fault while stopping things does not keep the app open, and is logged', 
 		const app = fakeApp();
 		quitWhenDisposed({ app, dispose, log: (error) => logged.push(error.message) });
 		app.quit();
-		await wait(10);
+		await settled();
 		assert.equal(app.gone, true);
 	}
 	assert.deepEqual(logged, ['could not stop', 'could not stop']);
@@ -94,7 +129,7 @@ test('while it is closing no window may open, and asking for one brings the app 
 	assert.equal(leaving.mayOpen(), false);
 	assert.deepEqual([app.gone, app.relaunches], [false, 0]);
 	finish();
-	await wait(10);
+	await settled();
 	assert.deepEqual([app.gone, app.relaunches], [true, 1]);
 	// Asked to come back before it is asked to go, or it would not come back at all.
 	assert.deepEqual(app.asked.slice(-2), ['relaunch', 'quit']);
@@ -105,7 +140,7 @@ test('an app nobody asked for again goes and stays gone', async () => {
 	const leaving = quitWhenDisposed({ app, dispose: async () => {} });
 	assert.equal(leaving.mayOpen(), true);
 	app.quit();
-	await wait(10);
+	await settled();
 	assert.deepEqual([app.gone, app.relaunches], [true, 0]);
 });
 
@@ -113,7 +148,7 @@ test('asked for in its last moment, when everything is already stopped, it still
 	const app = fakeApp();
 	const leaving = quitWhenDisposed({ app, dispose: async () => {} });
 	app.quit();
-	await wait(10);
+	await settled();
 	assert.equal(leaving.mayOpen(), false);
 	assert.equal(leaving.mayOpen(), false);
 	assert.equal(app.relaunches, 1);
@@ -125,7 +160,7 @@ test('with nothing to wait for, the app still goes: the last quit is not asked f
 		const app = fakeApp();
 		quitWhenDisposed({ app, dispose });
 		app.quit();
-		await wait(20);
+		await settled();
 		assert.equal(app.gone, true);
 	}
 });

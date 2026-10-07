@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as wait } from 'node:timers/promises';
 import { createRouter } from '../core/apiRouter.js';
 import { createLookups } from '../core/chat/lookups.js';
 import { createProposals } from '../core/chat/proposals.js';
@@ -232,18 +231,35 @@ test('what the panel is given is short, whatever the snippet holds', async (t) =
 });
 
 test('the lookups do not wait on one another', async (t) => {
-	const { lookUp } = await setup(t, {
-		wrap: (tools) => ({
-			call: async (name, args) => {
-				await wait(150);
-				return tools.call(name, args);
-			},
-		}),
+	// Each of the three is held until all three have been asked for. Were one
+	// to wait for another's answer, the last would never be asked. No clock is
+	// read: on a busy machine three short waits side by side can take longer
+	// than three in a row on a quiet one.
+	let asked = 0;
+	let letGo;
+	const allAsked = new Promise((resolve) => (letGo = resolve));
+	const held = async (answer) => {
+		asked += 1;
+		if (asked === 3) letGo(true);
+		await allAsked;
+		return answer();
+	};
+	let real;
+	const { lookUp, service } = await setup(t, {
+		wrap: (tools) => ({ call: (name, args) => held(() => tools.call(name, args)) }),
+		store: { likely: (text, options) => held(() => real.likely(text, options)) },
 	});
-	const began = Date.now();
+	real = service.store;
+	// If one does wait for another, the test is not left hanging: the hold is let go, and it fails below.
+	let askedByThen = 3;
+	const giveUp = setTimeout(() => {
+		askedByThen = asked;
+		letGo(false);
+	}, 10_000);
 	const result = await lookUp({ text: 'thanks', context: { ...BASE, index: 1 } });
+	clearTimeout(giveUp);
+	assert.equal(await allAsked, true, `only ${askedByThen} of the three lookups had been asked for while none was answered`);
 	assert.deepEqual(kinds(result), ['snippets_get_snippet', 'snippets_search', 'snippets_get_file']);
-	assert.ok(Date.now() - began < 290, `took ${Date.now() - began} ms`);
 });
 
 // --- after an independent review ---------------------------------------------------------------

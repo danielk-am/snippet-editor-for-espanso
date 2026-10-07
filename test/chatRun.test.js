@@ -24,7 +24,9 @@ const alive = (pid) => {
 	}
 };
 
-async function gone(pid, within = 5000) {
+// Waits for a program to have gone. The wait is long because it only matters
+// when the program has not gone: one that has is seen at the next look.
+async function gone(pid, within = 30_000) {
 	const until = Date.now() + within;
 	while (Date.now() < until) {
 		if (!alive(pid)) return true;
@@ -32,6 +34,30 @@ async function gone(pid, within = 5000) {
 	}
 	return false;
 }
+
+// How long this machine takes, as busy as it is at this moment, to start a
+// node, hear its one line and see it end.
+async function startUp() {
+	const began = performance.now();
+	await collect(createRunner(), program(`console.log('up')`));
+	return performance.now() - began;
+}
+
+// The two time limits of a test: a short one that is meant to end the program,
+// and a long one that must not. Neither is a fixed number, because a fixed
+// number is too short for a busy machine or too slow for a quiet one.
+//   short  ten start-ups, and two seconds at the least, so a program that is
+//          slow to start is not taken for one that ran out of time
+//   long   ten times the short one, so the two cannot be mistaken for each
+//          other, however late a timer is
+async function limits() {
+	const short = Math.max(2000, Math.ceil(10 * (await startUp())));
+	return { short, long: 10 * short };
+}
+
+// A timer is never early by more than a millisecond or two, however busy the
+// machine is. Late it can be by any amount.
+const EARLY = 50;
 
 test('lines arrive whole, however the output is cut into pieces', async () => {
 	const code = `
@@ -86,19 +112,33 @@ test('a program that goes silent is stopped, together with what it started', asy
 		const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 		console.log(JSON.stringify({ self: process.pid, child: child.pid }));
 		setInterval(() => {}, 1000);`;
+	const { short, long } = await limits();
 	const lines = [];
-	const started = createRunner().run({ ...program(code), onLine: (line) => lines.push(line), idleMs: 400, totalMs: 20_000 });
+	const began = performance.now();
+	const started = createRunner().run({ ...program(code), onLine: (line) => lines.push(line), idleMs: short, totalMs: long });
 	const result = await started.done;
+	const ran = performance.now() - began;
 	assert.equal(result.reason, 'idle');
+	// It said its one line, so it was running, and then nothing.
+	assert.equal(lines.length, 1);
+	// It was the silence that ended it: that limit had passed, and the whole time was nowhere near up.
+	assert.ok(ran >= short - EARLY, `stopped after ${Math.round(ran)} ms, before ${short} ms of silence could have passed`);
+	assert.ok(ran < long, `stopped after ${Math.round(ran)} ms, which is its whole time of ${long} ms and not ${short} ms of silence`);
 	const { self, child } = JSON.parse(lines[0]);
 	assert.equal(await gone(self), true, 'the program is still running');
 	if (process.platform !== 'win32') assert.equal(await gone(child), true, 'what it started is still running');
 });
 
 test('a program that keeps talking is stopped when its whole time is up', async () => {
-	const { result, lines } = await collect(createRunner(), program(`setInterval(() => console.log('still here'), 40);`, { idleMs: 5000, totalMs: 400 }));
+	const { short, long } = await limits();
+	const began = performance.now();
+	const { result, lines } = await collect(createRunner(), program(`setInterval(() => console.log('still here'), 40);`, { idleMs: long, totalMs: short }));
+	const ran = performance.now() - began;
 	assert.equal(result.reason, 'total');
 	assert.ok(lines.length >= 3);
+	// It was its whole time that ended it: that much time had passed, and far less than the silence it was allowed.
+	assert.ok(ran >= short - EARLY, `stopped after ${Math.round(ran)} ms, before its whole time of ${short} ms was up`);
+	assert.ok(ran < long, `stopped after ${Math.round(ran)} ms, which is the ${long} ms it may be silent and not its whole time of ${short} ms`);
 });
 
 test('more output than allowed stops it, and so does one line with no end', async () => {
@@ -143,7 +183,10 @@ test('stopAll() ends every program under way, and only those', async () => {
 
 test('shutDown() stops every program at once, even one that ignores a polite stop, and starts no more', { skip: process.platform === 'win32' }, async () => {
 	// A long wait after a polite stop: the app closing must not sit through it.
-	const runner = createRunner({ grace: 5000 });
+	// The wait is ten times what closing is allowed, so a busy machine that is
+	// slow to end a program is not taken for an app that sat the wait out.
+	const { short, long } = await limits();
+	const runner = createRunner({ grace: long });
 	const lines = [];
 	const stubborn = runner.run({ ...program(`process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000);`), onLine: (line) => lines.push(line) });
 	while (!lines.length) await wait(10);
@@ -153,7 +196,7 @@ test('shutDown() stops every program at once, even one that ignores a polite sto
 	runner.shutDown();
 	assert.equal((await stubborn.done).reason, 'stopped');
 	const took = Date.now() - began;
-	assert.ok(took < 1500, `it took ${took} ms`);
+	assert.ok(took < short, `it took ${took} ms, and the wait after a polite stop is ${long} ms`);
 	assert.equal(await gone(Number(lines[0])), true);
 	// Nothing is started after that.
 	const late = await collect(runner, program(`console.log('ran')`));
