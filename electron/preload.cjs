@@ -17,6 +17,8 @@ const CHANNELS = new Set([
 	'listener:set',
 	'listener:replaceToken',
 	'listener:copy',
+	'expansion:get',
+	'expansion:set',
 	'chat:status',
 	'chat:send',
 	'chat:stop',

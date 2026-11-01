@@ -38,7 +38,7 @@ export function NewFileDialog({ onClose, onCreated }) {
 	return html`<form onSubmit=${create}>
 		<${Dialog}
 			title="New match file"
-			description="Espanso loads every .yml file in the match folder."
+			description="Snippet files use the .yml format."
 			onClose=${onClose}
 			footer=${html`
 				<${Button} variant="outline" onClick=${onClose}>Cancel<//>

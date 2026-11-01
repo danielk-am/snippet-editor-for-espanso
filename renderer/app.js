@@ -368,7 +368,7 @@ const root = document.getElementById('root');
 root.textContent = '';
 const crashed = (error) =>
 	html`<div class="boot">
-		<${Empty} icon="alert" title="Snippet Editor ran into a problem" actions=${html`<${Button} icon="refresh" onClick=${() => location.reload()}>Reload<//>`}>
+		<${Empty} icon="alert" title="Snippet Editor for Espanso ran into a problem" actions=${html`<${Button} icon="refresh" onClick=${() => location.reload()}>Reload<//>`}>
 			${error.message}. Your files have not been changed.
 		<//>
 	</div>`;

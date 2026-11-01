@@ -5,8 +5,8 @@ import { api, platform } from '../lib/api.js';
 import { Alert, Button, Card, ConfirmDialog, Field, IconButton, Segmented, Switch, useToast } from '../lib/ui.js';
 
 const SOURCES = {
-	default: 'This is where Espanso keeps its match files on this computer.',
-	legacy: "This is Espanso's older config location, which exists on this computer.",
+	default: 'This is where your snippet files are stored on this computer.',
+	legacy: "Your snippets are stored in an existing configuration folder.",
 	env: 'Set by an environment variable (SNIPPET_EDITOR_MATCH_DIR or ESPANSO_CONFIG_DIR).',
 	settings: 'You chose this folder.',
 };
@@ -385,7 +385,7 @@ export function SettingsPage({ state, theme, setTheme, refresh, navigate }) {
 					${!state.exists && html`<p class="field__help">This folder does not exist yet. Creating your first file creates it.</p>`}
 					<div class="setting__actions">
 						<${Button} variant="outline" icon="folder" onClick=${() => attempt(api.chooseMatchDir)}>Choose folder…<//>
-						${state.matchDirSource === 'settings' && html`<${Button} variant="outline" onClick=${() => attempt(api.resetMatchDir)}>Use Espanso's default<//>`}
+						${state.matchDirSource === 'settings' && html`<${Button} variant="outline" onClick=${() => attempt(api.resetMatchDir)}>Use default folder<//>`}
 						${state.exists && html`<${Button} variant="ghost" onClick=${() => attempt(() => api.reveal('matchDir'))}>Show in ${fileManager}<//>`}
 					</div>
 				</div>
@@ -399,6 +399,7 @@ export function SettingsPage({ state, theme, setTheme, refresh, navigate }) {
 				</div>
 			<//>
 			<${TeamCard} state=${state} navigate=${navigate} refresh=${refresh} />
+			<${ExpansionCard} />
 			<${ApiCard} />
 			<${AiCard} />
 			<${Card} title="Appearance">
@@ -406,4 +407,33 @@ export function SettingsPage({ state, theme, setTheme, refresh, navigate }) {
 			<//>
 		</div>
 	</div>`;
+}
+
+function ExpansionCard() {
+ const [status, setStatus] = useState(null);
+ const [busy, setBusy] = useState(false);
+ const [error, setError] = useState('');
+ useEffect(() => {
+  let active = true;
+  const refresh = () => api.expansion().then(value => { if (active) setStatus(value); }, failure => { if (active) setError(failure.message); });
+  refresh();
+  const timer = setInterval(refresh, 2000);
+  return () => { active = false; clearInterval(timer); };
+ }, []);
+ const toggle = async (enabled) => {
+  setBusy(true); setError('');
+  try { setStatus(await api.setExpansion({ enabled })); } catch (failure) { setError(failure.message); }
+  finally { setBusy(false); }
+ };
+ return html`<${Card} title="Built-in text expansion" description="Expand plain-text and date shortcuts in compatible macOS text fields as you type. Requires Accessibility permission.">
+  <div class="setting">
+   <${Switch} title="Expand text on this Mac" disabled=${busy || !status?.supported} checked=${!!status?.enabled} onChange=${toggle}
+    description=${status?.running ? 'On for this session. Keep Snippet Editor for Espanso running.' : status?.enabled ? 'Starting…' : 'Off. Turn on each time you open the app.'} />
+   <p class="muted">Quit any other text expansion app first. Use prefixed shortcuts such as ;hello or :email. Password fields are skipped. Short, single-line snippets also use keyboard compatibility mode; longer and multiline snippets need Accessibility text editing.</p>
+   ${status && html`<p class="muted">${status.eligible} shortcuts ready · ${status.skipped} unsupported snippets · ${status.conflicts} duplicate shortcuts excluded.</p>`}
+   <p class="muted">Date variables such as :today are supported. Other templates, forms, scripts, images, regex and word/case options are not supported yet. Your clipboard stays unchanged.</p>
+   ${(error || status?.problem) && html`<${Alert} tone="warning" title=${error || status.problem} />`}
+   ${status && !status.supported && html`<p class="muted">Available on macOS only.</p>`}
+  </div>
+ <//>`;
 }

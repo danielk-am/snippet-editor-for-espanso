@@ -16,7 +16,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
-const APP_NAME = 'Snippet Editor';
+const APP_NAME = 'Snippet Editor'; // Stable data directory, retained after the product rename.
 const DEFAULTS = { apiEnabled: false, apiPort: 27187, aiWrite: false };
 
 // Where Electron keeps this app's data, worked out without Electron.
@@ -28,7 +28,7 @@ export function dataDirFor({ env = process.env, platform = process.platform, hom
 }
 
 const unreachable = (message) => Object.assign(new Error(message), { code: 'UNREACHABLE' });
-const NOT_REACHABLE = 'Snippet Editor is not reachable. Open the app and switch on "API for other tools" in its Settings.';
+const NOT_REACHABLE = 'Snippet Editor for Espanso is not reachable. Open the app and switch on "API for other tools" in its Settings.';
 
 // One request to 127.0.0.1, answered as a status and parsed JSON. `gone` is
 // what to say when nothing, or something else, is listening there.
@@ -49,7 +49,7 @@ function createSender(gone) {
 					}
 				});
 			});
-			request.on('error', (error) => reject(error.code === 'UNREACHABLE' ? error : unreachable(error.name === 'AbortError' || error.code === 'ABORT_ERR' ? 'Snippet Editor did not answer in time.' : gone)));
+			request.on('error', (error) => reject(error.code === 'UNREACHABLE' ? error : unreachable(error.name === 'AbortError' || error.code === 'ABORT_ERR' ? 'Snippet Editor for Espanso did not answer in time.' : gone)));
 			request.end(body);
 		});
 	};
@@ -116,7 +116,7 @@ export function createApiClient({ dataDir }) {
 			body,
 			timeout,
 			gone: NOT_REACHABLE,
-			refused: 'Snippet Editor refused the token. Open the app and check "API for other tools" in its Settings.',
+			refused: 'Snippet Editor for Espanso refused the token. Open the app and check "API for other tools" in its Settings.',
 		});
 	}
 

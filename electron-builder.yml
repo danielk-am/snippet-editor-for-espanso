@@ -1,8 +1,8 @@
 # Packaging for macOS, Windows and Linux. See "Package it" in README.md.
 # The packaged app holds the same source files that `npm start` runs: there
-# is still no compile step, only an archive of them plus Electron.
+# interface needs no bundler. Mac packaging also builds the Swift expansion helper.
 appId: am.danielk.snippet-editor
-productName: Snippet Editor
+productName: Snippet Editor for Espanso
 artifactName: ${name}-${version}-${os}-${arch}.${ext}
 
 directories:
@@ -24,7 +24,7 @@ files:
   - shared/**
   - renderer/**
   - mcp/**
-  - build/icon.png
+  - build/icon-glass.png
   - package.json
 
 # The MCP server is started by an AI tool as a program of its own, and a
@@ -34,6 +34,10 @@ asarUnpack:
   - mcp/**
 
 mac:
+  extraResources:
+    - from: build/native/snippet-expansion
+      to: native/snippet-expansion
+  icon: build/icon-glass.png
   category: public.app-category.productivity
   # No Apple Developer ID: the app is signed ad hoc, which Apple Silicon
   # needs to run it at all. It is not notarised. The hardened runtime only
@@ -48,6 +52,7 @@ mac:
       arch: [arm64, x64]
 
 win:
+  icon: build/icon-glass.png
   target:
     - target: nsis
       arch: [x64]
@@ -60,8 +65,9 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 linux:
+  icon: build/icon-glass.png
   category: Utility
-  synopsis: Editor for Espanso snippets
+  synopsis: Manage snippets and expand text
   # Names the desktop entry after `desktopName` in package.json, which is
   # also the id Electron gives its windows, so the launcher icon and the
   # running window are recognised as the same app.

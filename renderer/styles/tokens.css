@@ -1,21 +1,22 @@
-/* danielk.am default color tokens v2 — approved by Daniel on 2026-10-02.
-   White surfaces, blue primary, supporting teal. Canonical source: danielk.am
-   brand/color-tokens.css in Daniel's shared Drive. Keep project copies aligned. */
+/* Snippet Editor for Espanso: logo-inspired teal, emerald and lime.
+   Project palette requested by Daniel; white workspace surfaces. */
 :root {
   color-scheme: light;
   --color-white: #FFFFFF;
+  --color-emerald: #20A887;
+  --color-lime: #D4E83C;
   --color-ink: #153847;
   --color-muted: #526B78;
-  --color-brand: #2563EB;
-  --color-brand-hover: #1D4ED8;
-  --color-brand-soft: #EDF3FF;
-  --color-brand-soft-hover: #DFE9FF;
-  --color-teal: #087E8B;
-  --color-teal-hover: #066571;
-  --color-teal-soft: #F0F9FA;
-  --color-blue: #2563EB;
-  --color-blue-soft: #EDF3FF;
-  --color-blue-ink: #2451A6;
+  --color-brand: #08796F;
+  --color-brand-hover: #066359;
+  --color-brand-soft: #EAF7F2;
+  --color-brand-soft-hover: #D7EFE6;
+  --color-teal: #087F73;
+  --color-teal-hover: #066359;
+  --color-teal-soft: #EAF7F2;
+  --color-blue: #08796F;
+  --color-blue-soft: #EAF7F2;
+  --color-blue-ink: #066359;
   --color-border: #D7E5EA;
   --color-border-strong: #8BA6B2;
   --color-map-surface: #E7F3F6;
@@ -34,17 +35,10 @@
   --accent: var(--color-blue);
 }
 
-/* ---------------------------------------------------------------------------
-   App layer. The roles shadcn/ui components expect (background, primary,
-   muted, ring…), each resolved from a brand token above. Components read
-   only these `--ui-*` roles, so a brand change is a change to the block
-   above and nothing else. The `--ui-` prefix keeps the roles clear of the
-   brand file's own short aliases (--muted and --accent mean something
-   different there).
-   --------------------------------------------------------------------------- */
+/* Semantic workspace roles. */
 :root {
   --ui-background: var(--color-white);
-  --ui-foreground: var(--color-ink);
+  --ui-foreground: #262626;
   --ui-card: var(--color-white);
   --ui-popover: var(--color-white);
   --ui-primary: var(--color-brand);
@@ -52,14 +46,14 @@
   --ui-primary-foreground: var(--color-white);
   --ui-secondary: var(--color-brand-soft);
   --ui-secondary-hover: var(--color-brand-soft-hover);
-  --ui-secondary-foreground: var(--color-blue-ink);
-  --ui-muted: color-mix(in srgb, var(--color-border) 32%, var(--color-white));
-  --ui-muted-foreground: var(--color-muted);
-  --ui-border: var(--color-border);
-  --ui-input: color-mix(in srgb, var(--color-border-strong) 60%, var(--color-border));
+  --ui-secondary-foreground: #066359;
+  --ui-muted: #F7F7F7;
+  --ui-muted-foreground: #686868;
+  --ui-border: #EAEAEA;
+  --ui-input: #DCDCDC;
   --ui-ring: var(--color-focus);
   --ui-link: var(--color-brand);
-  --ui-sidebar: color-mix(in srgb, var(--color-brand-soft) 42%, var(--color-white));
+  --ui-sidebar: #FAFAFA;
   --ui-success: var(--color-teal);
   --ui-success-soft: var(--color-teal-soft);
 
@@ -73,8 +67,8 @@
   --ui-regex-text: #9D2B6B;
   --ui-regex-soft: #FCEEF5;
 
-  --ui-radius: 8px;
-  --ui-radius-sm: 6px;
+  --ui-radius: 12px;
+  --ui-radius-sm: 8px;
   --ui-shadow-sm: 0 1px 2px rgb(21 56 71 / 0.06);
   --ui-shadow-md: 0 4px 12px rgb(21 56 71 / 0.08), 0 1px 3px rgb(21 56 71 / 0.06);
   --ui-shadow-lg: 0 16px 48px rgb(21 56 71 / 0.18), 0 2px 8px rgb(21 56 71 / 0.08);
@@ -84,28 +78,28 @@
   --ui-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
-/* Dark theme. The brand file is light-only, so these are this app's own
-   values, kept to the same hues: ink for surfaces, the brand blue for
-   actions. Blue text is lightened to stay readable on dark surfaces. */
+/* Companion dark workspace with readable mint accents. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --ui-background: #0F1B22;
-  --ui-foreground: #E7EFF3;
-  --ui-card: #14242D;
-  --ui-popover: #172A34;
-  --ui-primary-hover: #3B76F0;
-  --ui-secondary: #1B2F52;
-  --ui-secondary-hover: #223B66;
-  --ui-secondary-foreground: #C3D5FB;
-  --ui-muted: #182932;
-  --ui-muted-foreground: #9FB4BF;
-  --ui-border: #263E4A;
-  --ui-input: #3A5663;
-  --ui-ring: #6E9BF5;
-  --ui-link: #8FB2F8;
-  --ui-sidebar: #0C171D;
-  --ui-success: #4FC3CF;
-  --ui-success-soft: #12343A;
+  --ui-background: #191919;
+  --ui-foreground: #EEEEEE;
+  --ui-card: #191919;
+  --ui-popover: #252525;
+  --ui-primary: #65D8B7;
+  --ui-primary-foreground: #191919;
+  --ui-primary-hover: #8AE6CB;
+  --ui-secondary: #173C34;
+  --ui-secondary-hover: #214D42;
+  --ui-secondary-foreground: #A6E8D4;
+  --ui-muted: #242424;
+  --ui-muted-foreground: #AAAAAA;
+  --ui-border: #333333;
+  --ui-input: #4A4A4A;
+  --ui-ring: #65D8B7;
+  --ui-link: #8AE6CB;
+  --ui-sidebar: #212121;
+  --ui-success: #65D8B7;
+  --ui-success-soft: #173C34;
   --ui-destructive-text: #FF9A9A;
   --ui-destructive-soft: #3A1B1D;
   --ui-warning-text: #F0B455;

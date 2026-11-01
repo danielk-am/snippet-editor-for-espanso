@@ -58,6 +58,8 @@ export const api = {
 	openTeamLink: (url) => call('team:openLink', url),
 
 	// What AI tools may do, and how to connect one.
+	expansion: () => call('expansion:get'),
+	setExpansion: (input) => call('expansion:set', input),
 	ai: () => call('ai:get'),
 	setAi: (input) => call('ai:set', input),
 

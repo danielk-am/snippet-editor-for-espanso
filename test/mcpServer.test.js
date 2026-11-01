@@ -108,7 +108,7 @@ test('with the app closed it still starts, lists its tools, and says what is wro
 	await server.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
 	assert.equal((await server.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' })).result.tools.length, 12);
 	const result = (await server.send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'snippets_search', arguments: { query: 'bye' } } })).result;
-	assert.deepEqual([result.isError, result.content[0].text], [true, 'Snippet Editor is not reachable. Open the app and switch on "API for other tools" in its Settings.']);
+	assert.deepEqual([result.isError, result.content[0].text], [true, 'Snippet Editor for Espanso is not reachable. Open the app and switch on "API for other tools" in its Settings.']);
 });
 
 test('only protocol messages reach standard output, the token never does, and it exits when its input closes', async (t) => {

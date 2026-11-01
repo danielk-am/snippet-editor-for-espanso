@@ -19,7 +19,7 @@ import { MANIFEST, localGit, seeded } from './helpers/teamRemote.js';
 // snippet there. Written as numbers, so this file holds none of them.
 const BREAKS = { 'a lone carriage return': '\r', 'U+0085': String.fromCharCode(0x85), 'U+2028': String.fromCharCode(0x2028), 'U+2029': String.fromCharCode(0x2029) };
 const HIDDEN = (char) => `matches:\n  - trigger: ":hi"\n    replace: "Hello"\n  # tidy${char}  - trigger: ":sig"${char}    replace: "{{o}}"${char}    vars:${char}      - name: o${char}        type: shell${char}        params:${char}          cmd: "echo ran"\n`;
-const SAYS = /^This text has a line break that Espanso reads and this app does not \(.+\), at line \d+\. Remove it, or put a normal line break there\.$/;
+const SAYS = /^This text has an unsupported line break \(.+\), at line \d+\. Remove it, or put a normal line break there\.$/;
 
 test('the four line breaks only Espanso reads are found, and nothing else is taken for one', () => {
 	for (const [name, char] of Object.entries(BREAKS)) {
@@ -112,7 +112,7 @@ test('an AI tool cannot hide a command behind one: the change is refused, with o
 	// Through MCP, with the switch on.
 	const direct = await tools.call('snippets_replace_file_yaml', { file_id: 'local:base.yml', yaml: hidden, version });
 	assert.equal(direct.isError, true);
-	assert.match(direct.content[0].text, /line break that Espanso reads and this app does not \(a lone carriage return\), at line \d+/);
+	assert.match(direct.content[0].text, /unsupported line break \(a lone carriage return\), at line \d+/);
 	const named = await tools.call('snippets_create_file', { name: 'new.yml', prefix: `:${BREAKS['U+2028']}global_vars:` });
 	assert.equal(named.isError, true);
 
@@ -124,7 +124,7 @@ test('an AI tool cannot hide a command behind one: the change is refused, with o
 	]) {
 		const result = await proposals.tools.call(tool, args);
 		assert.equal(result.isError, true, tool);
-		assert.match(result.content[0].text, /line break that Espanso reads and this app does not/);
+		assert.match(result.content[0].text, /unsupported line break/);
 	}
 	assert.deepEqual(proposals.all(), []);
 	assert.equal(readFileSync(join(api.matchDir, 'base.yml'), 'utf8'), before);

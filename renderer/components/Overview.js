@@ -28,7 +28,7 @@ export function Overview({ state, navigate, onNewFile, onNewSnippet, snippetCoun
 		<div class="page-head">
 			<div class="page-head__text">
 				<h1>Overview</h1>
-				<p>Your Espanso snippets, read straight from the match folder.</p>
+				<p>Your shortcuts and expanded text, together in one place.</p>
 			</div>
 			<div class="page-head__actions">
 				<${Button} variant="outline" icon="file" onClick=${onNewFile}>New file<//>
@@ -47,7 +47,7 @@ export function Overview({ state, navigate, onNewFile, onNewSnippet, snippetCoun
 					<${Button} size="sm" variant="outline" onClick=${() => navigate({ view: 'settings' })}>Choose another folder<//>
 				`}
 			>
-				<p>Creating your first file also creates the folder. If Espanso keeps its files somewhere else, choose that folder instead.</p>
+				<p>Creating your first file also creates the folder. If your snippets are somewhere else, choose that folder instead.</p>
 			<//>`}
 			${state.error &&
 			html`<${Alert}
@@ -67,7 +67,7 @@ export function Overview({ state, navigate, onNewFile, onNewSnippet, snippetCoun
 							title=${`${file.name} has YAML errors`}
 							actions=${html`<${Button} size="sm" variant="outline" icon="code" onClick=${() => navigate({ view: 'file', fileId: file.id, tab: 'raw' })}>Open the raw editor<//>`}
 						>
-							<p>Espanso skips this file until it is fixed. ${file.parseErrors[0]}</p>
+							<p>This file is skipped until it is fixed. ${file.parseErrors[0]}</p>
 						<//>`
 			)}
 

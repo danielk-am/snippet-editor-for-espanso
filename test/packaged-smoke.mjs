@@ -16,8 +16,8 @@ const dist = path.join(root, 'dist');
 
 // Where electron-builder leaves the unpacked app for each system.
 const CANDIDATES = {
-	darwin: [`mac-${process.arch}`, 'mac', 'mac-universal'].map((dir) => path.join(dist, dir, 'Snippet Editor.app', 'Contents', 'MacOS', 'Snippet Editor')),
-	win32: [path.join(dist, 'win-unpacked', 'Snippet Editor.exe')],
+	darwin: [`mac-${process.arch}`, 'mac', 'mac-universal'].map((dir) => path.join(dist, dir, 'Snippet Editor for Espanso.app', 'Contents', 'MacOS', 'Snippet Editor for Espanso')),
+	win32: [path.join(dist, 'win-unpacked', 'Snippet Editor for Espanso.exe')],
 	linux: [`linux-${process.arch}-unpacked`, 'linux-unpacked'].map((dir) => path.join(dist, dir, 'snippet-editor-for-espanso')),
 };
 const binary = (CANDIDATES[process.platform] ?? []).find((candidate) => fs.existsSync(candidate));

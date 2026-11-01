@@ -55,7 +55,7 @@ test('a request reaches the API with the token and comes back as a status and a 
 
 test('with the API switched off, no token, or nothing listening, the app is "not reachable"', async (t) => {
 	const off = await startApi(t, { enabled: false });
-	await unreachable(createApiClient({ dataDir: off.dataDir }).request('GET', '/state'), /^Snippet Editor is not reachable\. Open the app and switch on "API for other tools" in its Settings\.$/);
+	await unreachable(createApiClient({ dataDir: off.dataDir }).request('GET', '/state'), /^Snippet Editor for Espanso is not reachable\. Open the app and switch on "API for other tools" in its Settings\.$/);
 
 	const on = await startApi(t);
 	rmSync(join(on.dataDir, 'api-token'));
@@ -76,7 +76,7 @@ test('an app that does not answer in time is reported, not waited for', async (t
 	writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: true, apiPort: silent.address().port }));
 	writeFileSync(join(dataDir, 'api-token'), 'a'.repeat(64) + '\n');
 	const started = Date.now();
-	await unreachable(createApiClient({ dataDir }).request('GET', '/state', { timeout: 300 }), /^Snippet Editor did not answer in time\.$/);
+	await unreachable(createApiClient({ dataDir }).request('GET', '/state', { timeout: 300 }), /^Snippet Editor for Espanso did not answer in time\.$/);
 	assert.ok(Date.now() - started < 3000);
 });
 
@@ -195,7 +195,7 @@ test('if the app goes away in the middle of a call, the call fails plainly', asy
 	const dataDir = mkdtempSync(join(tmpdir(), 'snippet-editor-mcpclient-'));
 	writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ apiEnabled: true, apiPort: quitting.address().port }));
 	writeFileSync(join(dataDir, 'api-token'), token + '\n');
-	await unreachable(createApiClient({ dataDir }).request('PUT', '/files/x/raw', { body: { text: 'matches: []\n', version: 'v' } }), /^Snippet Editor is not reachable\./);
+	await unreachable(createApiClient({ dataDir }).request('PUT', '/files/x/raw', { body: { text: 'matches: []\n', version: 'v' } }), /^Snippet Editor for Espanso is not reachable\./);
 });
 
 // --- in chat: the listener a message is given --------------------------------------------

@@ -1,6 +1,6 @@
 # Snippet Editor for Espanso
 
-A desktop app for browsing, searching and editing your [Espanso](https://espanso.org) snippets without hand-writing YAML. It is an Electron app with no build step: there is no bundler and no compile, so the files you read are the files that run.
+A desktop app for browsing, searching and editing your [Espanso](https://espanso.org) snippets without hand-writing YAML. The Electron interface has no bundler. An optional Swift helper adds plain-text and date expansion on macOS.
 
 ## Run it
 
@@ -14,15 +14,25 @@ npm install
 npm start
 ```
 
-To try every feature on a throwaway copy of sample files, without touching your real Espanso folder:
+To try the editor on a throwaway copy of sample files, without touching your real Espanso folder:
 
 ```bash
 npm run demo
 ```
 
+## Built-in expansion on macOS (experimental)
+
+Run `npm run build:expansion` before `npm start` to compile the helper. In Settings, quit Espanso and turn on **Expand text on this Mac**. Grant macOS Accessibility permission when prompted, then turn the switch on again. The switch is off at every app launch. Expansion continues while the app remains running, including with its window closed, and stops when the app quits.
+
+This first version uses literal, case-sensitive shortcuts beginning with `;`, `:`, `!`, `#` or `/`, with 2–64 characters and no whitespace. It uses the existing match folder; Espanso does not need to be installed. Short, single-line replacements (up to 512 UTF-16 units) with ASCII shortcuts can use keyboard compatibility mode: a temporary shortcut-prefix tracker recognizes typing, sends Backspace events, then inserts Unicode text. Mouse clicks, navigation, modifiers, app activation and focused-field changes clear tracking. Before deletion, the helper verifies readable text and a collapsed caret containing the exact shortcut; fields hiding that evidence are skipped. Verified Accessibility replacement is preferred when supported. Longer or multiline replacements use Accessibility text replacement. Neither path uses the clipboard or sends Return keys. Password fields and fields without an accessible text role are skipped; host compatibility still needs testing.
+
+Date variables with format-only parameters support `%Y`, `%y`, `%m`, `%d`, `%A`, `%a`, `%B`, `%b`, `%H`, `%I`, `%M`, `%S`, `%p` and `%%`. Dates are evaluated at typing time in the Mac’s current timezone, with English month/day names. Other templates, cursor markers, forms, regex, scripts, images, word/case options and unknown match options are excluded. Duplicate shortcuts are excluded even if one duplicate is unsupported. Import-only files are inactive. Espanso application-specific configurations are not interpreted: eligible snippets from the editor's active inventory apply in all compatible fields. Settings shows eligibility and conflict counts. Both engines must not run together; a process check refuses startup and periodically stops this engine if Espanso appears.
+
+The helper checks the focused field and uses readable text/selection for Accessibility replacement. Keyboard compatibility mode retains only suffixes matching configured shortcut prefixes in memory, clears them on interruptions, and ignores its own marked events. It does not log typing or transmit text. Only status messages return to the main process. A failed Accessibility edit can be skipped, and host compatibility still requires manual validation. The source build has compiled for Apple Silicon and Intel and passed matching tests; the user confirmed Accessibility expansion in TextEdit. The user also confirmed expansion in Codex and in the VS Code editor with Screen Reader Optimized mode enabled. Espanso remains the recommended engine for forms, choices and advanced expansion. Test with disposable text before relying on it.
+
 ## Package it
 
-Packaging needs no compile step either. It wraps the same source files with Electron for each system. All of it can be built from one Mac, Apple Silicon included.
+Packaging wraps the JavaScript source with Electron. Mac packaging also compiles a universal Swift helper and requires the Xcode command-line tools.
 
 ```bash
 npm run dist
@@ -52,7 +62,7 @@ What to expect when you hand a package to someone:
 
 How far each package has been checked: the Apple Silicon app is built, run and tested on a Mac. The Intel Mac, Windows and Linux packages are built and inspected (right file type, same app files inside, correct name and version) but have not been run, because that needs those systems.
 
-The icon is `build/icon.png`. `npm run icon` redraws it from the mark in the sidebar. Replace that file to use your own.
+The custom glass-gradient logo is `renderer/assets/snippet-editor-glass.png`, generated with imagegen. The sidebar uses this master. `npm run icon` copies it to `build/icon-glass.png`, the icon configured for all three packaging targets. The earlier flat icon remains at `build/icon.png` for reference.
 
 ## What it does
 
@@ -342,11 +352,9 @@ Starts the real app from source in a folder of its own, asks it to quit the way 
 
 ## Colours and design
 
-`renderer/styles/tokens.css` starts with a verbatim copy of the danielk.am colour tokens (blue `#2563EB` primary). Below it, an app layer maps those tokens onto the roles shadcn/ui components expect, prefixed `--ui-`. Components read only the `--ui-` roles, so a brand change is made in one place.
+`renderer/styles/tokens.css` uses the project’s Espanso-inspired logo palette: dark teal `#08796F`, emerald `#20A887` and lime `#D4E83C`, with white surfaces and mint accents in dark mode. Both sidebar dividers and resize indicators extend to the footer. The notepad-and-pencil logo aligns with the two-line product name.
 
-The components follow shadcn/ui's design language as plain CSS. shadcn's own components need React and a Tailwind build, which a no-build app cannot use.
-
-The brand file is light-only, so the dark theme's surface values are this app's own.
+Components read only semantic `--ui-` roles. The design is plain CSS with the existing Preact components, so it adds no dependency or build step. Dark mode uses a matching neutral palette. Editor container queries respond to the space remaining after the source and assistant panels are resized.
 
 ## Where this version came from
 

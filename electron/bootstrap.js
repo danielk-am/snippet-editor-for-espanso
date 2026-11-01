@@ -1,3 +1,4 @@
+import { createExpansionControl } from '../core/expansion/control.js';
 import { createListenerControl } from '../core/apiListener.js';
 import { createRouter } from '../core/apiRouter.js';
 import { createChat } from '../core/chat/chat.js';
@@ -10,19 +11,23 @@ import { registerIpc } from './ipc.js';
 // The last five options are for that test: a stand-in clipboard and browser,
 // a git that may use a repository in a temporary folder, and stand-ins for
 // the chat's backends. The app passes none of them.
-export async function startBackend({ ipcMain, userDataDir, env, onChange, onChatEvent = () => {}, getWindow, isTrustedSender, mcp, clipboard, openExternal, git, allowLocalRepositories, chatOptions = {} }) {
-	const service = await createService({ userDataDir, env, onChange, git, allowLocalRepositories });
+export async function startBackend({ ipcMain, userDataDir, env, onChange, onChatEvent = () => {}, getWindow, isTrustedSender, mcp, clipboard, openExternal, git, allowLocalRepositories, chatOptions = {}, expansionExecutable = null }) {
+	let expansion;
+	const service = await createService({ userDataDir, env, onChange: () => { onChange?.(); void expansion?.refresh(); }, git, allowLocalRepositories });
+	expansion = createExpansionControl({ service, executable: expansionExecutable });
 	const router = createRouter({ service });
 	const listener = createListenerControl({ service, router });
 	const chat = createChat({ service, router, dataDir: userDataDir, mcp, emit: onChatEvent, ...chatOptions });
-	registerIpc({ ipcMain, service, router, listener, chat, getWindow, isTrustedSender, mcp, clipboard, openExternal });
+	registerIpc({ ipcMain, service, router, listener, chat, expansion, getWindow, isTrustedSender, mcp, clipboard, openExternal });
 	await listener.apply();
 	return {
 		service,
 		listener,
 		chat,
+		expansion,
 		async dispose() {
 			// First what cannot wait: a git under way is stopped at once.
+			await expansion.dispose();
 			service.dispose();
 			await chat.dispose();
 			await listener.stop();

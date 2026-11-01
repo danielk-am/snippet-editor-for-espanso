@@ -5,3 +5,6 @@ test/.artifacts/
 .DS_Store
 .claude/
 test/mcp-eval/.session
+
+# Compiled macOS helper (npm run build:expansion)
+build/native/

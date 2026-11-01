@@ -193,7 +193,7 @@ test('every input is checked before the app is asked, and the reply names the in
 		['snippets_get_file', { file_id: 'local:base.yml', detail: 'everything' }, /^`detail` must be one of: summary, full, raw\./],
 		['snippets_get_snippet', { file_id: 'local:base.yml' }, /^Missing `index`\./],
 		['snippets_get_snippet', { file_id: 'local:base.yml', index: '0' }, /^`index` must be a whole number, 0 or more\./],
-		['snippets_add_snippet', { file_id: 'local:base.yml', version: 'v', snippet: 'text' }, /^`snippet` must be an object of Espanso keys/],
+		['snippets_add_snippet', { file_id: 'local:base.yml', version: 'v', snippet: 'text' }, /^`snippet` must be an object of snippet fields/],
 		['snippets_install_team_package', { name: 'goodbyes', accept_commands: 'yes' }, /^`accept_commands` must be true or false\./],
 		['snippets_install_team_package', { name: 'goodbyes', repository: 7 }, /^`repository` must be text\. The id of the repository to install from/],
 		['snippets_propose_to_team', { file_id: 'local:base.yml', package: 'goodbyes', summary: 'Share', repository: '' }, /^`repository` must not be empty\. The id of the repository to send it to/],
@@ -220,7 +220,7 @@ test('with the switch off, every write tool refuses before the app is asked, and
 	};
 	assert.deepEqual(Object.keys(attempts), WRITE_TOOLS);
 	for (const [name, args] of Object.entries(attempts)) {
-		assert.deepEqual(await call(name, args), { error: 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor\'s Settings, then try again.' }, name);
+		assert.deepEqual(await call(name, args), { error: 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor for Espanso\'s Settings, then try again.' }, name);
 	}
 	assert.equal(read('base.yml'), before);
 	assert.throws(() => readFileSync(join(matchDir, 'new.yml')));
@@ -402,7 +402,7 @@ test('team tools, with a repository: list, install, accept commands, propose', a
 test('when the app cannot be reached, every tool says so in the same words, and the list of tools still works', async (t) => {
 	const { tools, call, listener } = await setup(t, { aiWrite: true });
 	await listener.stop();
-	const expected = { error: 'Snippet Editor is not reachable. Open the app and switch on "API for other tools" in its Settings.' };
+	const expected = { error: 'Snippet Editor for Espanso is not reachable. Open the app and switch on "API for other tools" in its Settings.' };
 	assert.deepEqual(await call('snippets_search', { query: 'bye' }), expected);
 	assert.deepEqual(await call('snippets_list_files'), expected);
 	assert.deepEqual(await call('snippets_create_file', { name: 'x.yml' }), expected);

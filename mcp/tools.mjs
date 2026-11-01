@@ -12,7 +12,7 @@
 // a card, and the app writes it only when the person presses Apply.
 
 const MAX_REPLY = 25_000;
-const SWITCHED_OFF = 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor\'s Settings, then try again.';
+const SWITCHED_OFF = 'Changing snippets is switched off. Ask the person to switch on "Let AI tools change snippets" in Snippet Editor for Espanso\'s Settings, then try again.';
 const LIST_FILES = 'Call snippets_list_files to see the files and their ids.';
 const LIST_REPOSITORIES = 'Call snippets_list_team_packages to see the connected repositories, their ids and what each offers.';
 const IN_CHAT = ' In this chat the change is not made at once: the person sees it as a card and decides. Nothing is written until they press Apply.';
@@ -35,7 +35,7 @@ const INDEX = whole('The position of the snippet in its file, counting from 0. E
 const SNIPPET = {
 	type: 'object',
 	description:
-		'The snippet, as Espanso keys. Give `trigger` (or `triggers`, a list, or `regex`) and what it expands to: `replace`, or `markdown`, `html`, `form` or `image_path`. Optional keys include `label`, `word`, `propagate_case` and `vars`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.',
+		'The snippet, as snippet fields. Give `trigger` (or `triggers`, a list, or `regex`) and what it expands to: `replace`, or `markdown`, `html`, `form` or `image_path`. Optional keys include `label`, `word`, `propagate_case` and `vars`. Example: {"trigger": ":sig", "replace": "Best,\\nSam"}.',
 };
 const LIMIT = whole('How many items to return, from 1 to 200. Default 50.', 1, 200);
 const OFFSET = whole('How many items to skip, for the next page. Use `next_offset` from the last reply. Default 0.', 0);
@@ -77,7 +77,7 @@ function problemWith(inputSchema, args) {
 		} else if (rule.type === 'boolean') {
 			if (typeof value !== 'boolean') return `\`${key}\` must be true or false.${hint}`;
 		} else if (rule.type === 'object') {
-			if (!isObject(value)) return `\`${key}\` must be an object of Espanso keys.${hint}`;
+			if (!isObject(value)) return `\`${key}\` must be an object of snippet fields.${hint}`;
 		}
 	}
 	return null;
@@ -246,7 +246,7 @@ export function createTools({ api, propose }) {
 			name: 'snippets_search',
 			title: 'Search snippets',
 			description:
-				'Find Espanso snippets by words in their trigger, label, search terms or the text they expand to. Searches every file: the person\'s own, installed packages and team packages. Use this first when you know what a snippet says or does but not where it lives. Returns matches with their file id and position, which the other tools take. `preview` is the text a snippet expands to, cut to 120 characters and ending in "..." when it is longer: read the whole snippet with snippets_get_snippet. Use snippets_list_files instead to see what files exist.',
+				'Find snippets by words in their trigger, label, search terms or the text they expand to. Searches every file: the person\'s own, installed packages and team packages. Use this first when you know what a snippet says or does but not where it lives. Returns matches with their file id and position, which the other tools take. `preview` is the text a snippet expands to, cut to 120 characters and ending in "..." when it is longer: read the whole snippet with snippets_get_snippet. Use snippets_list_files instead to see what files exist.',
 			inputSchema: schema({ query: text('Words to look for. All must appear. A trigger works too. Examples: "refund", ":sig".'), limit: LIMIT, offset: OFFSET }, ['query']),
 			async run({ query, limit = 50, offset = 0 }) {
 				const hits = await ask('GET', '/search', { query: { q: query, limit: 1000 } });
@@ -280,7 +280,7 @@ export function createTools({ api, propose }) {
 			name: 'snippets_get_file',
 			title: 'Read a match file',
 			description:
-'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as Espanso keys. "raw" gives the YAML text itself, with its comments, imports and global variables. In "summary" and "full", long files come back in pages: use `limit` and `offset`, and a `preview` is cut to 120 characters. In "raw", a long file comes back in parts: `offset` then counts characters, each part says where the next starts, and the `version` comes only with the last part, so the whole text has been read before anything can be sent back.',
+'Read one match file and get its `version`, which every change to that file needs. detail "summary" (the default) lists each snippet\'s position, triggers, label and a short preview. "full" gives each snippet whole, as snippet fields. "raw" gives the YAML text itself, with its comments, imports and global variables. In "summary" and "full", long files come back in pages: use `limit` and `offset`, and a `preview` is cut to 120 characters. In "raw", a long file comes back in parts: `offset` then counts characters, each part says where the next starts, and the `version` comes only with the last part, so the whole text has been read before anything can be sent back.',
 			inputSchema: schema(
 				{
 					file_id: FILE_ID,
@@ -328,7 +328,7 @@ export function createTools({ api, propose }) {
 			name: 'snippets_get_snippet',
 			title: 'Read one snippet',
 			description:
-				'Read one snippet whole, as Espanso keys, together with the `version` of its file. Use it before changing or deleting a snippet, so you work from what is there now. Takes the file id and the snippet\'s position, as given by snippets_search or snippets_get_file. A file\'s `global_vars` are not part of any one snippet: read them with snippets_get_file and detail "raw".',
+				'Read one snippet whole, as snippet fields, together with the `version` of its file. Use it before changing or deleting a snippet, so you work from what is there now. Takes the file id and the snippet\'s position, as given by snippets_search or snippets_get_file. A file\'s `global_vars` are not part of any one snippet: read them with snippets_get_file and detail "raw".',
 			inputSchema: schema({ file_id: FILE_ID, index: INDEX }, ['file_id', 'index']),
 			async run({ file_id: fileId, index }) {
 				const file = await readFile(fileId);
@@ -445,7 +445,7 @@ export function createTools({ api, propose }) {
 			title: 'Create a match file',
 			write: true,
 			description:
-				'Create a new, empty match file in the person\'s Espanso match folder. Use it when a group of snippets deserves a file of its own. Then add snippets to it with snippets_add_snippet, using the `version` this returns. Fails if a file of that name exists.',
+				'Create a new, empty match file in the person\'s snippet folder. Use it when a group of snippets deserves a file of its own. Then add snippets to it with snippets_add_snippet, using the `version` this returns. Fails if a file of that name exists.',
 			inputSchema: schema(
 				{
 					name: text('The file name, ending in .yml, with no folders. A name starting with _ is loaded only when another file imports it. Example: "work.yml".'),

@@ -1,6 +1,5 @@
-/* Snippet Editor. shadcn/ui's design language (roles, radii, component
-   anatomy) written as plain CSS so the app needs no build step. Every color
-   comes from a --ui-* role in tokens.css. */
+/* Snippet Editor. Quiet desktop workspace with semantic color roles,
+   compact rounded controls and restrained surfaces. No build step. */
 
 *,
 *::before,
@@ -84,7 +83,7 @@ pre,
   flex: none;
   stroke: currentColor;
   fill: none;
-  stroke-width: 2;
+  stroke-width: 1.65;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -107,8 +106,12 @@ pre,
 
 .app {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: var(--sidebar-width, 272px) minmax(0, 1fr);
   height: 100vh;
+  overflow: hidden;
+  /* Keep drawers and the assistant sheet inside the native window. */
+  contain: paint;
 }
 
 .app[data-sidebar='collapsed'] {
@@ -165,6 +168,7 @@ pre,
   gap: 10px;
   padding: 14px 14px 10px;
   font-weight: 600;
+  font-size: 16px;
   letter-spacing: -0.01em;
   -webkit-app-region: drag;
 }
@@ -179,13 +183,12 @@ pre,
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--ui-primary);
-  color: var(--ui-primary-foreground);
+  display: block;
+  /* Account for the logo artwork’s inset so its tile matches both text lines. */
+  width: 42px;
+  height: 42px;
+  flex: none;
+  object-fit: contain;
 }
 
 .sidebar__scroll {
@@ -200,7 +203,7 @@ pre,
   align-items: center;
   gap: 6px;
   padding: 8px;
-  border-top: 1px solid var(--ui-border);
+
 }
 
 .nav-item {
@@ -208,7 +211,7 @@ pre,
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 32px;
+  min-height: 36px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--ui-radius-sm);
@@ -252,7 +255,7 @@ pre,
   min-width: 22px;
   padding: 0 6px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--ui-foreground) 8%, transparent);
+  background: none;
   color: var(--ui-muted-foreground);
   font-size: 11px;
   font-weight: 500;
@@ -349,6 +352,7 @@ pre,
   flex: none;
   padding: 0 16px 0 12px;
   border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-background);
   -webkit-app-region: drag;
 }
 
@@ -397,8 +401,8 @@ pre,
   width: 240px;
   height: 32px;
   padding: 0 8px 0 10px;
-  border: 1px solid var(--ui-input);
-  border-radius: var(--ui-radius-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
   background: var(--ui-background);
   color: var(--ui-muted-foreground);
   cursor: pointer;
@@ -485,7 +489,7 @@ pre,
   height: 32px;
   padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: var(--ui-radius-sm);
+  border-radius: 999px;
   background: var(--ui-primary);
   color: var(--ui-primary-foreground);
   font-weight: 500;
@@ -515,7 +519,7 @@ pre,
 }
 
 .btn--outline {
-  border-color: var(--ui-input);
+  border-color: var(--ui-border);
   background: var(--ui-background);
   color: var(--ui-foreground);
 }
@@ -574,8 +578,8 @@ pre,
   width: 100%;
   border: 1px solid var(--ui-input);
   border-radius: var(--ui-radius-sm);
-  background: var(--ui-background);
-  box-shadow: var(--ui-shadow-sm);
+  background: var(--ui-muted);
+  box-shadow: none;
 }
 
 .input,
@@ -716,6 +720,7 @@ pre,
 }
 
 .switch[aria-checked='true']::after {
+  background: var(--ui-primary-foreground);
   transform: translateX(18px);
 }
 
@@ -768,7 +773,7 @@ pre,
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius);
   background: var(--ui-card);
-  box-shadow: var(--ui-shadow-sm);
+  box-shadow: none;
 }
 
 .card__head {
@@ -1200,18 +1205,34 @@ pre,
 
 /* --- editor --------------------------------------------------------------- */
 
+.page--editor {
+  container: snippet-editor / inline-size;
+}
+
 .editor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 
 .editor__aside {
-  position: sticky;
+  position: static;
   top: 0;
   display: grid;
   gap: 16px;
+}
+
+/* Both columns need 400px, plus their 20px gap. Use the editor's available
+   width so resizing the sidebar or assistant also changes this layout. */
+@container snippet-editor (min-width: 820px) {
+  .editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .editor__aside {
+    position: sticky;
+  }
 }
 
 .code-block {
@@ -1280,7 +1301,6 @@ pre,
   gap: 8px;
   margin: 24px -32px -72px;
   padding: 12px 32px;
-  border-top: 1px solid var(--ui-border);
   background: color-mix(in srgb, var(--ui-background) 92%, transparent);
   backdrop-filter: blur(8px);
 }
@@ -1371,7 +1391,7 @@ pre,
   padding: 0;
   border: 0;
   background: none;
-  color: var(--ui-primary);
+  color: var(--ui-link);
   font: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -1743,14 +1763,6 @@ pre,
 /* --- narrower windows ----------------------------------------------------- */
 
 @media (max-width: 1080px) {
-  .editor {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .editor__aside {
-    position: static;
-  }
-
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1913,7 +1925,7 @@ li:first-child > .file-row {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  height: 100vh;
+  height: 100%;
   border-left: 1px solid var(--ui-border);
   background: var(--ui-background);
 }
@@ -2666,8 +2678,9 @@ li:first-child > .file-row {
   flex: none;
   margin: 0 16px;
   padding: 10px 10px 8px 12px;
-  border: 1px solid var(--ui-input);
-  border-radius: var(--ui-radius);
+  border: 1px solid var(--ui-border);
+  border-radius: 22px;
+  box-shadow: var(--ui-shadow-md);
   background: var(--ui-background);
 }
 
@@ -2790,3 +2803,6 @@ li:first-child > .file-row {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.sidebar__brand-name { min-width: 0; line-height: 1.2; }
+.sidebar__brand-name small { display: block; margin-top: 3px; font-size: 11px; font-weight: 500; color: var(--ui-muted-foreground); letter-spacing: 0; }

@@ -141,7 +141,7 @@ test('ollama: the same message, with the tools run inside the app', async (t) =>
 	]);
 	const sent = api.ollama.requests[0].body;
 	assert.equal(sent.model, 'qwen3:8b');
-	assert.match(sent.messages[0].content, /^You are the assistant inside Snippet Editor/);
+	assert.match(sent.messages[0].content, /^You are the assistant inside Snippet Editor for Espanso/);
 	const asked = sent.messages.at(-1).content;
 	assert.ok(asked.startsWith('[Open in the app: The person has the file base.yml open (file id local:base.yml).]\n\n<looked_up_by_the_app>\n'), asked);
 	assert.ok(asked.endsWith('\n</looked_up_by_the_app>\n\nFind hello'), asked);

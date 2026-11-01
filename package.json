@@ -1,11 +1,11 @@
 {
   "name": "snippet-editor-for-espanso",
-  "productName": "Snippet Editor",
+  "productName": "Snippet Editor for Espanso",
   "desktopName": "snippet-editor-for-espanso.desktop",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "A no-build Electron editor for Espanso match files: browse, search and edit snippets without hand-writing YAML. A rebuild of Snippet Manager for Espanso.",
+  "description": "A desktop editor for Espanso snippets.",
   "author": "Daniel Kam",
   "license": "MIT",
   "main": "electron/main.js",
@@ -21,12 +21,13 @@
     "test:packaged": "node test/packaged-smoke.mjs",
     "mcp": "node mcp/server.mjs",
     "test:espanso": "node test/espanso-check.mjs",
-    "icon": "electron scripts/make-icon.mjs",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder --mac --win --linux",
-    "dist:mac": "electron-builder --mac",
+    "icon": "node scripts/make-icon.mjs",
+    "pack": "npm run build:expansion && electron-builder --dir",
+    "dist": "npm run build:expansion && electron-builder --mac --win --linux",
+    "dist:mac": "npm run build:expansion && electron-builder --mac",
     "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "build:expansion": "node scripts/build-expansion.mjs"
   },
   "dependencies": {
     "yaml": "^2.9.1"

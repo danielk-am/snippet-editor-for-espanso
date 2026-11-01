@@ -1,8 +1,14 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import { startBackend } from './bootstrap.js';
 import { mcpSetup } from './mcpSetup.js';
 import { quitWhenDisposed } from './quit.js';
 import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
+
+// Preserve existing preferences, backups and conversations after the product rename.
+// Honour explicit user-data-dir overrides used by isolated packaged tests.
+if (!app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'Snippet Editor'));
 
 let win = null;
 // Set once the app is ready. Says whether a window may open: not while the
@@ -86,6 +92,7 @@ if (!app.requestSingleInstanceLock()) {
 	app.whenReady().then(async () => {
 		const backend = await startBackend({
 			ipcMain,
+			expansionExecutable: app.isPackaged ? `${process.resourcesPath}/native/snippet-expansion` : fileURLToPath(new URL('../build/native/snippet-expansion', import.meta.url)),
 			userDataDir: app.getPath('userData'),
 			onChange: () => send('data:changed'),
 			onChatEvent: (event) => send('chat:event', event),

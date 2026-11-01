@@ -8,7 +8,7 @@ import { mcpSetupText, mcpSetupToml, mcpSetupWarning } from './mcpSetup.js';
 // error on its way to the renderer.
 // `clipboard` and `openExternal` can be swapped for stand-ins, so a test can
 // see what was copied or opened without touching the real clipboard or browser.
-export function registerIpc({ ipcMain, service, router, listener, chat, getWindow, isTrustedSender, mcp, clipboard = systemClipboard, openExternal = shell.openExternal }) {
+export function registerIpc({ ipcMain, service, router, listener, chat, expansion, getWindow, isTrustedSender, mcp, clipboard = systemClipboard, openExternal = shell.openExternal }) {
 	const handle = (channel, fn) =>
 		ipcMain.handle(channel, async (event, ...args) => {
 			try {
@@ -33,7 +33,7 @@ export function registerIpc({ ipcMain, service, router, listener, chat, getWindo
 
 	handle('settings:chooseMatchDir', async () => {
 		const result = await dialog.showOpenDialog(getWindow(), {
-			title: 'Choose the Espanso match folder',
+			title: 'Choose your snippet folder',
 			defaultPath: service.store.matchDir,
 			properties: ['openDirectory', 'createDirectory'],
 		});
@@ -104,6 +104,9 @@ export function registerIpc({ ipcMain, service, router, listener, chat, getWindo
 	// The chat. A message goes in here, and the answer comes back as
 	// `chat:event` messages. A change the assistant proposes is written only
 	// by `chat:apply`, which the person's own press of Apply sends.
+	handle('expansion:get', () => expansion.status());
+	handle('expansion:set', (input) => expansion.set(input));
+
 	handle('chat:status', () => chat.status());
 	handle('chat:send', (input) => chat.send(input));
 	handle('chat:stop', (turnId) => {

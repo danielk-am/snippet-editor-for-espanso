@@ -7,7 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_FILE = path.join(here, '..', 'renderer', 'index.html');
 // Shown in the window frame and taskbar on Windows and Linux. macOS takes
 // the icon from the packaged app instead.
-export const ICON_FILE = path.join(here, '..', 'build', 'icon.png');
+export const ICON_FILE = path.join(here, '..', 'build', 'icon-glass.png');
 
 const isAppPage = (url) => isSameFile(url, INDEX_FILE);
 
@@ -21,7 +21,7 @@ export function createMainWindow({ webPreferences, ...options } = {}) {
 		minWidth: 760,
 		minHeight: 520,
 		show: false,
-		title: 'Snippet Editor',
+		title: 'Snippet Editor for Espanso',
 		backgroundColor: '#FFFFFF',
 		titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
 		...(process.platform === 'darwin' ? {} : { icon: ICON_FILE }),

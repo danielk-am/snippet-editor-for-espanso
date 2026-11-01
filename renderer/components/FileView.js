@@ -150,7 +150,7 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 		${broken &&
 		!file.unreadable &&
 		html`<div class="stack">
-			<${Alert} tone="danger" icon="alert" title="Espanso cannot load this file until its YAML is fixed">
+			<${Alert} tone="danger" icon="alert" title="Fix the YAML to load this file">
 				<ul>
 					${file.parseErrors.map((message) => html`<li>${message}</li>`)}
 				</ul>
@@ -181,7 +181,7 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 		${confirmDelete &&
 		html`<${ConfirmDialog}
 			title=${`Delete ${file.name}?`}
-			description=${`Its ${file.matchCount ?? 0} snippets stop expanding in Espanso. A backup copy is kept in the app's backups folder.`}
+			description=${`Its ${file.matchCount ?? 0} snippets will no longer be available for expansion. A backup copy is kept in the app's backups folder.`}
 			confirmLabel="Delete file"
 			destructive
 			onConfirm=${remove}

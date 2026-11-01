@@ -32,7 +32,7 @@ export function oddBreak(text) {
 	return { line: text.slice(0, found.index).split('\n').length, name: ODD_NAMES[found[0].charCodeAt(0)] };
 }
 
-export const oddBreakMessage = ({ line, name }) => `This text has a line break that Espanso reads and this app does not (${name}), at line ${line}. Remove it, or put a normal line break there.`;
+export const oddBreakMessage = ({ line, name }) => `This text has an unsupported line break (${name}), at line ${line}. Remove it, or put a normal line break there.`;
 
 // Every kind of line break, Espanso's four included.
 export const ANY_BREAK = new RegExp(`\\r\\n|[\\n\\r${BREAKS}]`);

@@ -22,7 +22,7 @@ const CONTENT_HELP = {
 	markdown: 'Markdown is converted to rich text when the snippet expands.',
 	html: 'HTML is pasted as rich text when the snippet expands.',
 	form: 'Write the form as text. Each [[name]] becomes a field you fill in before the snippet expands.',
-	image_path: 'The full path to an image. %CONFIG% stands for the Espanso config folder.',
+	image_path: 'The full path to an image. %CONFIG% stands for the snippet configuration folder.',
 };
 
 function checkExtras(value) {
@@ -201,7 +201,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 
 	const title = isNew ? 'New snippet' : draft.label || edited.trigger || edited.triggers?.[0] || edited.regex || 'Snippet';
 
-	return html`<div class="page page--wide">
+	return html`<div class="page page--wide page--editor">
 		<div class="page-head">
 			<div class="page-head__text">
 				<h1 class="truncate">${title}</h1>
@@ -270,7 +270,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 						html`<${Field} label="Regex pattern" error=${errors.regex} help="Rust regex syntax. A named group such as (?P<id>\\d+) becomes the variable {{id}}.">
 							${(control) => html`<input class="input mono" value=${draft.regex} placeholder=":ticket(?P<id>\\d+)" disabled=${readOnly} onInput=${(event) => set({ regex: event.target.value })} ...${control} />`}
 						<//>`}
-						<${Field} label="Label" help="A friendly name shown in Espanso's search bar and in this app.">
+						<${Field} label="Label" help="A friendly name to help you find this snippet.">
 							${(control) => html`<input class="input" value=${draft.label} disabled=${readOnly} onInput=${(event) => set({ label: event.target.value })} ...${control} />`}
 						<//>
 					<//>
@@ -338,7 +338,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 							? html`<div class="field">
 									<span class="field__label">Search terms</span>
 									<${Repeater} label="Search term" addLabel="Add search term" values=${draft.searchTerms} disabled=${readOnly} onChange=${(searchTerms) => set({ searchTerms })} />
-									<p class="field__help">Extra words that find this snippet in Espanso's search bar.</p>
+									<p class="field__help">Extra search words stored with this snippet.</p>
 								</div>`
 							: html`<p class="field__help">This snippet's search terms are not a list, so they are kept exactly as written in the file.</p>`}
 					<//>
@@ -348,7 +348,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 					<${Card} title="YAML" description=${readOnly ? 'How this snippet is written in the file.' : 'What will be written to the file.'}>
 						<pre class="code-block" tabindex="0" aria-label="YAML preview">${preview}</pre>
 					<//>
-					<${Card} title="Other keys" description="Espanso options this form does not cover, such as left_word or apps.">
+					<${Card} title="Other keys" description="Advanced compatibility options preserved in the file. Built-in expansion does not support all options.">
 						<${RawYamlField}
 							key=${JSON.stringify(base ?? null)}
 							label="Other keys (YAML)"

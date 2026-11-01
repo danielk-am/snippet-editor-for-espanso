@@ -90,6 +90,7 @@ window.__ui = {
 			offCentre: Boolean(box) && Math.abs((box.left + box.right) / 2 - window.innerWidth / 2) > 2,
 			// A dialog asks a question; a passing notice must not sit on top of it.
 			buried: layer('.overlay') !== null && layer('.toasts') !== null && layer('.overlay') <= layer('.toasts'),
+			clippedFooters: [...document.querySelectorAll('.sidebar__footer, .chat__composer')].filter(visible).filter(el => el.getBoundingClientRect().bottom > document.querySelector('.app').getBoundingClientRect().bottom).map(describe),
 			unnamed: controls.filter((el) => !named(el)).map(describe),
 			small: controls
 				.filter((el) => !el.matches('.sidebar__resize'))
@@ -225,6 +226,7 @@ async function run() {
 		const audit = await js('window.__ui.audit()');
 		check(audit.unnamed.length === 0, `${name}: controls without an accessible name: ${audit.unnamed.join(', ')}`);
 		check(audit.small.length === 0, `${name}: controls under 24px: ${audit.small.join(', ')}`);
+		check(audit.clippedFooters.length === 0, `${name}: footers outside the app frame: ${audit.clippedFooters.join(', ')}`);
 		check(!audit.overflow, `${name}: the page scrolls sideways`);
 		check(!audit.buried, `${name}: notices are drawn over the open dialog`);
 		check(!audit.offCentre, `${name}: the dialog is not in the middle of the window`);
@@ -347,7 +349,7 @@ async function run() {
 		const reach = (headers) => fetch(`${address}/state`, { headers }).then((reply) => reply.status, () => 'closed');
 		check((await reach()) === 'closed', 'the API was listening before it was switched on');
 
-		await js(`document.querySelector('[role="switch"][aria-checked="false"]').click()`);
+		await js(`[...document.querySelectorAll('.switch-row')].find(row => row.textContent.includes('Let other tools use the API')).querySelector('[role="switch"]').click()`);
 		await waitFor(shown, 'Settings to show the API address');
 		await shot('09b-settings-api');
 
@@ -408,7 +410,7 @@ async function run() {
 		await js(`window.__ui.click('Use this port')`);
 		await waitFor(shown, 'the API to come back on its own port');
 
-		await js(`document.querySelector('[role="switch"][aria-checked="true"]').click()`);
+		await js(`[...document.querySelectorAll('.switch-row')].find(row => row.textContent.includes('Let other tools use the API')).querySelector('[role="switch"]').click()`);
 		await waitFor(`document.querySelector('[role="switch"][aria-checked="false"]') && !(${shown})`, 'Settings to show the API as off');
 		check((await reach({ Authorization: `Bearer ${token}` })) === 'closed', 'the API kept listening after it was switched off');
 	});
@@ -1336,7 +1338,7 @@ async function run() {
 			await js(`document.querySelector('.sidebar__footer [aria-label="Light"]').click()`);
 			win.setContentSize(900, 700);
 			await sleep(300);
-			check(await js(`document.querySelector('.chat').getBoundingClientRect().width === window.innerWidth`), 'in a narrow window the assistant does not cover the page');
+			check(await js(`Math.round(document.querySelector('.chat').getBoundingClientRect().width) === document.querySelector('.app').clientWidth`), 'in a narrow window the assistant does not fill the rounded app frame');
 			await shot('19i-assistant-sheet');
 			// From a card, "Show the file" goes to a page the sheet covers: the sheet makes way.
 			await js(`[...document.querySelectorAll('.chat .btn')].find((el) => el.textContent.trim() === 'Show the file').click()`);

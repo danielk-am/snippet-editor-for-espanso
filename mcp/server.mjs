@@ -17,14 +17,14 @@ import { createApiClient, createChatClient, dataDirFor } from './client.mjs';
 import { createProtocol } from './protocol.mjs';
 import { createTools } from './tools.mjs';
 
-const START = 'Snippet Editor manages Espanso text-expansion snippets on this computer. Start with snippets_search or snippets_list_files. ';
+const START = 'Snippet Editor for Espanso manages text-expansion snippets on this computer. Start with snippets_search or snippets_list_files. ';
 const VERSION = 'Before changing a file, read it with snippets_get_file or snippets_get_snippet and pass its `version` to the tool that changes it. ';
 
 const sessionFile = process.env.SNIPPET_EDITOR_CHAT;
 const chat = sessionFile ? createChatClient({ sessionFile }) : null;
 
 const protocol = createProtocol({
-	serverInfo: { name: 'snippet-editor', title: 'Snippet Editor for Espanso', version: '0.1.0' },
+	serverInfo: { name: 'snippet-editor', title: 'Snippet Editor for Espanso', version: '0.2.2' },
 	instructions: chat
 		? `${START}${VERSION}You are in the app's own chat: a tool that changes something shows the person a card, and nothing is written until they press Apply.`
 		: `${START}${VERSION}` +

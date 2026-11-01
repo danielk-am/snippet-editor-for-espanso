@@ -82,8 +82,8 @@ export function Sidebar({ state, route, navigate, theme, setTheme, width, setWid
 
 	return html`<aside class="sidebar" aria-label="Sources">
 		<div class="sidebar__brand">
-			<span class="brand-mark"><${Icon} name="prompt" /></span>
-			<span>Snippet Editor</span>
+			<img class="brand-mark" src="./assets/snippet-editor-glass.png" alt="" width="32" height="32" />
+			<span class="sidebar__brand-name">Snippet Editor<small>for Espanso</small></span>
 		</div>
 		<nav class="sidebar__scroll" aria-label="Main">
 			<ul>
