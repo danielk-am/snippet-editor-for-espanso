@@ -521,7 +521,7 @@ test('installing a package that runs no commands does not say that commands were
 	const made = await proposals.tools.call('snippets_install_team_package', { name: 'goodbyes' });
 	assert.equal((await proposals.apply(made.structuredContent.proposal_id)).status, 'applied');
 	// From the repository the card named, by its id.
-	assert.deepEqual(installs, [{ repository: idOf(remote), acceptCommands: false }]);
+	assert.deepEqual(installs, [{ repository: idOf(remote), acceptCommands: false, expectedTree: (await api.service.team(idOf(remote)).status()).packages.find((pkg) => pkg.name === 'goodbyes').tree }]);
 });
 
 test('a file is sent to the repository its card named, and with a title only if the card showed one', async (t) => {
@@ -858,4 +858,14 @@ test('inside the app, the routes answer exactly as they do over HTTP, odd files 
 	assert.deepEqual(await inside.settings(), { apiEnabled: true, apiPort: null, aiWrite: false });
 	await api.service.saveSettings({ aiWrite: true });
 	assert.equal((await inside.settings()).aiWrite, true);
+});
+
+// protects=consent to exact package bytes; fails_when=a refreshed package replaces reviewed content; why_new=existing test changes only command classification.
+test('an install card is stale when package content changes without changing command classification', async (t) => {
+	const { propose, proposals, second, two, service, matchDir } = await teams(t);
+	const card = await propose('snippets_install_team_package', { name: 'shipping', repository: two });
+	second.commit({ 'packages/shipping/package.yml': MATCHES([':sent', 'Different content']) });
+	await service.refreshTeam(two);
+	assert.equal((await proposals.apply(card.id)).status, 'stale');
+	assert.equal(existsSync(join(matchDir, 'team', 'shipping')), false);
 });

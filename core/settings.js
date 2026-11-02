@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicFile } from './atomicFile.js';
 import { MAX_TEAM_REPOSITORIES } from '../shared/teamLimits.js';
 
 // How many team repositories can be connected at once. The number is kept
@@ -39,18 +40,44 @@ function clean(raw) {
 	return settings;
 }
 
-export async function loadSettings(file) {
+async function read(file) {
+	const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid settings');
+	return clean(raw);
+}
+
+export async function loadSettings(file, { onRecovery = () => {} } = {}) {
 	try {
-		return clean(JSON.parse(await fs.readFile(file, 'utf8')));
-	} catch {
-		// Missing or damaged: the app still has to open.
-		return defaults();
+		return await read(file);
+	} catch (error) {
+		try {
+			const recovered = await read(`${file}.last-good`);
+			// A recovered older preference must not restore an old permission.
+			recovered.apiEnabled = false;
+			recovered.aiWrite = false;
+			onRecovery('Settings could not be read. The last good settings were recovered. API access and AI writes are off; review them in Settings.');
+			return recovered;
+		} catch {
+			if (error.code !== 'ENOENT') onRecovery('Settings could not be read and no good copy was available. Default settings are in use.');
+			return defaults();
+		}
 	}
 }
 
-export async function saveSettings(file, patch) {
-	const settings = clean({ ...(await loadSettings(file)), ...patch });
-	await fs.mkdir(path.dirname(file), { recursive: true });
-	await fs.writeFile(file, JSON.stringify(settings, null, '\t') + '\n');
-	return settings;
+const pending = new Map();
+export function saveSettings(file, patch) {
+	const key = path.resolve(file);
+	const run = (pending.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+		// Atomic replacement must still honour an explicitly read-only settings file.
+		await fs.access(file, fs.constants.W_OK).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+		const previous = await loadSettings(file);
+		const settings = clean({ ...previous, ...patch });
+		await atomicFile(`${file}.last-good`, JSON.stringify(previous, null, '\t') + '\n');
+		await atomicFile(file, JSON.stringify(settings, null, '\t') + '\n');
+		return settings;
+	});
+	pending.set(key, run);
+	const clear = () => { if (pending.get(key) === run) pending.delete(key); };
+	run.then(clear, clear);
+	return run;
 }

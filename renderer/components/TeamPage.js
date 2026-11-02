@@ -113,7 +113,7 @@ export function TeamPage({ state, navigate, refresh }) {
 
 	// A package is installed from the repository whose section it is in.
 	const install = (repository, pkg, acceptCommands) =>
-		run(() => api.installTeamPackage(pkg.name, { repository: repository.id, acceptCommands }), `${pkg.title} ${pkg.installed ? 'updated' : 'installed'}`);
+		run(() => api.installTeamPackage(pkg.name, { repository: repository.id, acceptCommands, expectedTree: pkg.tree }), `${pkg.title} ${pkg.installed ? 'updated' : 'installed'}`);
 	const onInstall = (repository, pkg) => (pkg.runsCommands ? setAsking({ about: 'commands', repository, pkg }) : install(repository, pkg));
 	// A name is installed once, so removing needs no repository.
 	const remove = (name, title) => run(() => api.removeTeamPackage(name), `${title} removed`);

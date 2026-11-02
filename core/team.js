@@ -86,12 +86,13 @@ export function createTeam({ dataDir, address, git, installed, limits }) {
 		// At start: the window must open whether or not the repository answers.
 		refreshQuietly: () => reaching(() => repo.connect()).catch(() => {}),
 
-		async install(name, { acceptCommands } = {}) {
+		async install(name, { acceptCommands, expectedTree } = {}) {
 			if (typeof name !== 'string' || !PACKAGE_NAME.test(name)) throw fail('INVALID', 'A package name is lowercase letters, digits and dashes, 80 characters or fewer.');
 			// A name another repository holds is refused here, before any file is
 			// read. The installed copies ask again as they write.
 			await installed().checkFree(name, address.url);
 			const { commit, package: pkg, files } = await repo.packageFiles(name);
+			if (expectedTree !== undefined && expectedTree !== pkg.tree) throw fail('CONFLICT', 'This package changed since it was reviewed. Review the current package before installing it.');
 			if (pkg.matchCount === null) throw fail('INVALID', 'This package was not read, so it cannot be installed from here.');
 			if (pkg.runsCommands && acceptCommands !== true) {
 				throw fail('INVALID', 'This package runs commands on your computer when its snippets are used. Send `acceptCommands: true` to install it.');

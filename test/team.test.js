@@ -1614,3 +1614,17 @@ test('a package installed under the SSH address is still its own when the reposi
 	assert.deepEqual(shown(await team.refresh(), 'goodbyes'), [false, false, 'git@github.com:other/team-snippets.git']);
 	await fails(team.install('goodbyes'), (error) => assert.deepEqual([error.code, error.message], ['EXISTS', taken('goodbyes', 'other/team-snippets')]));
 });
+
+test('install refuses content that changed after review and preserves the active package', async (t) => {
+	const { service, call, remote, matchDir } = await setup(t);
+	await service.connectTeam(remote.url);
+	const reviewed = only(await service.teamStatus()).packages.find((pkg) => pkg.name === 'goodbyes').tree;
+	assert.equal((await call('PUT', '/team/packages/goodbyes/installed', { body: { expectedTree: reviewed } })).status, 200);
+	const active = join(matchDir, 'team', 'goodbyes', 'package.yml');
+	const old = readFileSync(active, 'utf8');
+	remote.commit({ 'packages/goodbyes/package.yml': MATCHES([':bye', 'Changed after approval']) });
+	await service.team(idOf(remote)).refresh();
+	const refused = await call('PUT', '/team/packages/goodbyes/installed', { body: { expectedTree: reviewed, acceptCommands: true } });
+	assert.deepEqual(code(refused), [409, 'CONFLICT']);
+	assert.equal(readFileSync(active, 'utf8'), old);
+});

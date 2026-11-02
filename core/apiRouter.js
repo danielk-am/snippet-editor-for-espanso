@@ -245,7 +245,7 @@ const routes = [
 		const named = id === undefined ? null : repositoryWithId(service, id);
 		await refuseIfHeldAway(service, params.name);
 		const team = named ?? (await repositoryOffering(service, params.name));
-		await team.install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined });
+		await team.install(params.name, { acceptCommands: isPlainObject(body) ? body.acceptCommands : undefined, expectedTree: isPlainObject(body) ? body.expectedTree : undefined });
 		return service.teamStatus();
 	}],
 

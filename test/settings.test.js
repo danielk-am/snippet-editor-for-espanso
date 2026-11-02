@@ -26,11 +26,14 @@ test('saving one setting keeps the others', async () => {
 	assert.deepEqual(await loadSettings(path), { ...DEFAULTS, matchDirOverride: '/tmp/m', maxBackups: 5 });
 });
 
-test('a damaged settings file falls back to defaults instead of failing', async () => {
+test('a damaged settings file recovers the last good settings and reports recovery', async () => {
 	const path = file();
 	await saveSettings(path, { maxBackups: 5 });
+	await saveSettings(path, { apiEnabled: true, aiWrite: true });
 	writeFileSync(path, '{ not json');
-	assert.deepEqual(await loadSettings(path), DEFAULTS);
+	const notices = [];
+	assert.deepEqual(await loadSettings(path, { onRecovery: (notice) => notices.push(notice) }), { ...DEFAULTS, maxBackups: 5 });
+	assert.equal(notices.length, 1);
 });
 
 test('values of the wrong shape are ignored', async () => {
@@ -152,4 +155,11 @@ test('ten repositories are kept and an eleventh is dropped', async () => {
 	assert.deepEqual((await saveSettings(path, { teamRepositories: eleven })).teamRepositories, eleven.slice(0, 10));
 	// Entries that are left out do not use up a place.
 	assert.deepEqual((await saveSettings(path, { teamRepositories: [7, 'acme/team-1', ...eleven] })).teamRepositories, eleven.slice(0, 10));
+});
+
+// protects=independent settings updates; fails_when=concurrent saves lose a patch; why_new=existing saves are sequential.
+test('concurrent settings saves preserve every independent patch', async () => {
+	const path = file();
+	await Promise.all([saveSettings(path, { maxBackups: 7 }), saveSettings(path, { apiPort: 30001 }), saveSettings(path, { teamRepositories: ['acme/team'] })]);
+	assert.deepEqual(await loadSettings(path), { ...DEFAULTS, maxBackups: 7, apiPort: 30001, teamRepositories: ['acme/team'] });
 });

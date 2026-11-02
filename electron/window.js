@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, shell } from 'electron';
+import { BrowserWindow, dialog, shell } from 'electron';
 import { isSameFile } from '../core/appPage.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +14,11 @@ const isAppPage = (url) => isSameFile(url, INDEX_FILE);
 // Only the app's own page may call the main process.
 export const isTrustedSender = (event) => isAppPage(event.senderFrame?.url ?? '');
 
-export function createMainWindow({ webPreferences, ...options } = {}) {
+export function createMainWindow({ webPreferences, confirmClose = (window) => dialog.showMessageBox(window, {
+	type: 'warning', message: 'Save your changes before closing?',
+	detail: 'Your snippet or YAML file has unsaved edits.',
+	buttons: ['Save', 'Discard', 'Cancel'], defaultId: 0, cancelId: 2, noLink: true,
+}).then(({ response }) => response), onCloseAccepted = () => {}, onCloseCancelled = () => {}, ...options } = {}) {
 	const win = new BrowserWindow({
 		width: 1280,
 		height: 820,
@@ -43,6 +47,29 @@ export function createMainWindow({ webPreferences, ...options } = {}) {
 	});
 	win.webContents.on('will-navigate', (event, url) => {
 		if (!isAppPage(url)) event.preventDefault();
+	});
+
+	// Check the live editor before Electron reaches will-quit, where backend
+	// disposal begins. Repeated close requests share one decision.
+	let accepted = false;
+	let checking = false;
+	win.on('close', (event) => {
+		if (accepted) return;
+		event.preventDefault();
+		if (checking) return;
+		checking = true;
+		(async () => {
+			const dirty = await win.webContents.executeJavaScript('Boolean(window.snippetEditorHasUnsavedChanges?.())');
+			if (dirty) {
+				const choice = await confirmClose(win);
+				if (choice !== 0 && choice !== 1) { onCloseCancelled(); return; }
+				const done = await win.webContents.executeJavaScript(`window.snippetEditorCloseAction?.('${choice === 0 ? 'save' : 'discard'}') ?? false`);
+				if (!done) { onCloseCancelled(); return; }
+			}
+			accepted = true;
+			win.once('closed', onCloseAccepted);
+			win.close();
+		})().catch(() => onCloseCancelled()).finally(() => { checking = false; });
 	});
 
 	win.loadFile(INDEX_FILE);

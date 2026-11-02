@@ -294,7 +294,7 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 						lines: [`Repository: ${repositoryLabel(source.repository)}`, pkg.title, pkg.description, count(pkg.matchCount, 'snippet')].filter(Boolean),
 						warnings: pkg.runsCommands ? ['This package runs commands on your computer when its snippets are used.'] : [],
 					},
-					made: { repository: source.repository, runsCommands: pkg.runsCommands === true },
+					made: { repository: source.repository, tree: pkg.tree, runsCommands: pkg.runsCommands === true },
 				};
 			},
 			async apply({ args, made }) {
@@ -302,10 +302,10 @@ export function createProposals({ router, aiWrite, onCard = () => {}, log = cons
 				// this package, from this repository, running commands or not.
 				const source = await stillConnected(made.repository);
 				const pkg = source?.packages.find((item) => item.name === args.name);
-				if (!pkg || (pkg.runsCommands === true) !== made.runsCommands) throw stale();
+				if (!pkg || pkg.tree !== made.tree || (pkg.runsCommands === true) !== made.runsCommands) throw stale();
 				// If the name was installed from another repository meanwhile, the
 				// app refuses, and its own words go on the card.
-				await route('PUT', `/team/packages/${encodeURIComponent(args.name)}/installed`, { body: { repository: source.id, acceptCommands: made.runsCommands } });
+				await route('PUT', `/team/packages/${encodeURIComponent(args.name)}/installed`, { body: { repository: source.id, expectedTree: made.tree, acceptCommands: made.runsCommands } });
 			},
 		},
 

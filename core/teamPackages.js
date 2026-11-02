@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicFile } from './atomicFile.js';
 import { isSafeFileName } from './store.js';
 import { parseRepositoryAddress, repositoryKey } from './teamAddress.js';
 import { MANIFEST, PACKAGE_NAME } from './teamRepo.js';
@@ -9,9 +10,10 @@ import { isPlainObject, toText } from '../shared/text.js';
 // Team packages as Espanso sees them: one folder each under match/team/.
 // Espanso loads every .yml in there, so what the folder holds is what runs.
 //
-// A folder is the app's only if it carries the marker file. The marker is
-// written before anything else, so a folder is the app's to repair from the
-// first moment, and a folder someone else made is never touched.
+// Packages are prepared in full outside match/ and activated with directory
+// renames. The recovery layout records whether activation reached either
+// rename; on restart it restores the old package or retains its predecessor.
+// A folder is the app's only if it carries the marker file.
 //
 // The marker also names the repository the package came from, and the package
 // belongs to that one. With several repositories connected, two can offer a
@@ -19,12 +21,6 @@ import { isPlainObject, toText } from '../shared/text.js';
 // that holds it may replace it, until it is removed.
 
 export const MARKER = '.snippet-editor.json';
-
-// Espanso skips files whose names start with an underscore. A file is
-// written under such a name first, then renamed, so Espanso never reads one
-// that is half written. One short name serves every file: installs run one
-// at a time, and a name built from the file's own could be too long.
-const INCOMING = '_incoming.tmp';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const isPackageFile = (name) => name === MANIFEST || isSafeFileName(name);
@@ -42,6 +38,63 @@ export const heldBy = (name, repository, { connected = true } = {}) =>
 export function createTeamPackages({ matchDir, now = () => new Date(), allowLocal = false }) {
 	const root = path.join(matchDir, 'team');
 	const folder = (name) => path.join(root, name);
+	// Outside match/: neither staged files nor rollback copies can expand.
+	const recoveryBase = path.join(path.dirname(matchDir), '.snippet-editor-package-recovery');
+	const recoveryDir = path.join(recoveryBase, path.basename(matchDir));
+	const transactions = path.join(recoveryDir, 'transactions');
+	const previousRoot = path.join(recoveryDir, 'previous');
+	const exists = async (file) => fs.lstat(file).then(() => true, (error) => { if (error.code === 'ENOENT') return false; throw error; });
+	const directory = async (dir) => {
+		await fs.mkdir(dir, { recursive: true });
+		if (!(await fs.lstat(dir)).isDirectory()) throw fail('READ_ONLY', 'The package recovery folder is not a directory.');
+	};
+
+	const checkDirectory = async (dir) => {
+		if (await exists(dir) && !(await fs.lstat(dir)).isDirectory()) throw fail('READ_ONLY', 'A package or recovery folder is not a directory.');
+	};
+	async function checkParents() {
+		// Check each ancestor before looking beneath it: lstat on the final
+		// component alone still follows symlinks in its parent path.
+		for (const dir of [root, recoveryBase, recoveryDir, transactions, previousRoot]) await checkDirectory(dir);
+	}
+
+	async function finish(name, transaction) {
+		const previous = path.join(transaction, 'previous');
+		if (await exists(previous)) {
+			await directory(previousRoot);
+			await fs.rm(path.join(previousRoot, name), { recursive: true, force: true });
+			await fs.rename(previous, path.join(previousRoot, name));
+		}
+		await fs.rm(transaction, { recursive: true, force: true });
+	}
+
+	async function recover() {
+		await checkParents();
+		if (!(await exists(transactions))) return;
+		if (!(await fs.lstat(transactions)).isDirectory()) throw fail('READ_ONLY', 'The package recovery folder is not a directory.');
+		for (const entry of await fs.readdir(transactions, { withFileTypes: true })) {
+			if (!PACKAGE_NAME.test(entry.name) || !entry.isDirectory()) throw fail('READ_ONLY', 'An unexpected entry is in the package recovery folder.');
+			const transaction = path.join(transactions, entry.name);
+			const previous = path.join(transaction, 'previous');
+			const next = path.join(transaction, 'next');
+			const target = folder(entry.name);
+			await checkDirectory(target);
+			await checkDirectory(next);
+			if (await exists(previous)) {
+				if (!(await fs.lstat(previous)).isDirectory()) throw fail('READ_ONLY', 'The package recovery copy is not a directory.');
+				if (!(await exists(target))) {
+					// Interrupted between the two renames: put back the complete old copy.
+					await fs.rename(previous, target);
+				} else if (!(await exists(next))) {
+					// The complete new package is active. Retain its predecessor.
+					await finish(entry.name, transaction);
+					continue;
+				} else throw fail('CONFLICT', 'A package changed during recovery. Its recovery copies were kept.');
+			}
+			// A preparation that never reached activation has no live effects.
+			await fs.rm(transaction, { recursive: true, force: true });
+		}
+	}
 
 	// Which repository an address means, whatever form it was written in. A
 	// marker that cannot be read, or whose address the app would refuse, names
@@ -115,44 +168,44 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 		};
 	}
 
-	async function writeMarker(name, marker) {
-		const file = path.join(folder(name), MARKER);
-		await fs.writeFile(`${file}.tmp`, JSON.stringify(marker, null, '\t') + '\n');
-		await fs.rename(`${file}.tmp`, file);
-	}
 
 	async function install({ name, files, repository, commit, tree }) {
 		checkName(name);
 		if (!Array.isArray(files) || !files.length) throw fail('INVALID', 'That package has no files to install.');
+		const names = new Set();
 		for (const file of files) {
-			if (!isPackageFile(file?.name) || !Buffer.isBuffer(file.bytes)) throw fail('INVALID', 'That package holds a file that cannot be installed.');
+			if (!isPackageFile(file?.name) || !Buffer.isBuffer(file.bytes) || names.has(file.name.toLowerCase())) throw fail('INVALID', 'That package holds a file that cannot be installed.');
+			names.add(file.name.toLowerCase());
 		}
-
+		await recover();
 		const existing = await markerOf(name);
 		if (existing === false) throw fail('EXISTS', `A folder named ${name} is already in match/team and was not put there by this app.`);
-		// Checked here, in turn, so that of two repositories installing one name
-		// at the same moment the second meets the first's marker.
 		refuseIfHeld(name, existing, repository);
-		await fs.mkdir(folder(name), { recursive: true });
-
-		const marker = { repository: toText(repository), package: name, commit: toText(commit), tree: toText(tree), state: 'installing', installedAt: now().toISOString() };
-		await writeMarker(name, marker);
-
-		const staged = path.join(folder(name), INCOMING);
-		for (const file of files) {
-			await fs.rm(staged, { recursive: true, force: true });
-			await fs.writeFile(staged, file.bytes, { flag: 'wx' });
-			await fs.rename(staged, path.join(folder(name), file.name));
+		await directory(root);
+		await directory(recoveryBase);
+		await directory(recoveryDir);
+		await directory(transactions);
+		const transaction = path.join(transactions, name);
+		const next = path.join(transaction, 'next');
+		const previous = path.join(transaction, 'previous');
+		const marker = { repository: toText(repository), package: name, commit: toText(commit), tree: toText(tree), state: 'installed', installedAt: now().toISOString() };
+		try {
+			await fs.mkdir(next, { recursive: true });
+			for (const file of files) await atomicFile(path.join(next, file.name), file.bytes);
+			await atomicFile(path.join(next, MARKER), JSON.stringify(marker, null, '\t') + '\n');
+			// Recheck ownership after staging, before changing the active folder.
+			const current = await markerOf(name);
+			if (current === false) throw fail('EXISTS', 'The package folder changed while preparing the update.');
+			refuseIfHeld(name, current, repository);
+			if (await exists(folder(name))) await fs.rename(folder(name), previous);
+			await fs.rename(next, folder(name));
+			await finish(name, transaction);
+			return marker;
+		} catch (error) {
+			// Recovery also works on the next launch if this process is killed.
+			await recover().catch(() => {});
+			throw error;
 		}
-		// The folder mirrors the package: what the package dropped goes too.
-		const keep = new Set([MARKER, ...files.map((file) => file.name)]);
-		for (const entry of await fs.readdir(folder(name))) {
-			if (!keep.has(entry)) await fs.rm(path.join(folder(name), entry), { recursive: true, force: true });
-		}
-
-		marker.state = 'installed';
-		await writeMarker(name, marker);
-		return marker;
 	}
 
 	async function remove(name) {
@@ -183,9 +236,10 @@ export function createTeamPackages({ matchDir, now = () => new Date(), allowLoca
 	return {
 		root,
 		keyOf,
-		installed: () => inTurn(installed),
+		recover: () => inTurn(recover),
+		installed: () => inTurn(async () => { await recover(); return installed(); }),
 		install: (input = {}) => inTurn(() => install(input)),
 		checkFree: (name, repository) => inTurn(() => checkFree(name, repository)),
-		remove: (name) => inTurn(() => remove(name)),
+		remove: (name) => inTurn(async () => { await recover(); return remove(name); }),
 	};
 }

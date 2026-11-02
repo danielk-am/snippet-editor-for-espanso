@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, renameSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MARKER, createTeamPackages } from '../core/teamPackages.js';
@@ -144,8 +144,10 @@ test('a match folder that cannot be written fails cleanly', { skip: process.plat
 	}
 });
 
-test('if writing fails partway, the folder is still the app\'s and shows as unfinished', async () => {
-	const { packages, dir } = setup();
+test('if staging an update fails, the installed package stays unchanged', async () => {
+	const { packages, dir, read } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const before = read('goodbyes', 'extra.yml');
 	// The second file's bytes can be checked once, then fail when written.
 	let reads = 0;
 	const failing = {
@@ -157,9 +159,9 @@ test('if writing fails partway, the folder is still the app\'s and shows as unfi
 		},
 	};
 	await rejectsWith(packages.install({ name: 'goodbyes', files: [GOODBYES[1], failing], ...SOURCE }), 'EIO');
-	assert.equal(existsSync(join(dir('goodbyes'), 'package.yml')), true);
+	assert.equal(read('goodbyes', 'extra.yml'), before);
 	const marker = (await packages.installed()).get('goodbyes');
-	assert.deepEqual([marker?.state, marker?.tree], ['installing', SOURCE.tree]);
+	assert.deepEqual([marker?.state, marker?.tree], ['installed', SOURCE.tree]);
 	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
 	assert.equal((await packages.installed()).get('goodbyes').state, 'installed');
 });
@@ -364,4 +366,52 @@ test('in tests, two folders on this computer are two repositories', async () => 
 	// A folder has no owner, so it is named by its address.
 	assert.equal(error.message, 'A package named goodbyes is already installed from /tmp/remotes/one/remote.git. Remove it first, then install this one.');
 	assert.equal((await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE, repository: '/tmp/remotes/one/remote.git/' })).state, 'installed');
+});
+
+test('recovery refuses symlinked ancestors before deleting any transaction', async () => {
+	const { matchDir, packages } = setup();
+	const outside = join(matchDir, '..', 'outside');
+	mkdirSync(join(outside, 'transactions', 'notes'), { recursive: true });
+	writeFileSync(join(outside, 'transactions', 'notes', 'important.txt'), 'keep');
+	const recovery = join(matchDir, '..', '.snippet-editor-package-recovery');
+	mkdirSync(recovery);
+	symlinkSync(outside, join(recovery, 'match'));
+	await rejectsWith(packages.installed(), 'READ_ONLY');
+	assert.equal(readFileSync(join(outside, 'transactions', 'notes', 'important.txt'), 'utf8'), 'keep');
+});
+
+for (const phase of ['prepared', 'old-moved', 'activated']) {
+	test(`a fresh instance recovers a package interrupted at ${phase}`, async () => {
+		const { matchDir, packages, dir, read } = setup();
+		await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+		const recovery = join(matchDir, '..', '.snippet-editor-package-recovery', 'match');
+		const transaction = join(recovery, 'transactions', 'goodbyes');
+		mkdirSync(transaction, { recursive: true });
+		cpSync(dir('goodbyes'), join(transaction, 'next'), { recursive: true });
+		writeFileSync(join(transaction, 'next', 'package.yml'), 'matches: [] # new\n');
+		if (phase !== 'prepared') renameSync(dir('goodbyes'), join(transaction, 'previous'));
+		if (phase === 'activated') renameSync(join(transaction, 'next'), dir('goodbyes'));
+		const fresh = createTeamPackages({ matchDir });
+		await fresh.recover();
+		assert.equal(read('goodbyes', 'package.yml'), phase === 'activated' ? 'matches: [] # new\n' : 'matches: []\n');
+		assert.deepEqual(readdirSync(join(matchDir, 'team')), ['goodbyes']);
+		assert.equal(existsSync(transaction), false);
+		if (phase === 'activated') assert.equal(readFileSync(join(recovery, 'previous', 'goodbyes', 'package.yml'), 'utf8'), 'matches: []\n');
+	});
+}
+
+test('a failed activation rename restores the complete previous package', async (t) => {
+	const fs = (await import('node:fs/promises')).default;
+	const { packages, dir, read } = setup();
+	await packages.install({ name: 'goodbyes', files: GOODBYES, ...SOURCE });
+	const rename = fs.rename;
+	const mock = t.mock.method(fs, 'rename', async (from, to) => {
+		if (from.endsWith('/next') && to === dir('goodbyes')) throw Object.assign(new Error('Activation refused'), { code: 'EACCES' });
+		return rename(from, to);
+	});
+	await assert.rejects(packages.install({ name: 'goodbyes', files: [file('package.yml', 'matches: [] # next\n')], ...SOURCE }), { code: 'EACCES' });
+	mock.mock.restore();
+	assert.equal(read('goodbyes', 'package.yml'), 'matches: []\n');
+	assert.equal(read('goodbyes', 'extra.yml'), GOODBYES[2].bytes.toString());
+	assert.equal(JSON.parse(read('goodbyes', MARKER)).state, 'installed');
 });

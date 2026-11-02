@@ -30,6 +30,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 	let teamPackages;
 	// What was wrong with the saved list at start, if anything.
 	let teamProblem = '';
+	let settingsProblem = '';
 	let watcher = null;
 	let timer;
 
@@ -51,7 +52,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 	}
 
 	async function configure() {
-		settings = await loadSettings(settingsFile);
+		settings = await loadSettings(settingsFile, { onRecovery: (notice) => { settingsProblem = notice; } });
 		location = resolveMatchDir({
 			override: settings.matchDirOverride,
 			env,
@@ -67,6 +68,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		// Told what counts as an address, as the repositories are: a package
 		// belongs to the repository its marker names.
 		teamPackages = createTeamPackages({ matchDir: location.matchDir, allowLocal: allowLocalRepositories });
+		await teamPackages.recover();
 		teams = new Map();
 		// The settings file can be edited by hand. An address the app would
 		// refuse in its own field is refused here too, and so is a repository
@@ -157,7 +159,7 @@ export async function createService({ userDataDir, env = process.env, onChange =
 		},
 		async state() {
 			if (!watcher) watch();
-			return { ...(await store.inventory()), matchDirSource: location.source, backupDir, maxBackups: settings.maxBackups, teamConnected: teams.size > 0 };
+			return { ...(await store.inventory()), matchDirSource: location.source, backupDir, maxBackups: settings.maxBackups, settingsProblem, teamConnected: teams.size > 0 };
 		},
 		// The connected team repositories, in the order they were connected.
 		teams: () => [...teams.values()],

@@ -48,7 +48,7 @@ export const api = {
 	team: () => request('GET', '/team'),
 	// One repository, or all of them when no id is given.
 	refreshTeam: (id) => request('POST', noId(id) ? '/team/refresh' : `/team/repositories/${encodeURIComponent(id)}/refresh`),
-	installTeamPackage: (name, { repository, acceptCommands } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { repository: idOrNone(repository), acceptCommands } }),
+	installTeamPackage: (name, { repository, acceptCommands, expectedTree } = {}) => request('PUT', `/team/packages/${encodeURIComponent(name)}/installed`, { body: { repository: idOrNone(repository), acceptCommands, expectedTree } }),
 	removeTeamPackage: (name) => request('DELETE', `/team/packages/${encodeURIComponent(name)}/installed`),
 	// `repository` says which one the proposal is for.
 	propose: ({ repository, ...input }) => request('POST', '/team/proposals', { body: { ...input, repository: idOrNone(repository) } }),

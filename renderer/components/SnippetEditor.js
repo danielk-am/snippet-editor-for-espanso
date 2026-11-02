@@ -13,6 +13,7 @@ import {
 	matchTriggers,
 	validateDraft,
 } from '../../shared/snippetModel.js';
+import { RawDraftContext, useDraft, useKeepDraft } from '../lib/drafts.js';
 import { api, refOf } from '../lib/api.js';
 import { Alert, Badge, Button, Card, ConfirmDialog, Empty, Field, Repeater, Segmented, Select, Switch, cx, useToast } from '../lib/ui.js';
 import { FormFieldsEditor, RawYamlField, VarsEditor } from './VarsEditor.js';
@@ -32,7 +33,7 @@ function checkExtras(value) {
 	return clash ? `Set "${clash}" in the form instead.` : '';
 }
 
-export function SnippetEditor({ state, file, index, seed, insertAt, navigate, refresh, setDirty }) {
+export function SnippetEditor({ state, file, index, seed, insertAt, navigate, refresh, setDirty, saveEditor }) {
 	const toast = useToast();
 	const isNew = index === 'new';
 	const readOnly = file.readOnly;
@@ -41,8 +42,12 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 
 	// The match this draft started from. It moves forward on save and when the
 	// file changes on disk under a draft that has no edits to lose.
-	const [base, setBase] = useState(original);
-	const [draft, setDraft] = useState(() => (isNew ? (seed ? matchToDraft(seed) : emptyDraft({ prefix: file.prefix })) : original ? matchToDraft(original) : emptyDraft()));
+	const recovery = useDraft('snippet');
+	const [base, setBase] = useState(recovery.initial?.base ?? original);
+	const [draftVersion, setDraftVersion] = useState(recovery.initial?.version ?? file.version);
+	const [raw, setRaw] = useState(recovery.initial?.raw ?? {});
+	const [rawEpoch, setRawEpoch] = useState(0);
+	const [draft, setDraft] = useState(() => recovery.initial?.draft ?? (isNew ? (seed ? matchToDraft(seed) : emptyDraft({ prefix: file.prefix })) : original ? matchToDraft(original) : emptyDraft()));
 	const [attempted, setAttempted] = useState(false);
 	const [rawInvalid, setRawInvalidState] = useState({});
 	const [preview, setPreview] = useState('');
@@ -54,21 +59,37 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 	const [copyTarget, setCopyTarget] = useState(localFiles.find((candidate) => !candidate.importOnly)?.id ?? localFiles[0]?.id ?? '');
 
 	const set = (patch) => setDraft((current) => ({ ...current, ...patch }));
+	const changeVariables = (kind, index) => {
+		const remap = (values) => Object.fromEntries(Object.entries(values).flatMap(([key, value]) => {
+			const match = /^vars\.(\d+)(.*)$/.exec(key);
+			if (!match) return [[key, value]];
+			const at = Number(match[1]);
+			if (at === index) return [];
+			return [[`vars.${kind === 'remove' && at > index ? at - 1 : at}${match[2]}`, value]];
+		}));
+		setRaw(remap);
+		setRawInvalidState(remap);
+		setRawEpoch((value) => value + 1);
+	};
 	const setRawInvalid = (key, invalid) =>
 		setRawInvalidState((current) => (Boolean(current[key]) === invalid ? current : { ...current, [key]: invalid }));
 	const hasRawErrors = Object.values(rawInvalid).some(Boolean);
 
 	const baseline = useMemo(() => (isNew ? draftToMatch(seed ? matchToDraft(seed) : emptyDraft({ prefix: file.prefix })) : base ? draftToMatch(matchToDraft(base)) : {}), [base]);
 	const edited = draftToMatch(draft);
-	const dirty = isNew ? Boolean(seed) || !deepEqual(edited, baseline) : !deepEqual(edited, baseline);
+	const modelDirty = isNew ? Boolean(seed) || !deepEqual(edited, baseline) : !deepEqual(edited, baseline);
+	const dirty = modelDirty || hasRawErrors || Object.keys(raw).length > 0;
+	useKeepDraft(recovery, { base, draft, raw, version: draftVersion }, dirty && !readOnly);
 	const toSave = isNew ? edited : base ? applyDraft(base, draft) : edited;
-	const stale = !isNew && original !== undefined && !deepEqual(original, base);
+	const stale = draftVersion !== file.version || (!isNew && original !== undefined && !deepEqual(original, base));
 	// List positions shift when another program adds or removes a snippet, so
 	// a changed trigger means this position now holds something else.
-	const moved = stale && !deepEqual(matchTriggers(original), matchTriggers(base ?? {}));
+	const moved = !isNew && original !== undefined && stale && !deepEqual(matchTriggers(original), matchTriggers(base ?? {}));
 	const adopt = (match, discardEdits) => {
 		setBase(match);
-		if (discardEdits) setDraft(matchToDraft(match));
+		setDraftVersion(file.version);
+		if (discardEdits) setRaw({});
+		if (discardEdits) setDraft(match ? matchToDraft(match) : seed ? matchToDraft(seed) : emptyDraft({ prefix: file.prefix }));
 	};
 
 	// Set while rendering, not in an effect: navigation reads this flag, and an
@@ -84,10 +105,12 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 	// Follow the file when it changes on disk and there is nothing to lose.
 	const originalKey = JSON.stringify(original);
 	useEffect(() => {
-		if (isNew || original === undefined || deepEqual(original, base) || dirty) return;
+		if (dirty) return;
+		setDraftVersion(file.version);
+		if (isNew || original === undefined || deepEqual(original, base)) return;
 		setBase(original);
 		setDraft(matchToDraft(original));
-	}, [originalKey]);
+	}, [originalKey, file.version]);
 
 	const toSaveKey = JSON.stringify(toSave);
 	useEffect(() => {
@@ -103,11 +126,11 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 	};
 
 	const save = async () => {
-		if (busy.current || saving || readOnly || stale) return;
+		if (busy.current || saving || readOnly || stale) return false;
 		setAttempted(true);
 		if (problems.length || hasRawErrors) {
 			toast({ tone: 'error', title: 'Not saved yet', description: problems[0]?.message ?? 'Fix the YAML errors first.' });
-			return;
+			return false;
 		}
 		busy.current = true;
 		setSaving(true);
@@ -126,12 +149,16 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 				// another snippet to this file, then starts from the new version.
 				await refresh();
 				setBase(saved.matches[index]);
+				setDraftVersion(saved.version);
+				setRaw({});
 				setDraft(matchToDraft(saved.matches[index]));
 				setAttempted(false);
 				toast({ title: 'Saved', description: `${file.name} is updated.` });
 			}
+			return true;
 		} catch (failure) {
 			fail(failure);
+			return false;
 		} finally {
 			busy.current = false;
 			setSaving(false);
@@ -145,6 +172,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 		first?.setSelectionRange?.(first.value.length, first.value.length);
 	}, []);
 
+	if (saveEditor) saveEditor.current = save;
 	const saveRef = useRef(save);
 	saveRef.current = save;
 	useEffect(() => {
@@ -201,7 +229,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 
 	const title = isNew ? 'New snippet' : draft.label || edited.trigger || edited.triggers?.[0] || edited.regex || 'Snippet';
 
-	return html`<div class="page page--wide page--editor">
+	return html`<${RawDraftContext.Provider} value=${{ raw, changeVariables, set: (key, text) => setRaw((current) => ({ ...current, [key]: text })) }}><div class="page page--wide page--editor">
 		<div class="page-head">
 			<div class="page-head__text">
 				<h1 class="truncate">${title}</h1>
@@ -294,6 +322,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 						<//>
 						${draft.contentType === 'form' &&
 						html`<${FormFieldsEditor}
+							rawKey="form_fields"
 							fields=${draft.formFields}
 							layout=${draft.content}
 							disabled=${readOnly}
@@ -304,9 +333,10 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 
 					<${Card} title="Variables">
 						${draft.varsRaw === undefined
-							? html`<${VarsEditor} vars=${draft.vars} errors=${errors} disabled=${readOnly} setRawInvalid=${setRawInvalid} onChange=${(vars) => set({ vars })} />`
+							? html`<${VarsEditor} key=${rawEpoch} vars=${draft.vars} errors=${errors} disabled=${readOnly} setRawInvalid=${setRawInvalid} onChange=${(vars) => set({ vars })} />`
 							: html`<${RawYamlField}
 									key=${`vars-${JSON.stringify(base ?? null)}`}
+									rawKey="vars"
 									label="Variables (YAML)"
 									help="These variables are written in a shape the form cannot show, so they are edited as YAML."
 									value=${draft.varsRaw}
@@ -351,6 +381,7 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 					<${Card} title="Other keys" description="Advanced compatibility options preserved in the file. Built-in expansion does not support all options.">
 						<${RawYamlField}
 							key=${JSON.stringify(base ?? null)}
+							rawKey="extras"
 							label="Other keys (YAML)"
 							value=${draft.extras}
 							disabled=${readOnly}
@@ -382,5 +413,5 @@ export function SnippetEditor({ state, file, index, seed, insertAt, navigate, re
 			onConfirm=${remove}
 			onClose=${() => setConfirmDelete(false)}
 		/>`}
-	</div>`;
+	</div><//>`;
 }

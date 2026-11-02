@@ -1,10 +1,11 @@
 import { html, render, useCallback, useEffect, useRef, useState } from './vendor/preact-htm.js';
 import { matchTriggers } from '../shared/snippetModel.js';
 import { api, allFiles, findFile, platform, sourceLabel } from './lib/api.js';
+import { DraftContext, draftStorage } from './lib/drafts.js';
 import { chatInitial } from './lib/chatSession.js';
 import { Icon } from './lib/icons.js';
 import { toText } from '../shared/text.js';
-import { Button, ConfirmDialog, Empty, ErrorBoundary, IconButton, ToastProvider } from './lib/ui.js';
+import { Alert, Button, ConfirmDialog, Empty, ErrorBoundary, IconButton, ToastProvider } from './lib/ui.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { FileDetailsDialog, NewFileDialog } from './components/dialogs.js';
@@ -74,6 +75,10 @@ const clampWidth = (width) => Math.max(220, Math.min(420, Math.round(width)));
 function App() {
 	const [state, setState] = useState(null);
 	const [loadError, setLoadError] = useState('');
+	const [draftNotice, setDraftNotice] = useState('');
+	const [recovered, setRecovered] = useState(null);
+	const scope = useRef(null);
+	const saveEditor = useRef(null);
 	const [route, setRoute] = useState({ view: 'overview' });
 	const [pendingRoute, setPendingRoute] = useState(null);
 	const [palette, setPalette] = useState(false);
@@ -93,7 +98,16 @@ function App() {
 
 	const refresh = useCallback(async () => {
 		try {
-			setState(await api.load());
+			const next = await api.load();
+			if (scope.current !== next.matchDir) {
+				scope.current = next.matchDir;
+				try {
+					const saved = draftStorage().read(next.matchDir);
+					setRecovered(saved);
+					setRoute(saved?.route ?? { view: 'overview' });
+				} catch { setDraftNotice('The recovery draft could not be read.'); }
+			}
+			setState(next);
 			setLoadError('');
 		} catch (failure) {
 			setLoadError(failure.message);
@@ -109,9 +123,24 @@ function App() {
 		dirty.current = value;
 	}, []);
 
+	useEffect(() => {
+		window.snippetEditorHasUnsavedChanges = () => dirty.current;
+		window.snippetEditorCloseAction = async (action) => {
+			if (action === 'save' && !(await saveEditor.current?.())) return false;
+			try { draftStorage().clear(scope.current); }
+			catch { setDraftNotice('The recovery draft could not be cleared. Keep editing and try again.'); return false; }
+			dirty.current = false;
+			return true;
+		};
+		return () => { delete window.snippetEditorHasUnsavedChanges; delete window.snippetEditorCloseAction; };
+	}, []);
+
 	const navigate = useCallback((next, { force } = {}) => {
 		if (dirty.current && !force) return setPendingRoute(next);
 		dirty.current = false;
+		setRecovered(null);
+		try { if (scope.current) draftStorage().clear(scope.current); } catch { setDraftNotice('The previous recovery draft could not be cleared.'); }
+		saveEditor.current = null;
 		setDrawer(false);
 		setRoute(next);
 	}, []);
@@ -251,6 +280,7 @@ function App() {
 			navigate=${navigate}
 			refresh=${refresh}
 			setDirty=${setDirty}
+			saveEditor=${saveEditor}
 			onEditDetails=${setDetailsFor}
 			onNewSnippet=${newSnippet}
 		/>`;
@@ -265,6 +295,7 @@ function App() {
 			navigate=${navigate}
 			refresh=${refresh}
 			setDirty=${setDirty}
+			saveEditor=${saveEditor}
 		/>`;
 	}
 
@@ -308,7 +339,10 @@ function App() {
 							<//>
 						</div>`}
 				>
-					${page}
+					${state.settingsProblem && html`<${Alert} tone="warning" title="Settings recovered"><p>${state.settingsProblem}</p><//>`}
+					${draftNotice && html`<${Alert} tone="warning" title="Draft recovery"><p>${draftNotice}</p><//>`}
+					${recovered && html`<${Alert} tone="warning" title="Unsaved draft recovered"><p>Review your edits before saving. Files changed on disk still require conflict resolution.</p><//>`}
+					<${DraftContext.Provider} value=${{ scope: state.matchDir, route, recovered, notice: setDraftNotice }}>${page}<//>
 				<//>
 			</main>
 		</div>

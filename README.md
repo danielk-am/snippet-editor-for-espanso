@@ -152,7 +152,7 @@ Over the API, team snippets are under `/api/v1/team`. `{id}` is a repository's `
 | GET | `/team` | Says what is connected and what each repository offers | none | 200 with the team status |
 | POST | `/team/refresh` | Fetches every repository | none | 200 with the team status. A repository that could not be fetched says why in its own `problem`. 409 `NOT_CONNECTED` when none is connected. |
 | POST | `/team/repositories/{id}/refresh` | Fetches one repository | none | 200 with the team status. 404 `NOT_FOUND` when that id is not connected. 502 `GIT_FAILED` when it cannot be fetched. 409 `NOT_CONNECTED` while it is being disconnected. |
-| PUT | `/team/packages/{name}/installed` | Installs a package, or updates it | `repository`, an id, when more than one could be meant. `acceptCommands: true` for a package that runs commands. | 200 with the team status |
+| PUT | `/team/packages/{name}/installed` | Installs a package, or updates it | `repository`, an id, when more than one could be meant. `acceptCommands: true` for a package that runs commands. `expectedTree` binds installation to the reviewed tree. | 200 with the team status |
 | DELETE | `/team/packages/{name}/installed` | Removes the installed copy. A name is installed once, so no repository is named. | none | 200 with the team status. 404 `NOT_FOUND` when it is not installed. |
 | POST | `/team/proposals` | Pushes a proposal branch | `repository`, an id, when more than one is connected. `fileId`, `package`, `summary`, and `title` and `description` for a new package. | 201 with `{ branch, commit, created, compareUrl }`. `created` is true when the package is new. |
 
@@ -293,7 +293,7 @@ Known limits:
 - Files larger than 2 MB, files that are not UTF-8, and write-protected files are listed but cannot be edited here.
 - Replacing a file atomically gives it a new identity on disk, so a hard link to it or extended attributes on it are not carried over.
 - The raw editor saves a file that mixes LF and CRLF line endings with LF throughout.
-- Closing the window with unsaved changes in the editor discards them without a prompt.
+- Closing or quitting with unsaved snippet or raw YAML edits asks you to Save, Discard or Cancel. Save keeps the window open when validation or conflict checks fail.
 
 ## Where things live
 
@@ -306,6 +306,14 @@ The match folder is found in this order:
 5. The platform default: `~/Library/Application Support/espanso/match` on macOS, `%APPDATA%\espanso\match` on Windows, `$XDG_CONFIG_HOME/espanso/match` on Linux.
 
 The app works this out itself instead of running `espanso path`, because that command creates the config folder as a side effect.
+
+Unsaved snippet and raw YAML drafts are kept in this Electron profile's local storage, scoped to the match folder, and restored when the window reopens or reloads. Drafts include invalid YAML in advanced fields and the original file version; recovery does not bypass disk-conflict checks. Saving or explicitly discarding removes the draft. A warning appears if local storage is unavailable or full. Drafts can contain sensitive snippet text and are not encrypted by the app; they are recovery copies, not a substitute for backups.
+
+Settings writes run in order and use temporary files plus rename. If `settings.json` cannot be read, the app tries `settings.json.last-good` and shows a recovery notice. Recovered settings leave API access and AI writes off until you review them.
+
+Team package installs stage complete files outside Espanso's match folder. An update moves the active package aside, then activates the staged folder. Startup restores an interrupted update to a complete old or new package. There is a short interval between directory renames when the package is absent; this is not a single atomic directory swap. The preceding installed copy is retained under `<parent of match>/.snippet-editor-package-recovery/<match folder name>/previous/<package>`, outside Espanso's active files. These checks cover process interruption, not guaranteed recovery from sudden power loss. Review a retained copy before restoring it manually while Espanso is stopped.
+
+Package approvals in the editor and assistant bind to the reviewed Git tree. If it changes, review the current content before approving again. API clients can send `expectedTree` from the package listing to get the same conflict protection; it remains optional for existing clients.
 
 Backups and `settings.json` live in the app's own data folder (`~/Library/Application Support/Snippet Editor` on macOS). Settings shows the match folder and its backups folder.
 
@@ -335,6 +343,8 @@ Runs the unit tests with Node's built-in runner. One of them generates 1,500 mat
 ```bash
 npm run test:espanso
 ```
+
+`npm run test:hardening` exercises draft recovery, invalid YAML, disk conflicts and Save/Discard/Cancel in a real Electron window with an isolated profile.
 
 Asks the real Espanso program to read files this app has written, in a temporary folder, and checks that it sees each snippet as written. It also installs a team package and checks that Espanso reads it and that Espanso's own package list still works. It needs Espanso installed and skips itself if it is not. It passes with Espanso 2.4.1.
 

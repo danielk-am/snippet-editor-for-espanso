@@ -11,6 +11,8 @@ import { ICON_FILE, createMainWindow, isTrustedSender } from './window.js';
 if (!app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', path.join(app.getPath('appData'), 'Snippet Editor'));
 
 let win = null;
+let quitRequested = false;
+app.on('before-quit', () => { quitRequested = true; });
 // Set once the app is ready. Says whether a window may open: not while the
 // app is closing, when asking for one brings the app back once it has gone.
 let leaving = null;
@@ -19,7 +21,10 @@ const send = (channel, ...args) => {
 };
 
 function open() {
-	win = createMainWindow();
+	win = createMainWindow({
+		onCloseCancelled: () => { quitRequested = false; },
+		onCloseAccepted: () => { if (quitRequested) app.quit(); },
+	});
 	win.once('ready-to-show', () => win.show());
 	win.on('closed', () => {
 		win = null;

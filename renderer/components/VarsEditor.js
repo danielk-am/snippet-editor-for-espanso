@@ -1,4 +1,4 @@
-import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
+import { html, useContext, useLayoutEffect, useRef, useState } from '../vendor/preact-htm.js';
 import {
 	FIELD_KINDS,
 	VAR_TYPES,
@@ -9,22 +9,27 @@ import {
 	rowsToFields,
 	varSpec,
 } from '../../shared/varsModel.js';
+import { RawDraftContext } from '../lib/drafts.js';
 import { api } from '../lib/api.js';
 import { Button, Field, IconButton, Repeater, Select, Switch, cx } from '../lib/ui.js';
 
 // YAML for the shapes the form cannot express. Parsed as you type; the parent
 // hears about each valid value and about whether the text currently parses.
-export function RawYamlField({ label, help, value, onChange, onValidity, disabled, rows = 5, check }) {
-	const [text, setText] = useState(null);
+export function RawYamlField({ label, help, value, onChange, onValidity, disabled, rows = 5, check, rawKey }) {
+	const recovery = useContext(RawDraftContext);
+	const restored = rawKey && Object.hasOwn(recovery?.raw ?? {}, rawKey) ? recovery.raw[rawKey] : null;
+	const [text, setText] = useState(restored);
 	const [error, setError] = useState('');
 	const sequence = useRef(0);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		let live = true;
 		const empty = value === undefined || value === null || (typeof value === 'object' && !Object.keys(value).length);
-		(empty ? Promise.resolve('') : api.stringifyYaml(value)).then((yaml) => live && setText(yaml));
+		if (restored !== null) onInput({ target: { value: restored } });
+		else (empty ? Promise.resolve('') : api.stringifyYaml(value)).then((yaml) => live && !sequence.current && setText(yaml));
 		return () => {
 			live = false;
+			sequence.current += 1;
 			onValidity?.(true);
 		};
 	}, []);
@@ -37,6 +42,8 @@ export function RawYamlField({ label, help, value, onChange, onValidity, disable
 	const onInput = async (event) => {
 		const next = event.target.value;
 		setText(next);
+		if (rawKey) recovery?.set(rawKey, next);
+		onValidity?.(false);
 		const turn = (sequence.current += 1);
 		try {
 			const parsed = next.trim() ? await api.parseYaml(next) : undefined;
@@ -67,9 +74,10 @@ export function RawYamlField({ label, help, value, onChange, onValidity, disable
 
 const isMapping = (value) => value === undefined || (value !== null && typeof value === 'object' && !Array.isArray(value));
 
-export function FormFieldsEditor({ fields, layout, onChange, onValidity, disabled }) {
+export function FormFieldsEditor({ fields, layout, onChange, onValidity, disabled, rawKey }) {
 	if (!isStructuredFields(fields)) {
 		return html`<${RawYamlField}
+			rawKey=${rawKey}
 			label="Field settings (YAML)"
 			help="These fields use options the form below cannot show, so they are edited as YAML."
 			value=${fields}
@@ -118,7 +126,7 @@ const SHELLS = ['', 'bash', 'sh', 'zsh', 'cmd', 'powershell', 'pwsh', 'wsl', 'nu
 	label: id || 'System default',
 }));
 
-function VarParams({ variable, setParams, onValidity, disabled }) {
+function VarParams({ variable, setParams, onValidity, disabled, rawKey }) {
 	const params = variable.params ?? {};
 	// Optional params are removed when emptied, so the YAML stays minimal.
 	const set = (key, value, optional) => {
@@ -202,6 +210,7 @@ function VarParams({ variable, setParams, onValidity, disabled }) {
 						></textarea>`}
 				<//>
 				<${FormFieldsEditor}
+					rawKey=${rawKey}
 					fields=${params.fields}
 					layout=${params.layout}
 					disabled=${disabled}
@@ -214,6 +223,7 @@ function VarParams({ variable, setParams, onValidity, disabled }) {
 }
 
 export function VarsEditor({ vars, onChange, errors, setRawInvalid, disabled }) {
+	const recovery = useContext(RawDraftContext);
 	const [newType, setNewType] = useState('date');
 	const typeOptions = Object.entries(VAR_TYPES).map(([id, spec]) => ({ id, label: spec.label }));
 	const update = (index, patch) => onChange(vars.map((variable, i) => (i === index ? { ...variable, ...patch } : variable)));
@@ -246,7 +256,7 @@ export function VarsEditor({ vars, onChange, errors, setRawInvalid, disabled }) 
 								options=${options}
 								value=${variable.type ?? ''}
 								disabled=${disabled}
-								onChange=${(type) => update(index, { type, params: structuredClone(varSpec(type)?.defaults ?? {}) })}
+								onChange=${(type) => { recovery?.changeVariables('type', index); update(index, { type, params: structuredClone(varSpec(type)?.defaults ?? {}) }); }}
 								...${control}
 							/>`}
 					<//>
@@ -254,13 +264,14 @@ export function VarsEditor({ vars, onChange, errors, setRawInvalid, disabled }) 
 						label=${`Remove variable ${variable.name || index + 1}`}
 						icon="trash"
 						disabled=${disabled}
-						onClick=${() => onChange(vars.filter((_, i) => i !== index))}
+						onClick=${() => { recovery?.changeVariables('remove', index); onChange(vars.filter((_, i) => i !== index)); }}
 					/>
 				</div>
 				${known?.help && html`<p class="field__help">${known.help}</p>`}
 				${structured
 					? html`<${VarParams}
 							key=${variable.type}
+							rawKey=${`vars.${index}.fields`}
 							variable=${variable}
 							disabled=${disabled}
 							onValidity=${(valid) => setRawInvalid(`vars.${index}.fields`, !valid)}
@@ -268,6 +279,7 @@ export function VarsEditor({ vars, onChange, errors, setRawInvalid, disabled }) 
 						/>`
 					: html`<${RawYamlField}
 							key=${`raw-${variable.type}`}
+							rawKey=${`vars.${index}`}
 							label="Settings (YAML)"
 							help="This variable uses options the form cannot show, so its settings are edited as YAML."
 							value=${variable.params}

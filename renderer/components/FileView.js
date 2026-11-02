@@ -1,14 +1,16 @@
 import { html, useEffect, useRef, useState } from '../vendor/preact-htm.js';
+import { useDraft, useKeepDraft } from '../lib/drafts.js';
 import { searchFiles } from '../../shared/search.js';
 import { api, groupOf, refOf } from '../lib/api.js';
 import { Alert, Badge, Button, ConfirmDialog, Empty, IconButton, useToast } from '../lib/ui.js';
 import { ProposeDialog } from './ProposeDialog.js';
 import { SnippetList, rowsOf } from './SnippetList.js';
 
-function RawEditor({ file, refresh, setDirty }) {
+function RawEditor({ file, refresh, setDirty, saveEditor }) {
 	const toast = useToast();
-	const [loaded, setLoaded] = useState(null);
-	const [text, setText] = useState('');
+	const recovery = useDraft('raw');
+	const [loaded, setLoaded] = useState(recovery.initial?.loaded ?? null);
+	const [text, setText] = useState(recovery.initial?.text ?? '');
 	const [errors, setErrors] = useState('');
 	// A textarea holds line breaks as LF. A file written with CRLF is shown
 	// that way and saved back with CRLF, so its other lines do not change.
@@ -34,10 +36,12 @@ function RawEditor({ file, refresh, setDirty }) {
 
 	// Set while rendering so navigation never reads a stale flag.
 	setDirty(dirty);
+	useKeepDraft(recovery, { loaded, text }, dirty);
 	useEffect(() => () => setDirty(false), []);
 
 	const save = async () => {
-		if (!dirty) return;
+		if (!dirty) return true;
+		if (file.readOnly) return false;
 		try {
 			const saved = await api.saveRaw(refOf(file), { text: usesCrlf ? text.replace(/\n/g, '\r\n') : text, version: loaded.version });
 			setLoaded(saved);
@@ -45,12 +49,15 @@ function RawEditor({ file, refresh, setDirty }) {
 			setErrors('');
 			toast({ title: 'Saved', description: `${file.name} is updated.` });
 			await refresh();
+			return true;
 		} catch (failure) {
 			setErrors(failure.message);
 			if (failure.code !== 'PARSE_ERROR') toast({ tone: 'error', title: 'Could not save', description: failure.message });
+			return false;
 		}
 	};
 
+	if (saveEditor) saveEditor.current = save;
 	const saveRef = useRef(save);
 	saveRef.current = save;
 	useEffect(() => {
@@ -91,7 +98,7 @@ function RawEditor({ file, refresh, setDirty }) {
 	</div>`;
 }
 
-export function FileView({ state, file, tab, navigate, refresh, setDirty, onEditDetails, onNewSnippet }) {
+export function FileView({ state, file, tab, navigate, refresh, setDirty, saveEditor, onEditDetails, onNewSnippet }) {
 	const toast = useToast();
 	const [filter, setFilter] = useState('');
 	const [confirmDelete, setConfirmDelete] = useState(false);
@@ -155,10 +162,10 @@ export function FileView({ state, file, tab, navigate, refresh, setDirty, onEdit
 					${file.parseErrors.map((message) => html`<li>${message}</li>`)}
 				</ul>
 			<//>
-			<${RawEditor} key=${file.id} file=${file} refresh=${refresh} setDirty=${setDirty} />
+			<${RawEditor} key=${file.id} file=${file} refresh=${refresh} setDirty=${setDirty} saveEditor=${saveEditor} />
 		</div>`}
 
-		${!broken && activeTab === 'raw' && html`<${RawEditor} key=${file.id} file=${file} refresh=${refresh} setDirty=${setDirty} />`}
+		${!broken && activeTab === 'raw' && html`<${RawEditor} key=${file.id} file=${file} refresh=${refresh} setDirty=${setDirty} saveEditor=${saveEditor} />`}
 
 		${!broken &&
 		activeTab === 'snippets' &&
