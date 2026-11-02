@@ -123,6 +123,7 @@ try {
 	const seen = await client.evaluate(`({
 		url: location.href,
 		platform: window.snippetEditor?.platform,
+		versionLabel: document.querySelector('.sidebar__version a')?.textContent,
 		stats: [...document.querySelectorAll('.stat__value')].map((el) => el.textContent),
 		files: [...document.querySelectorAll('.nav-item--file .nav-item__label')].map((el) => el.textContent),
 		folder: document.querySelector('.context-strip__path')?.textContent,
@@ -131,6 +132,8 @@ try {
 
 	check(seen.url.includes('app.asar'), `the window is not showing the packaged files: ${seen.url}`);
 	check(seen.platform === process.platform, `the bridge to the main process is missing (platform was ${seen.platform})`);
+	const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+	check(seen.versionLabel === `Version ${version}`, `the version label was ${seen.versionLabel}`);
 	check(JSON.stringify(seen.stats) === JSON.stringify(['10', '4', '1', '1']), `overview showed ${JSON.stringify(seen.stats)} ${seen.loadError}`);
 	check(JSON.stringify(seen.files) === JSON.stringify(['_shared.yml', 'base.yml', 'broken.yml', 'dates.yml', 'Goodbyes']), `sidebar listed ${JSON.stringify(seen.files)}`);
 	check(seen.folder === matchDir, `the app read ${seen.folder}, not the test folder`);

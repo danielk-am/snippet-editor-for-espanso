@@ -24,7 +24,7 @@ const sessionFile = process.env.SNIPPET_EDITOR_CHAT;
 const chat = sessionFile ? createChatClient({ sessionFile }) : null;
 
 const protocol = createProtocol({
-	serverInfo: { name: 'snippet-editor', title: 'Snippet Editor for Espanso', version: '0.2.3' },
+	serverInfo: { name: 'snippet-editor', title: 'Snippet Editor for Espanso', version: '0.2.4' },
 	instructions: chat
 		? `${START}${VERSION}You are in the app's own chat: a tool that changes something shows the person a card, and nothing is written until they press Apply.`
 		: `${START}${VERSION}` +

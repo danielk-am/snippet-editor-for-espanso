@@ -654,7 +654,10 @@ test('with several repositories, the list says which offers each package, and pa
 	assert.deepEqual(narrowed.repositories, listed.repositories);
 	const paged = await call('snippets_list_team_packages', { repository: two, limit: 1, offset: 1 });
 	assert.deepEqual([paged.packages.map((pkg) => pkg.name), paged.total_count, paged.has_more, paged.next_offset], [['shipping'], 2, false, null]);
-	for (const repository of ['nothing', one.toUpperCase(), second.url]) assert.deepEqual(await call('snippets_list_team_packages', { repository }), NOT_CONNECTED, repository);
+	// A randomly generated id can contain only digits, so uppercasing it may leave it unchanged.
+	const invalidRepositories = ['nothing', second.url];
+	if (one.toUpperCase() !== one) invalidRepositories.push(one.toUpperCase());
+	for (const repository of invalidRepositories) assert.deepEqual(await call('snippets_list_team_packages', { repository }), NOT_CONNECTED, repository);
 });
 
 test('with several repositories, installing says which when more than one offers the name', async (t) => {

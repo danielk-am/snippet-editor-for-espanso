@@ -85,6 +85,12 @@ try {
 	win = createMainWindow({ confirmClose: async () => choice });
 	await new Promise((resolve) => win.webContents.once('did-finish-load', resolve));
 	await wait(`document.querySelector('.app')`);
+	const version = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+	assert.equal(await js(`document.querySelector('.sidebar__version a')?.textContent`), `Version ${version}`);
+	assert.deepEqual(await js(`[...document.querySelectorAll('.sidebar__version a')].map(a => ({href: a.href, target: a.target, label: a.getAttribute('aria-label')}))`), [
+		{href: `https://github.com/danielk-am/snippet-editor-for-espanso/releases/tag/v${version}`, target: '_blank', label: `Release notes for version ${version}`},
+		{href: 'https://github.com/danielk-am/snippet-editor-for-espanso', target: '_blank', label: 'View source on GitHub'},
+	]);
 	assert.equal(await js(`localStorage.getItem('snippet-editor:draft:v1:' + ${JSON.stringify(matchDir)})`), null);
 	// Removing a variable must preserve the next variable's unparsed text,
 	// and must not leave an invisible validation error after the last removal.

@@ -199,11 +199,43 @@ pre,
 }
 
 .sidebar__footer {
+  padding: 8px;
+}
+
+.sidebar__version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--ui-muted-foreground);
+}
+
+.sidebar__version a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  min-width: 28px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--ui-radius-sm);
+}
+
+.sidebar__version a:hover {
+  color: var(--ui-foreground);
+  background: var(--ui-secondary);
+}
+
+.sidebar__github .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar__footer-controls {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px;
-
 }
 
 .nav-item {

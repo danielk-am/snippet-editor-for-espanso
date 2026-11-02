@@ -20,6 +20,8 @@ To try the editor on a throwaway copy of sample files, without touching your rea
 npm run demo
 ```
 
+The bottom-left sidebar shows the running app version. Select it for release notes, or use the adjacent GitHub icon to view the source repository in your default browser.
+
 ## Built-in expansion on macOS (experimental)
 
 Run `npm run build:expansion` before `npm start` to compile the helper. In Settings, quit Espanso and turn on **Expand text on this Mac**. Grant macOS Accessibility permission when prompted, then turn the switch on again. The switch is off at every app launch. Expansion continues while the app remains running, including with its window closed, and stops when the app quits.

@@ -1,9 +1,11 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BrowserWindow, dialog, shell } from 'electron';
 import { isSameFile } from '../core/appPage.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const INDEX_FILE = path.join(here, '..', 'renderer', 'index.html');
 // Shown in the window frame and taskbar on Windows and Linux. macOS takes
 // the icon from the packaged app instead.
@@ -35,6 +37,7 @@ export function createMainWindow({ webPreferences, confirmClose = (window) => di
 			contextIsolation: true,
 			sandbox: true,
 			nodeIntegration: false,
+			additionalArguments: [`--snippet-editor-version=${version}`],
 			...webPreferences,
 		},
 	});

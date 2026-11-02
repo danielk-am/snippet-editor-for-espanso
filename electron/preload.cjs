@@ -29,6 +29,7 @@ const EVENTS = new Set(['data:changed', 'menu:command', 'chat:event']);
 
 contextBridge.exposeInMainWorld('snippetEditor', {
 	platform: process.platform,
+	version: process.argv.find((arg) => arg.startsWith('--snippet-editor-version='))?.split('=')[1],
 	invoke(channel, ...args) {
 		if (!CHANNELS.has(channel)) return Promise.reject(new Error(`Unknown channel: ${channel}`));
 		return ipcRenderer.invoke(channel, ...args);

@@ -2,6 +2,8 @@ import { html, useRef, useState } from '../vendor/preact-htm.js';
 import { Icon } from '../lib/icons.js';
 import { IconButton, Segmented, cx } from '../lib/ui.js';
 
+const REPOSITORY = 'https://github.com/danielk-am/snippet-editor-for-espanso';
+
 const THEME_OPTIONS = [
 	{ id: 'system', label: 'Match system', icon: 'monitor' },
 	{ id: 'light', label: 'Light', icon: 'sun' },
@@ -107,11 +109,17 @@ export function Sidebar({ state, route, navigate, theme, setTheme, width, setWid
 			<//>`}
 		</nav>
 		<div class="sidebar__footer">
-			<button class="nav-item" aria-current=${route.view === 'settings' ? 'page' : undefined} onClick=${() => navigate({ view: 'settings' })}>
-				<${Icon} name="settings" />
-				<span class="nav-item__label">Settings</span>
-			</button>
-			<${Segmented} label="Theme" icons options=${THEME_OPTIONS} value=${theme} onChange=${setTheme} />
+			<div class="sidebar__footer-controls">
+				<button class="nav-item" aria-current=${route.view === 'settings' ? 'page' : undefined} onClick=${() => navigate({ view: 'settings' })}>
+					<${Icon} name="settings" />
+					<span class="nav-item__label">Settings</span>
+				</button>
+				<${Segmented} label="Theme" icons options=${THEME_OPTIONS} value=${theme} onChange=${setTheme} />
+			</div>
+			<div class="sidebar__version">
+				<a href=${`${REPOSITORY}/releases/tag/v${window.snippetEditor.version}`} target="_blank" rel="noopener noreferrer" aria-label=${`Release notes for version ${window.snippetEditor.version}`} title="View release notes">Version ${window.snippetEditor.version}</a>
+				<a class="sidebar__github" href=${REPOSITORY} target="_blank" rel="noopener noreferrer" aria-label="View source on GitHub" title="View source on GitHub"><${Icon} name="github" /></a>
+			</div>
 		</div>
 		<button
 			class="sidebar__resize"

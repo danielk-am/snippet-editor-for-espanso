@@ -2,6 +2,7 @@ import { html } from '../vendor/preact-htm.js';
 
 // A small set of line icons on a 24px grid, after Lucide.
 const PATHS = {
+	github: html`<path d="M9 19c-4.3 1.3-4.3-2.5-6-3m12 6v-3.9a3.4 3.4 0 0 0-.9-2.7c3-.3 6.2-1.5 6.2-6.9a5.4 5.4 0 0 0-1.5-3.7 5 5 0 0 0-.1-3.7s-1.2-.4-3.8 1.4a13 13 0 0 0-7 0C5.3.7 4.1 1.1 4.1 1.1A5 5 0 0 0 4 4.8a5.4 5.4 0 0 0-1.5 3.7c0 5.4 3.2 6.6 6.2 6.9a3.4 3.4 0 0 0-.9 2.7V22" />`,
 	search: html`<circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />`,
 	plus: html`<path d="M5 12h14" /><path d="M12 5v14" />`,
 	x: html`<path d="M18 6 6 18" /><path d="m6 6 12 12" />`,

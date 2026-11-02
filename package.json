@@ -2,7 +2,7 @@
   "name": "snippet-editor-for-espanso",
   "productName": "Snippet Editor for Espanso",
   "desktopName": "snippet-editor-for-espanso.desktop",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "description": "A desktop editor for Espanso snippets.",
