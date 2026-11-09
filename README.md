@@ -1,6 +1,31 @@
 # Snippet Editor for Espanso
 
-A desktop app for browsing, searching and editing your [Espanso](https://espanso.org) snippets without hand-writing YAML. The Electron interface has no bundler. An optional Swift helper adds plain-text and date expansion on macOS.
+Browse, search and edit your [Espanso](https://espanso.org) snippets without hand-writing YAML. Your snippets stay in Espanso’s match files, with backups before each save.
+
+[Download the latest release](https://github.com/danielk-am/snippet-editor-for-espanso/releases/latest) · [Watch the walkthrough](docs/media/walkthrough.mp4)
+
+An unofficial companion editor. Install and run Espanso separately for expansion. An experimental macOS expansion helper is also available; see below.
+
+## See it in action
+
+Browse snippets across your files, then open one to edit its trigger, replacement and options.
+
+![Browse snippets across match files](docs/media/snippets.png)
+
+![Edit a snippet with its YAML preview alongside the form](docs/media/editor.png)
+
+Search triggers and replacement text across files.
+
+![Search results for “thank” across two sample files](docs/media/search.png)
+
+[![Screen recording: search, edit and save a sample snippet](docs/media/walkthrough.gif)](docs/media/walkthrough.mp4)
+
+[Watch the screen recording: search, edit and save](docs/media/walkthrough.mp4). Recorded from the real app using sample snippets, without audio.
+
+## Contributors
+
+- **[Daniel Kam](https://github.com/danielk-am)** — creator and maintainer.
+- **[OpenAI Codex](https://openai.com/codex/)** — AI contributor to implementation, tests, documentation and release preparation, working with Daniel.
 
 ## Run it
 

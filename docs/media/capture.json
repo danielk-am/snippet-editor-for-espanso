@@ -1,0 +1,21 @@
+{
+  "appVersion": "0.2.4",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "sampleData": true,
+  "realUI": true,
+  "assistantSimulated": false,
+  "actions": [
+    "Search thank across two files",
+    "Open ;hello",
+    "Edit replacement text",
+    "Save and verify file on disk"
+  ],
+  "captureDurationSeconds": 13.823421499999998,
+  "frames": 138,
+  "frameRate": 10,
+  "audio": false,
+  "cursor": false
+}
